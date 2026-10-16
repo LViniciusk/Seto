@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, Mapping, Sequence
 
 import pytest
 
@@ -62,8 +63,15 @@ def _object_bytes(
     symbol_name: str | None = None,
     symbol_offset: int = 0,
     pad_before_text: int = 0,
+    symbols: Sequence[Mapping[str, Any]] | None = None,
 ) -> bytes:
-    """Build an ``ET_REL`` object with an optional symbol and a non-zero base."""
+    """Build an ``ET_REL`` object with optional symbols and a non-zero base.
+
+    ``st_value`` of a relocatable symbol is the offset from the start of its
+    section, so it is written section-relative (the section may still carry a
+    non-zero ``sh_addr``, which must not be subtracted).  A symbol entry may set
+    ``shndx`` to a section name, which is resolved to its real index.
+    """
     sections: list[dict] = []
     if pad_before_text:
         sections.append(
@@ -86,23 +94,32 @@ def _object_bytes(
             "data": code,
         }
     )
-    if symbol_name is not None:
-        text_index = next(i for i, s in enumerate(sections, start=1) if s["name"] == ".text")
-        symtab_index = len(sections) + 1
-        strtab_index = symtab_index + 1
-        symtab, strtab = build_symbols(
-            [
-                {"name": "", "value": 0, "size": 0, "info": 0, "other": 0, "shndx": 0},
+    if symbol_name is not None or symbols is not None:
+        entries: list[dict] = [
+            {"name": "", "value": 0, "size": 0, "info": 0, "other": 0, "shndx": 0}
+        ]
+        if symbols is not None:
+            entries += [dict(entry) for entry in symbols]
+        else:
+            entries.append(
                 {
                     "name": symbol_name,
-                    "value": text_addr + symbol_offset,
+                    "value": symbol_offset,
                     "size": len(code) - symbol_offset,
                     "info": 0x12,
                     "other": 0,
-                    "shndx": text_index,
-                },
-            ]
-        )
+                    "shndx": ".text",
+                }
+            )
+        section_index = {
+            str(section["name"]): index for index, section in enumerate(sections, start=1)
+        }
+        for entry in entries:
+            if isinstance(entry.get("shndx"), str):
+                entry["shndx"] = section_index[entry["shndx"]]
+        symtab_index = len(sections) + 1
+        strtab_index = symtab_index + 1
+        symtab, strtab = build_symbols(entries)
         sections.append(
             {"name": ".symtab", "type": 2, "flags": 0, "addr": 0, "size": len(symtab),
              "data": symtab, "link": strtab_index, "info": 1, "align": 4, "entsize": 0x10}
@@ -341,8 +358,10 @@ def test_match_candidate_smaller_than_the_function_is_an_error(prx, tmp_path, ca
 def test_match_locates_an_et_rel_symbol_at_a_different_base_and_offset(
     prx, tmp_path, capsys
 ) -> None:
-    # .text lives at a non-zero file offset, the section base is non-zero and the
-    # target function is the second one in the object: only the symbol pins it down.
+    # .text lives at a non-zero file offset and the section base is non-zero, but
+    # an ET_REL symbol value is section-relative: it must not be rebased.  The
+    # target function is the second one in the object, so only the symbol pins it
+    # down.
     candidate = tmp_path / "func.o"
     candidate.write_bytes(
         _object_bytes(
@@ -362,9 +381,122 @@ def test_match_locates_an_et_rel_symbol_at_a_different_base_and_offset(
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "MATCHED"
-    assert payload["evidence"] == "compiled-object"
+    # Receiving an ET_REL proves nothing about how it was produced.
+    assert payload["evidence"] == "binary-range"
     assert "symbol 'func_00000000'" in payload["candidate"]["location"]
     assert payload["candidate"]["section_offset"] == 8
+
+
+def test_match_rejects_a_symbol_that_belongs_to_another_section(prx, tmp_path, capsys) -> None:
+    # The numeric value fits inside .text, but shndx says .rodata: the value
+    # alone never proves ownership.
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(
+        _object_bytes(
+            FUNCTION_CODE,
+            pad_before_text=16,
+            symbols=[
+                {"name": "func_00000000", "value": 0, "size": 8, "info": 0x12,
+                 "other": 0, "shndx": ".rodata"}
+            ],
+        )
+    )
+    assert (
+        cli.main(
+            ["match", "--prx", str(prx), "--function", "0x0", "--candidate", str(candidate),
+             "--candidate-symbol", "func_00000000"]
+        )
+        == cli.EXIT_INCONCLUSIVE
+    )
+    assert "not defined in section" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("shndx", [0x0, 0xFFF1, 0xFFF2, 0xFFFF])
+def test_match_rejects_undefined_absolute_and_special_symbols(
+    prx, tmp_path, capsys, shndx
+) -> None:
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(
+        _object_bytes(
+            FUNCTION_CODE,
+            symbols=[
+                {"name": "func_00000000", "value": 0, "size": 8, "info": 0x12,
+                 "other": 0, "shndx": shndx}
+            ],
+        )
+    )
+    assert (
+        cli.main(
+            ["match", "--prx", str(prx), "--function", "0x0", "--candidate", str(candidate),
+             "--candidate-symbol", "func_00000000"]
+        )
+        == cli.EXIT_INCONCLUSIVE
+    )
+    assert "not defined in section" in capsys.readouterr().err
+
+
+def test_match_reports_ambiguous_symbols_as_inconclusive(prx, tmp_path, capsys) -> None:
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(
+        _object_bytes(
+            OTHER_CODE + FUNCTION_CODE,
+            symbols=[
+                {"name": "func_00000000", "value": 0, "size": 8, "info": 0x12,
+                 "other": 0, "shndx": ".text"},
+                {"name": "func_00000000", "value": 8, "size": 8, "info": 0x12,
+                 "other": 0, "shndx": ".text"},
+            ],
+        )
+    )
+    assert (
+        cli.main(
+            ["match", "--prx", str(prx), "--function", "0x0", "--candidate", str(candidate),
+             "--candidate-symbol", "func_00000000"]
+        )
+        == cli.EXIT_INCONCLUSIVE
+    )
+    assert "ambiguous" in capsys.readouterr().err
+
+
+def test_match_accepts_duplicate_symbols_at_the_same_offset(prx, tmp_path, capsys) -> None:
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(
+        _object_bytes(
+            FUNCTION_CODE,
+            symbols=[
+                {"name": "func_00000000", "value": 0, "size": 8, "info": 0x12,
+                 "other": 0, "shndx": ".text"},
+                {"name": "func_00000000", "value": 0, "size": 8, "info": 0x12,
+                 "other": 0, "shndx": ".text"},
+            ],
+        )
+    )
+    assert (
+        cli.main(
+            ["match", "--prx", str(prx), "--function", "0x0", "--candidate", str(candidate),
+             "--candidate-symbol", "func_00000000"]
+        )
+        == cli.EXIT_OK
+    )
+    assert "MATCHED" in capsys.readouterr().out
+
+
+def test_match_requires_an_explicit_flag_to_fall_back(prx, tmp_path, capsys) -> None:
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(_object_bytes(FUNCTION_CODE, symbol_name="func_00000000"))
+    argv = [
+        "match", "--prx", str(prx), "--function", "0x0", "--candidate", str(candidate),
+        "--candidate-symbol", "func_99999999",
+    ]
+    assert cli.main(argv) == cli.EXIT_INCONCLUSIVE
+    assert "--candidate-symbol-fallback" in capsys.readouterr().err
+
+    # Only an explicit opt-in may fall back to automatic detection, and the
+    # ambiguity is still recorded, so the run stays INCONCLUSIVE.
+    assert cli.main([*argv, "--candidate-symbol-fallback"]) == cli.EXIT_INCONCLUSIVE
+    captured = capsys.readouterr()
+    assert "MATCHED" not in captured.out
+    assert "fell back to automatic detection" in captured.out
 
 
 def test_match_et_rel_without_a_symbol_and_multiple_functions_is_inconclusive(

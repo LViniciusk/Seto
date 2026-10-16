@@ -22,8 +22,6 @@ from seto import __version__, elf, formats, inventory, mips, split
 from seto.binio import ParseError, SetoError
 from seto.hashing import verify_file
 from seto.matching import (
-    EVIDENCE_BINARY_RANGE,
-    EVIDENCE_COMPILED_OBJECT,
     INCONCLUSIVE,
     MATCHED,
     NONMATCHING,
@@ -132,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
     match_parser.add_argument(
         "--candidate-symbol", default=None,
         help="ELF symbol that starts the function inside the candidate (preferred)",
+    )
+    match_parser.add_argument(
+        "--candidate-symbol-fallback", action="store_true",
+        help="allow automatic detection when --candidate-symbol is not found (default: INCONCLUSIVE)",
     )
     match_parser.add_argument("--json", action="store_true")
 
@@ -404,11 +406,16 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
             file_offset=arguments.candidate_offset,
             section_relative=arguments.candidate_section_offset,
             symbol=arguments.candidate_symbol,
+            symbol_fallback=arguments.candidate_symbol_fallback,
         )
     except Inconclusive as exc:
         print(f"INCONCLUSIVE: {exc}", file=sys.stderr)
         return EXIT_INCONCLUSIVE
 
+    # ``seto match`` compares instructions and relocations; it cannot know where
+    # the candidate came from, so its evidence is always "binary-range" and a
+    # MATCHED result here is never by itself a verified decompilation.  Only
+    # scripts/match_function.py, which performed the compilation, can claim that.
     result = compare(
         original,
         region.data,
@@ -419,7 +426,6 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
         original_section_offset=region_offset,
         candidate_section_offset=region.section_offset,
         limitations=region.limitations,
-        evidence=region.evidence,
     )
 
     if arguments.json:
@@ -448,11 +454,22 @@ class CandidateRegion:
     relocations: tuple[elf.Relocation, ...]
     limitations: tuple[str, ...]
     description: str
-    evidence: str = EVIDENCE_BINARY_RANGE
 
 
 class Inconclusive(Exception):
     """The candidate region cannot be pinned down unambiguously."""
+
+
+class SymbolNotFound(Exception):
+    """The requested symbol is not defined in the requested section."""
+
+
+@dataclass(frozen=True)
+class SymbolLocation:
+    """Where a requested candidate symbol was found inside a section."""
+
+    section_offset: int
+    description: str
 
 
 def _load_candidate(
@@ -464,6 +481,7 @@ def _load_candidate(
     file_offset: int | None = None,
     section_relative: int | None = None,
     symbol: str | None = None,
+    symbol_fallback: bool = False,
 ) -> CandidateRegion:
     """Locate the candidate region, distinguishing file and section offsets.
 
@@ -516,6 +534,7 @@ def _load_candidate(
         file_offset=file_offset,
         section_relative=section_relative,
         symbol=symbol,
+        symbol_fallback=symbol_fallback,
         limitations=limitations,
     )
     return CandidateRegion(
@@ -524,11 +543,6 @@ def _load_candidate(
         relocations=candidate_elf.relocations_for(section_name),
         limitations=tuple(limitations),
         description=description,
-        evidence=(
-            EVIDENCE_COMPILED_OBJECT
-            if candidate_elf.header.e_type == elf.ET_REL
-            else EVIDENCE_BINARY_RANGE
-        ),
     )
 
 
@@ -569,6 +583,7 @@ def _locate_candidate_offset(
     file_offset: int | None,
     section_relative: int | None,
     symbol: str | None,
+    symbol_fallback: bool = False,
     limitations: list[str],
 ) -> tuple[int, str]:
     label = f"candidate section {section.name!r}"
@@ -585,15 +600,22 @@ def _locate_candidate_offset(
         return section_relative, f"section-relative offset 0x{section_relative:x}"
 
     if symbol:
-        match = _find_symbol(candidate_elf, symbol, section)
-        if match is not None:
-            offset = match.value - section.addr
-            _validate_section_offset(offset, size, section.size, label)
-            return offset, f"symbol {symbol!r} (0x{match.value:x})"
-        limitations.append(
-            f"requested symbol {symbol!r} was not found in the candidate; "
-            "fell back to automatic detection"
-        )
+        try:
+            located = _resolve_symbol(candidate_elf, symbol, section)
+        except SymbolNotFound as exc:
+            # An explicit request that cannot be satisfied is never silently
+            # replaced by a guess: falling back has to be asked for.
+            if not symbol_fallback:
+                raise Inconclusive(
+                    f"{exc}; pass --candidate-symbol-fallback to allow automatic detection"
+                ) from exc
+            limitations.append(
+                f"requested symbol {symbol!r} was not usable ({exc}); "
+                "fell back to automatic detection"
+            )
+        else:
+            _validate_section_offset(located.section_offset, size, section.size, label)
+            return located.section_offset, located.description
 
     if candidate_elf.header.e_type == elf.ET_REL:
         data = candidate_elf.section_data(section)
@@ -619,17 +641,46 @@ def _locate_candidate_offset(
     )
 
 
-def _find_symbol(candidate_elf: elf.ElfFile, name: str, section: elf.Section) -> elf.Symbol | None:
-    for candidate in candidate_elf.symbols:
-        if candidate.name != name:
-            continue
-        if candidate.shndx == section.index:
-            return candidate
-        # ET_REL symbol values are section-relative; when shndx does not name the
-        # section, only accept a symbol that fits inside it.
-        if 0 <= candidate.value < section.size:
-            return candidate
-    return None
+def _resolve_symbol(candidate_elf: elf.ElfFile, name: str, section: elf.Section) -> SymbolLocation:
+    """Locate ``name`` inside ``section`` from the ELF symbol table.
+
+    Only a symbol whose ``shndx`` *is* the section index qualifies: a numeric
+    value that merely fits inside the section proves nothing about its owner.
+    ``ET_REL`` ``st_value`` is already section-relative; in a linked file the
+    section's virtual address is subtracted instead.
+
+    Raises :class:`SymbolNotFound` when the symbol is absent or belongs to
+    another section, and :class:`Inconclusive` when it is ambiguous.
+    """
+    same_name = [symbol for symbol in candidate_elf.symbols if symbol.name == name]
+    if not same_name:
+        raise SymbolNotFound(f"symbol {name!r} is not present in the candidate")
+    in_section = [
+        symbol
+        for symbol in same_name
+        if symbol.is_defined and symbol.shndx == section.index
+    ]
+    if not in_section:
+        where = ", ".join(sorted({str(symbol.shndx) for symbol in same_name}))
+        raise SymbolNotFound(
+            f"symbol {name!r} is not defined in section {section.name!r} (shndx {where})"
+        )
+
+    functions = [symbol for symbol in in_section if symbol.is_function] or in_section
+    e_type = candidate_elf.header.e_type
+    offsets = {
+        symbol.value if e_type == elf.ET_REL else symbol.value - section.addr
+        for symbol in functions
+    }
+    if len(offsets) > 1:
+        listed = ", ".join(hex(offset) for offset in sorted(offsets))
+        raise Inconclusive(f"symbol {name!r} is ambiguous in {section.name!r}: offsets {listed}")
+    offset = offsets.pop()
+    _validate_section_offset(offset, 0, section.size, f"symbol {name!r}")
+    return SymbolLocation(
+        section_offset=offset,
+        description=f"symbol {name!r} at section offset 0x{offset:x}",
+    )
 
 
 def _print_match(result: MatchResult, region: CandidateRegion) -> None:
@@ -649,10 +700,9 @@ def _print_match(result: MatchResult, region: CandidateRegion) -> None:
     for limitation in result.limitations:
         print(f"    note: {limitation}")
     if result.status == MATCHED:
-        if result.is_verified_decompilation:
-            print("  result: MATCHED (verified decompilation: candidate is a compiled object)")
-        else:
-            print("  result: MATCHED (binary-range equivalence only; not a verified decompilation)")
+        print(
+            "  result: MATCHED (binary-range equivalence only; not a verified decompilation)"
+        )
     elif result.status == INCONCLUSIVE:
         print("  result: INCONCLUSIVE (evidence is insufficient to prove equivalence)")
     else:

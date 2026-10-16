@@ -1,19 +1,34 @@
 #!/usr/bin/env python3
 """Compile one reconstructed function and compare it against the original.
 
-This is the "automated compile + compare" step from the task.  It never fakes a
-result:
+This is the "automated compile + compare" step from the task, and it is also the
+only place where a match may be called a *verified decompilation*: the plain
+``seto match`` command only compares an arbitrary candidate and cannot know where
+that candidate came from.
 
-* it locates ``mwccpsp`` through ``config/seto.toml``, an environment variable
-  (``SETO_MWCCPSP``) or ``PATH``;
-* when the compiler is missing it prints a ``BLOCKED`` diagnosis and exits ``4``;
-* otherwise it compiles the source to an object file and hands that ``.o`` to
-  ``seto match``, whose relocation-aware comparator decides ``MATCHED`` /
-  ``NONMATCHING`` / ``INCONCLUSIVE`` and whose exit code is propagated unchanged.
+The script establishes the operational provenance itself:
+
+1. it identifies the source, the compiler and the flags it will use;
+2. it compiles, and requires a zero exit code;
+3. it removes any previous object first, so the artefact it compares is the one
+   this run just produced;
+4. it hashes the source and the object (SHA-256);
+5. it asks ``seto match`` to compare exactly that object;
+6. it records the result, the compiler, the flags, the hashes and the function in
+   a JSON record (``--report``, by default ``<out>/<source>.match.json``).
+
+This is a verifiable record of a local execution, not an unforgeable attestation:
+the record is only as trustworthy as the machine that produced it.
+
+It never fakes a result.  It locates ``mwccpsp`` through ``config/seto.toml``, an
+environment variable (``SETO_MWCCPSP``) or ``PATH``; when the compiler is missing
+it prints a ``BLOCKED`` diagnosis and exits ``4``.  Otherwise it propagates the
+exit code of ``seto match`` unchanged (``0`` matched, ``3`` nonmatching,
+``5`` inconclusive).
 
 The candidate function is located by its ``func_XXXXXXXX`` symbol inside the
-object (``--candidate-symbol``); when the compiler names it differently, pass
-``--symbol`` or an explicit ``--no-symbol`` to fall back to automatic detection.
+object; when the compiler names it differently, pass ``--symbol`` (with the real
+name) or ``--no-symbol`` to fall back to automatic detection.
 
 Example
 -------
@@ -30,14 +45,29 @@ On Linux/WSL2, prepend the Win32 loader:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from seto.cli import EXIT_BLOCKED, EXIT_ERROR  # noqa: E402
+from seto.cli import (  # noqa: E402
+    EXIT_BLOCKED,
+    EXIT_ERROR,
+    EXIT_INCONCLUSIVE,
+    EXIT_MISMATCH,
+    EXIT_OK,
+)
+from seto.hashing import sha256_file  # noqa: E402
+from seto.matching import (  # noqa: E402
+    EVIDENCE_COMPILED_OBJECT,
+    INCONCLUSIVE,
+    MATCHED,
+    NONMATCHING,
+)
 from seto.mips import function_name  # noqa: E402
 from seto.toolchain import (  # noqa: E402
     TOOL_SPECS,
@@ -50,6 +80,50 @@ from seto.toolchain import (  # noqa: E402
 
 # The proprietary PSP compiler, as declared in seto.toolchain.TOOL_SPECS.
 _MWCCPSP = next(spec for spec in TOOL_SPECS if spec.name == "mwccpsp")
+
+
+@dataclass(frozen=True)
+class MatchRecord:
+    """What a compile+compare run did, so the result can be audited later."""
+
+    function: str
+    address: int
+    section: str
+    status: str
+    evidence: str
+    verified_decompilation: bool
+    exit_code: int
+    symbol: str | None
+    source: str
+    source_sha256: str
+    object: str
+    object_sha256: str
+    compiler: str
+    flags: tuple[str, ...]
+    includes: tuple[str, ...]
+    defines: tuple[str, ...]
+
+    def summary(self) -> dict:
+        return {
+            "function": self.function,
+            "address": f"0x{self.address:x}",
+            "section": self.section,
+            "symbol": self.symbol,
+            "status": self.status,
+            "evidence": self.evidence,
+            "verified_decompilation": self.verified_decompilation,
+            "exit_code": self.exit_code,
+            "provenance": {
+                "source": self.source,
+                "source_sha256": self.source_sha256,
+                "object": self.object,
+                "object_sha256": self.object_sha256,
+                "compiler": self.compiler,
+                "flags": list(self.flags),
+                "includes": list(self.includes),
+                "defines": list(self.defines),
+            },
+        }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,6 +141,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol", default=None, help="candidate symbol name (default: func_XXXXXXXX)")
     parser.add_argument("--no-symbol", action="store_true", help="let seto detect the candidate function")
     parser.add_argument("--out", type=Path, default=Path("build/match"))
+    parser.add_argument(
+        "--report", type=Path, default=None, help="where to write the JSON provenance record"
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -99,12 +176,12 @@ def build_match_argv(
     candidate: Path,
     symbol: str | None,
     config: Path | None,
-    json_output: bool = False,
 ) -> list[str]:
-    """Build the ``python -m seto match ...`` command line.
+    """Build the ``python -m seto match ... --json`` command line.
 
     ``--config`` must precede the subcommand, so it is inserted immediately
-    after ``seto`` rather than appended to the end.
+    after ``seto`` rather than appended to the end.  ``--json`` is always
+    requested: the script has to read the status to build its record.
     """
     argv = [python, "-m", "seto"]
     if config is not None:
@@ -122,9 +199,19 @@ def build_match_argv(
     ]
     if symbol:
         argv += ["--candidate-symbol", symbol]
-    if json_output:
-        argv.append("--json")
+    argv.append("--json")
     return argv
+
+
+def _blocked(status) -> int:
+    print("BLOCKED: mwccpsp is required to compile the candidate", file=sys.stderr)
+    print(f"  reason: {status.reason}", file=sys.stderr)
+    print(
+        "  hint: set SETO_MWCCPSP, add [tools.mwccpsp] path=... to config/seto.toml, "
+        "or put mwccpsp on PATH",
+        file=sys.stderr,
+    )
+    return EXIT_BLOCKED
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,14 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     configured = str(arguments.compiler) if arguments.compiler else settings.tool_path("mwccpsp")
     status = find_tool(_MWCCPSP, configured)
     if not status.found:
-        print("BLOCKED: mwccpsp is required to compile the candidate", file=sys.stderr)
-        print(f"  reason: {status.reason}", file=sys.stderr)
-        print(
-            "  hint: set SETO_MWCCPSP, add [tools.mwccpsp] path=... to config/seto.toml, "
-            "or put mwccpsp on PATH",
-            file=sys.stderr,
-        )
-        return EXIT_BLOCKED
+        return _blocked(status)
     assert status.path is not None
 
     if not arguments.source.is_file():
@@ -152,31 +232,40 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
 
     symbol = None if arguments.no_symbol else (arguments.symbol or function_name(arguments.function))
+    flags = resolve_flags(arguments.flag, settings)
+    includes = resolve_includes(arguments.include, settings)
 
     out_dir = Path(arguments.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     object_path = out_dir / (arguments.source.stem + ".o")
+    report_path = arguments.report or out_dir / (arguments.source.stem + ".match.json")
+
+    # A stale object must never be mistaken for this run's output.
+    object_path.unlink(missing_ok=True)
 
     argv_compile = mwcc_argv(
         status.path,
         arguments.source,
         object_path,
-        flags=resolve_flags(arguments.flag, settings),
-        includes=resolve_includes(arguments.include, settings),
+        flags=flags,
+        includes=includes,
         defines=arguments.define,
         loader=arguments.loader,
     )
-    print("compiling:")
-    print("  " + " ".join(argv_compile))
+    print("compiling:", file=sys.stderr)
+    print("  " + " ".join(argv_compile), file=sys.stderr)
     compile_result = run(argv_compile, timeout=300)
     if compile_result.combined():
-        print(compile_result.combined())
+        print(compile_result.combined(), file=sys.stderr)
     if not compile_result.ok:
         print(f"error: compilation failed (exit {compile_result.returncode})", file=sys.stderr)
         return EXIT_ERROR
     if not object_path.is_file():
         print(f"error: compiler produced no object at {object_path}", file=sys.stderr)
         return EXIT_ERROR
+
+    source_sha256 = sha256_file(arguments.source)
+    object_sha256 = sha256_file(object_path)
 
     argv_match = build_match_argv(
         python=sys.executable,
@@ -186,15 +275,75 @@ def main(argv: list[str] | None = None) -> int:
         candidate=object_path,
         symbol=symbol,
         config=arguments.config,
-        json_output=arguments.json,
     )
 
-    print("comparing:")
-    print("  " + " ".join(argv_match))
+    print("comparing:", file=sys.stderr)
+    print("  " + " ".join(argv_match), file=sys.stderr)
     match_result = run(argv_match, timeout=120)
-    sys.stdout.write(match_result.stdout)
-    sys.stderr.write(match_result.stderr)
-    return match_result.returncode if match_result.returncode is not None else EXIT_ERROR
+    try:
+        payload = json.loads(match_result.stdout)
+        match_status = str(payload["status"])
+    except (ValueError, KeyError, TypeError):
+        # The comparator failed before producing a verdict: report it as-is.
+        sys.stdout.write(match_result.stdout)
+        sys.stderr.write(match_result.stderr)
+        return match_result.returncode if match_result.returncode is not None else EXIT_ERROR
+
+    exit_code = match_result.returncode if match_result.returncode is not None else EXIT_ERROR
+    expected = {MATCHED: EXIT_OK, NONMATCHING: EXIT_MISMATCH, INCONCLUSIVE: EXIT_INCONCLUSIVE}
+    if match_status not in expected:
+        print(f"error: comparator reported an unknown status {match_status!r}", file=sys.stderr)
+        return EXIT_ERROR
+    if exit_code != expected[match_status]:
+        print(
+            f"error: comparator reported {match_status} with exit code {exit_code}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    record = MatchRecord(
+        function=function_name(arguments.function),
+        address=arguments.function,
+        section=arguments.section,
+        status=match_status,
+        evidence=EVIDENCE_COMPILED_OBJECT,
+        verified_decompilation=match_status == MATCHED,
+        exit_code=exit_code,
+        symbol=symbol,
+        source=str(arguments.source),
+        source_sha256=source_sha256,
+        object=str(object_path),
+        object_sha256=object_sha256,
+        compiler=str(status.path),
+        flags=tuple(flags),
+        includes=tuple(includes),
+        defines=tuple(arguments.define),
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The object must not have changed while the comparator was reading it.
+    if sha256_file(object_path) != object_sha256:
+        print("error: the object changed during the comparison", file=sys.stderr)
+        return EXIT_ERROR
+
+    report_path.write_text(json.dumps(record.summary(), indent=2, sort_keys=True), encoding="utf-8")
+
+    if arguments.json:
+        summary = record.summary()
+        summary["match"] = payload
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    else:
+        print(f"function {record.function} @ 0x{record.address:x}")
+        print(f"  status:   {record.status}")
+        print(f"  evidence: {record.evidence}")
+        print(f"  verified decompilation: {'yes' if record.verified_decompilation else 'no'}")
+        print(f"  source:   {record.source} ({record.source_sha256})")
+        print(f"  object:   {record.object} ({record.object_sha256})")
+        print(f"  compiler: {record.compiler}")
+        print(f"  flags:    {' '.join(record.flags) or '-'}")
+        print(f"  record:   {report_path}")
+
+    return exit_code
 
 
 if __name__ == "__main__":  # pragma: no cover

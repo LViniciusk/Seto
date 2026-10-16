@@ -154,17 +154,30 @@ located unambiguously:
 * `--candidate-offset` — absolute **file** offset (must lie inside the section);
 * `--candidate-section-offset` — offset relative to the candidate's section;
 * `--candidate-symbol` — the ELF symbol that starts the function (preferred for
-  `ET_REL` objects);
+  `ET_REL` objects). The symbol is only accepted when its `shndx` **is** the
+  requested section: a numeric value that merely fits inside `.text` proves
+  nothing, and undefined, absolute and other special symbols are rejected. A
+  symbol requested explicitly but not found makes the run `INCONCLUSIVE` — it
+  never silently picks another function (`--candidate-symbol-fallback` opts in to
+  automatic detection, still recording the ambiguity);
 * otherwise an `ET_REL` object with exactly one discovered function is used, and
   a linked module defaults to the original's section-relative offset. If an
   `ET_REL` object contains several functions and nothing selects one, the result
   is `INCONCLUSIVE` (never an arbitrary pick).
 
-Relocated words are compared by relocation type and addend (including HI16/LO16
-pair association); a relocation present on only one side is a divergence; a
-symbol exposed on only one side is a limitation, never silently accepted. Raw
-(non-ELF) candidates are compared as bytes but always flagged, so they can never
-be a *verified* match.
+Relocated words are compared by relocation type and addend. `R_MIPS_HI16` and
+`R_MIPS_LO16` are associated from the relocation table — a LO16 may sit far from
+its HI16 and may resolve several HI16 — instead of assuming the next instruction
+is the partner; both halves' symbols are checked, and the pair is counted as
+matching only after every check passes. A relocation present on only one side is
+a divergence; a symbol exposed on only one side, a HI16 with no resolvable LO16,
+or an association that can only be inferred from relocation order is a
+limitation, never silently accepted. Raw (non-ELF) candidates are compared as
+bytes but always flagged.
+
+`seto match` compares instructions and relocations; it cannot know where the
+candidate came from, so its evidence is always `binary-range` and a `MATCHED`
+result here is **never** by itself a verified decompilation.
 
 ```text
 $ seto match --prx ...\libhtml_view.prx --function 0x244 --candidate ...\libhtml_view.prx
@@ -195,8 +208,17 @@ missing: mwccpsp, splat, m2c, wibo, wine, objdump, rea, ghidra
 ### `scripts/match_function.py` — automated compile + compare
 
 Compiles a reconstruction with `mwccpsp` (optionally through `wibo`/`wine`) and
-feeds the resulting object straight into `seto match`, propagating its verdict and
-exit code. If the compiler is missing it reports `BLOCKED`.
+compares the resulting object with `seto match`, propagating its verdict and exit
+code. If the compiler is missing it reports `BLOCKED`.
+
+This script is the **only** place that may call a match a *verified
+decompilation*: it performed the compilation, so it can attest to the
+provenance. It removes any previous object first (so the artefact it compares was
+produced by this run), hashes the source and the object with SHA-256, asks
+`seto match` to compare exactly that object, checks that the object did not change
+while it was being read, and writes a JSON record (by default
+`<out>/<source>.match.json`, override with `--report`) holding the status, the
+compiler, the flags, both hashes and the function.
 
 ```powershell
 $env:SETO_MWCCPSP = "C:\tools\mwccpsp.exe"
@@ -209,8 +231,9 @@ py -3.12 scripts/match_function.py `
 The script uses the `[match] flags`/`[match] includes` from `config/seto.toml`
 unless you override them with `--flag`/`--include`, forwards `--config` to
 `seto match` in the correct position, locates the function in the object by its
-`func_XXXXXXXX` symbol (override with `--symbol`), and propagates the match exit
-code unchanged.
+`func_XXXXXXXX` symbol (override with `--symbol`, or disable with `--no-symbol`),
+and propagates the match exit code unchanged. The provenance record is a
+verifiable log of a local execution, not an unforgeable attestation.
 
 ## Exit codes
 
