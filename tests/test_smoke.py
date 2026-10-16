@@ -127,11 +127,16 @@ def _run(tmp_path: Path, settings: Settings, *names: str, **kwargs):
 
 # ------------------------------------------------------------------ the compiler
 
+# These cases test only compiler invocation/output validation. Their fake
+# executable is a host-native script, so simulate native Windows and avoid
+# conflating that with the production POSIX loader prerequisite. The dedicated
+# POSIX test below verifies that real detection remains BLOCKED without wibo/Wine.
+
 
 def test_a_compiler_that_fails_is_not_ready(tmp_path) -> None:
     fake = _fake(tmp_path, "mwccpsp", "import sys\nsys.stderr.write('boom')\nsys.exit(1)\n")
     entry, capabilities = _capabilities(
-        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp"), "mwccpsp"
+        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp", platform="nt"), "mwccpsp"
     )
     assert capabilities["compile"].state == INCOMPATIBLE
     assert "exit code 1" in capabilities["compile"].detail
@@ -141,7 +146,7 @@ def test_a_compiler_that_fails_is_not_ready(tmp_path) -> None:
 def test_a_compiler_that_produces_something_other_than_an_elf_is_not_ready(tmp_path) -> None:
     fake = _fake(tmp_path, "mwccpsp", COMPILER.format(payload="b'not an elf at all'"))
     entry, capabilities = _capabilities(
-        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp"), "mwccpsp"
+        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp", platform="nt"), "mwccpsp"
     )
     assert capabilities["compile"].state == INCOMPATIBLE
     assert "not a readable ELF" in capabilities["compile"].detail
@@ -151,7 +156,7 @@ def test_a_compiler_that_produces_something_other_than_an_elf_is_not_ready(tmp_p
 def test_a_compiler_that_produces_no_object_is_not_ready(tmp_path) -> None:
     fake = _fake(tmp_path, "mwccpsp", "import sys\nsys.exit(0)\n")
     _, capabilities = _capabilities(
-        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp"), "mwccpsp"
+        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp", platform="nt"), "mwccpsp"
     )
     assert capabilities["compile"].state == INCOMPATIBLE
     assert "no object" in capabilities["compile"].detail
@@ -160,7 +165,7 @@ def test_a_compiler_that_produces_no_object_is_not_ready(tmp_path) -> None:
 def test_a_failed_compile_cannot_pass_by_leaving_an_elf_object_behind(tmp_path) -> None:
     fake = _fake(tmp_path, "mwccpsp", COMPILER_MIPS + "import sys\nsys.exit(1)\n")
     _, capabilities = _capabilities(
-        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp"), "mwccpsp"
+        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp", platform="nt"), "mwccpsp"
     )
     assert capabilities["compile"].state == INCOMPATIBLE
     assert "exit code 1" in capabilities["compile"].detail
@@ -169,7 +174,7 @@ def test_a_failed_compile_cannot_pass_by_leaving_an_elf_object_behind(tmp_path) 
 def test_a_compiler_that_produces_an_elf32_mips_object_is_ready(tmp_path) -> None:
     fake = _fake(tmp_path, "mwccpsp", COMPILER_MIPS)
     entry, capabilities = _capabilities(
-        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp"), "mwccpsp"
+        _run(tmp_path, _settings(mwccpsp=fake), "mwccpsp", platform="nt"), "mwccpsp"
     )
     assert capabilities["compile"].state == READY
     assert entry.state == READY
@@ -180,16 +185,34 @@ def test_a_stale_object_from_a_previous_smoke_run_cannot_fake_success(tmp_path) 
     valid = _fake(tmp_path, "mwccpsp_valid", COMPILER_MIPS)
     invalid = _fake(tmp_path, "mwccpsp_invalid", "import sys\nsys.exit(0)\n")
     first, = smoke.smoke_report(
-        _settings(mwccpsp=valid), tools=["mwccpsp"], workspace=workspace
+        _settings(mwccpsp=valid), tools=["mwccpsp"], workspace=workspace, platform="nt"
     )
     second, = smoke.smoke_report(
-        _settings(mwccpsp=invalid), tools=["mwccpsp"], workspace=workspace
+        _settings(mwccpsp=invalid), tools=["mwccpsp"], workspace=workspace, platform="nt"
     )
     first_cap = {item.name: item for item in first.capabilities}["compile"]
     second_cap = {item.name: item for item in second.capabilities}["compile"]
     assert first_cap.state == READY
     assert second_cap.state == INCOMPATIBLE
     assert "no object" in second_cap.detail
+
+
+def test_compilation_remains_blocked_on_posix_without_a_win32_loader(
+    monkeypatch, tmp_path
+) -> None:
+    fake_compiler = _fake(tmp_path, "mwccpsp_posix", COMPILER_MIPS)
+    monkeypatch.setattr("seto.toolchain.shutil.which", lambda name: None)
+    report = smoke.smoke_report(
+        _settings(mwccpsp=fake_compiler),
+        env={},
+        platform="posix",
+        tools=["mwccpsp"],
+        workspace=tmp_path / "posix-workspace",
+    )
+    entry, capabilities = _capabilities(report, "mwccpsp")
+    assert entry.state == BLOCKED
+    assert capabilities["compile"].state == BLOCKED
+    assert "loader" in capabilities["compile"].detail
 
 
 # -------------------------------------------------------------------- the rest

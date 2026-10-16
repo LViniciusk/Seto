@@ -119,6 +119,8 @@ def test_powershell_dry_run_is_selective_and_does_not_write_tool_config(tmp_path
     bootstrap_config = REPO_ROOT / "config" / "seto.bootstrap.toml"
     before = bootstrap_config.read_bytes() if bootstrap_config.exists() else None
     report = tmp_path / "powershell-report.json"
+    env = dict(os.environ)
+    env["SETO_PYTHON"] = sys.executable
     completed = subprocess.run(
         [
             powershell,
@@ -134,6 +136,7 @@ def test_powershell_dry_run_is_selective_and_does_not_write_tool_config(tmp_path
             str(report),
         ],
         cwd=REPO_ROOT,
+        env=env,
         text=True,
         capture_output=True,
         timeout=300,
@@ -160,6 +163,7 @@ def test_powershell_dry_run_is_selective_and_does_not_write_tool_config(tmp_path
             str(report),
         ],
         cwd=REPO_ROOT,
+        env=env,
         text=True,
         capture_output=True,
         timeout=300,
@@ -168,6 +172,43 @@ def test_powershell_dry_run_is_selective_and_does_not_write_tool_config(tmp_path
     assert report.read_bytes() == first_report
     after = bootstrap_config.read_bytes() if bootstrap_config.exists() else None
     assert after == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell bootstrap is the Windows variant")
+def test_powershell_runs_seto_from_checkout_without_an_editable_install(tmp_path: Path) -> None:
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("Windows PowerShell is unavailable")
+    venv = tmp_path / "python-without-seto"
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=120)
+    python = venv / "Scripts" / "python.exe"
+    assert python.is_file()
+    report = tmp_path / "checkout-only-report.json"
+    env = dict(os.environ)
+    env["SETO_PYTHON"] = str(python)
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(REPO_ROOT / "scripts" / "bootstrap_toolchain.ps1"),
+            "-DryRun",
+            "-Tool",
+            "m2c",
+            "-Report",
+            str(report),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=300,
+    )
+    assert completed.returncode in (0, 4), completed.stdout + completed.stderr
+    assert "No module named seto" not in completed.stdout + completed.stderr
+    assert {item["name"] for item in json.loads(report.read_text())["tools"]} == {"m2c"}
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX bootstrap is tested on Linux/macOS")
