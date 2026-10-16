@@ -8,6 +8,8 @@ relocations, at ``.rodata.sceResident`` names, ``.rodata.sceNid`` NIDs and
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from seto import elf, imports, matching
@@ -190,6 +192,36 @@ def test_a_stub_that_does_not_begin_with_the_trampoline_is_rejected() -> None:
     assert sum("is not a trampoline" in item for item in table.limitations) == 1
 
 
+def test_a_trampoline_with_an_adulterated_delay_slot_is_rejected() -> None:
+    """``jr $ra`` alone is not the trampoline the table declares.
+
+    The pair the PSPSDK linker emits is ``jr $ra; nop``; the ``nop`` is the
+    branch delay slot, so a stub whose second word is something else is not that
+    trampoline and its address proves nothing.  The table itself is still
+    recovered - only the stub is dropped, with the reason recorded.
+    """
+    module = build_import_module([StubSpec("sceA", (1,))])
+    section = elf.parse(module.data, "lib.prx").require_section(imports.STUB_TEXT_SECTION)
+    payload = bytearray(module.data)
+    payload[section.offset + 4 : section.offset + 8] = word(0x24020001)  # addiu $v0, $zero, 1
+    table = imports.build_import_table(elf.parse(bytes(payload), "lib.prx"))
+    assert [item.stub_count for item in table.tables] == [1]
+    assert table.imports == {}
+    assert sum("not the 'jr $ra; nop' trampoline" in item for item in table.limitations) == 1
+
+
+def test_a_stub_section_that_ends_mid_trampoline_is_an_error() -> None:
+    """A truncated trampoline is structural damage, not a partial table."""
+    module = build_import_module([StubSpec("sceA", (1,))])
+    parsed = elf.parse(module.data, "lib.prx")
+    section = parsed.require_section(imports.STUB_TEXT_SECTION)
+    payload = bytearray(module.data)
+    shoff = struct.unpack_from("<I", payload, 0x20)[0]
+    struct.pack_into("<I", payload, shoff + section.index * 0x28 + 0x14, 4)
+    with pytest.raises(ParseError, match="does not fit"):
+        imports.build_import_table(elf.parse(bytes(payload), "lib.prx"))
+
+
 def test_a_table_with_variable_stubs_keeps_its_own_stub_count() -> None:
     module = build_import_module([StubSpec("sceA", (7,), length_words=6)])
     table = imports.build_import_table(elf.parse(module.data, "lib.prx"))
@@ -313,6 +345,36 @@ def test_a_name_that_proves_nothing_resolves_to_nothing() -> None:
     assert imports.resolve_call_target(_site(addend=GAP_TARGET), table) is None
 
 
+def test_a_symbol_with_a_non_zero_addend_is_not_normalised() -> None:
+    """``func_00000020+4`` is not ``func_00000020``.
+
+    The addend is a displacement *on top of* the symbol, and nothing in the
+    object demonstrates what that displacement means, so no identity may be
+    claimed for it.  The zero-addend reference keeps resolving exactly as before.
+    """
+    _, table = _fixture()
+    plain = imports.resolve_call_target(_site(symbol="func_00000020"), table)
+    assert plain is not None
+    assert plain.identity == ("sceHttp", 0x76D1363B)
+    for addend in (4, 8, -4, -STUB_BASE):
+        assert (
+            imports.resolve_call_target(_site(symbol="func_00000020", addend=addend), table)
+            is None
+        )
+
+
+def test_an_explicitly_resolved_symbol_with_a_non_zero_addend_is_not_normalised() -> None:
+    """Explicit evidence for a name does not make a displacement provable."""
+    _, table = _fixture()
+    site = _site(symbol="sceHttp_DynSetSslCb", addend=4)
+    assert (
+        imports.resolve_call_target(
+            site, table, candidate_symbols={"sceHttp_DynSetSslCb": STUB_BASE}
+        )
+        is None
+    )
+
+
 def test_candidate_symbols_override_names_that_do_not_follow_the_convention() -> None:
     _, table = _fixture()
     site = _site(symbol="sceHttp_DynSetSslCb")
@@ -381,6 +443,21 @@ def test_a_call_that_cannot_be_identified_is_inconclusive() -> None:
     candidate = build_call_object(word(jal(0)) + word(0), [(0, "func_00009000")])
     result = _compare(parsed, candidate, resolver=_resolver(table))
     assert result.status == matching.INCONCLUSIVE
+    assert any("no proven imported identity" in item for item in result.limitations)
+
+
+def test_a_symbolic_offset_never_produces_a_false_match() -> None:
+    """The linked module calls 0x20; a candidate calling ``0x20+4`` must not match.
+
+    This is the whole point of refusing to normalise a non-zero symbolic addend:
+    the two destinations differ, so the comparison has to stay inconclusive
+    instead of reporting the symbol's own identity.
+    """
+    parsed, table = _fixture()
+    candidate = build_call_object(word(jal(4)) + word(0), [(0, "func_00000020")])
+    result = _compare(parsed, candidate, resolver=_resolver(table))
+    assert result.status == matching.INCONCLUSIVE
+    assert result.differences == ()
     assert any("no proven imported identity" in item for item in result.limitations)
 
 
