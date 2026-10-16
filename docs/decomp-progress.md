@@ -111,10 +111,12 @@ The real PRX was split with `splat64[mips]` and the emitted `.text` listing was
 verified against all original words. Ghidra 12.1.3 with `ghidra-allegrex` v21.4
 automatically selected `PSP Executable (ELF)` and
 `Allegrex:LE:32:default`. `scripts/ghidra/SetoAnalyzeFunction.java` was run as a
-Ghidra post-script for each selected range; it records the selected language,
-Ghidra's function/decompiler result when available, and the real instruction
-listing. m2c's output was reviewed against that listing rather than accepted
-blindly.
+Ghidra post-script for each selected range. It checks the requested entry point,
+body minimum/maximum, addressable-unit size, byte count and address-range count
+before emitting `SETO_BOUNDARY_STATUS=EXACT`; decompilation is marked `OK` only
+when that exact function decompiles successfully. The integration test checks
+those markers per function, as well as the real instruction listing. m2c's
+output was reviewed against the listing rather than accepted blindly.
 
 | Function | Interval / size | C source | Evidence and status | Next action |
 | --- | --- | --- | --- | --- |
@@ -152,8 +154,11 @@ py -3.12 -m seto disasm `
 ```
 
 The Ghidra integration test exercises the post-script on all three ranges and
-asserts the real PRX language and instruction counts. The script prints an
-Allegrex listing/decompilation for review; it does not change the input program.
+checks each range independently: entry, body min/max, byte count, addressable
+unit size, exact-boundary status, completed decompilation, and per-range
+instruction count. A discontinuous/out-of-range body reports `MISMATCH` and is
+not decompiled as if it were exact. The script prints an Allegrex
+listing/decompilation for review; it does not change the input program.
 Re-run the media-backed inspection with
 `py -3.12 -m pytest tests/integration/test_toolchain_real.py -q -m integration`.
 
