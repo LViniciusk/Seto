@@ -1,14 +1,21 @@
 # Toolchain
 
-Seto is **stdlib-only**. It never bundles, downloads or redistributes any
-proprietary component, and every external tool is optional: Seto does useful,
-verifiable work with none of them installed and reports a precise, honest status
-for each one it can use when it *is* present.
+Seto's core is **stdlib-only**. It never bundles or redistributes any proprietary
+component. The optional bootstrap downloads only pinned open tools and keeps them
+outside the repository; the licensed Metrowerks compiler is supplied by the user.
 
 ```powershell
 py -3.12 -m seto toolchain
 py -3.12 -m seto toolchain --json
+py -3.12 -m seto toolchain --smoke
+py -3.12 -m seto toolchain --smoke --tool ghidra --json
 ```
+
+The ordinary command only detects tools. `--smoke` uses generated fixtures to
+prove what they actually do; it is deliberately opt-in because Ghidra starts a
+JVM and imports the fixture several times. Smoke tests never read `private/` or
+the ISO. `--tool NAME` is repeatable, `--smoke-workspace DIR` retains the
+synthetic input/output, and `--json --out PATH` writes the deterministic report.
 
 ## What each tool is for
 
@@ -44,33 +51,74 @@ Ghidra is special: it wants the *installation directory*, and Seto verifies that
 `support/analyzeHeadless[.bat]` exists before reporting it as available. The
 version is read from `Ghidra/application.properties`.
 
-When a tool is missing, `seto toolchain` prints `MISSING` with the reason, and a
-command that genuinely needs it exits with code `4` (`BLOCKED`) — never `0`.
+## Capability states
 
-## Reference environment status
-
-Measured with `seto toolchain` in the environment this repo was developed in:
-
-| Tool | Status |
+| State | Meaning |
 | --- | --- |
-| `mwccpsp` | **MISSING** (proprietary; must be supplied by the user) |
-| `splat` | available (`splat 0.50.1`, from `splat64[mips]`) |
-| `m2c` | MISSING |
-| `wibo` | MISSING |
-| `wine` | MISSING |
-| `mips*-objdump` | MISSING |
-| `rea` | MISSING |
-| `ghidra` | MISSING (not configured) |
-| `node` | available (v24.21.0) |
-| `java` | available (Corretto 25.0.3) |
+| `MISSING` | Not found in configuration, environment or `PATH`. |
+| `INSTALLED` | Located and launchable; its function has not yet been demonstrated. |
+| `READY` | Its functional smoke test passed. |
+| `INCOMPATIBLE` | Present, but failed the test or has the wrong architecture/version. |
+| `UNSUPPORTED` | Works, but the required capability is not provided/demonstrated. |
+| `BLOCKED` | A prerequisite or test input is unavailable. |
+| `NOT_APPLICABLE` | Not needed on this platform. |
 
-Consequently, real compilation and real matching are **BLOCKED** in this
-environment. `seto match` still runs and still proves things (self-comparison,
-raw-blob comparison, relocation-type comparison, and — since the module's import
-tables are recovered — call identity); it only cannot compare against a freshly
-compiled object. `splat` being present means the split pipeline is fully
-exercised here: `seto split --run-splat` really runs it and verifies its output.
-See `docs/decomp-progress.md`.
+Installing a binary or printing `--version` is never enough for `READY`. The JSON
+keeps its historical `state` field (`available`/`missing`) and adds
+`capability`/`capabilities`, so existing consumers remain compatible. A command
+that needs an unavailable tool still exits `4` (`BLOCKED`).
+
+## Reference environment status (2026-10-16)
+
+Measured with `seto toolchain --smoke` on Windows 11 in the development
+environment. `READY` below means the named functional check passed, not that all
+PSP workflows are ready:
+
+| Tool | Functional evidence |
+| --- | --- |
+| `mwccpsp` | **MISSING**; proprietary compiler not supplied. First real compilation/match remains blocked. |
+| `splat` | **READY**; pinned 0.50.1 split the synthetic ELF and Seto verified all emitted words. |
+| `m2c` | **READY**; pinned commit `708d2d2` produced C for the synthetic MIPS function. |
+| `objdump` | **READY**; LLVM 21.1.8 read the ELF32 MIPS header, sections, symbol, relocation and instructions. |
+| `ghidra` | 12.1.3 headless **READY**; forced `MIPS:LE:32:default` and `Allegrex:LE:32:default` imports **READY**. Automatic selection for the synthetic ET_REL object chose `MIPS:LE:64:64-32R6addr`, so `mips-auto` is **INCOMPATIBLE**, not silently accepted. |
+| Real PSP PRX | **PROVEN** separately by integration test: automatic import of `libhtml_view.prx` selected `Allegrex:LE:32:default`. The general smoke report keeps `prx: BLOCKED` because it uses only synthetic input. |
+| `rea` | 6.5.0 CLI **READY** and stdio MCP initialize/`tools/list` **READY** (207 tools); native-provider analysis and PSP-PRX support remain **BLOCKED**/unproven. |
+| `node` / `java` | **READY**; Node 24.21.0, Java Corretto 25.0.3. |
+| `wibo` / `wine` | `NOT_APPLICABLE` on native Windows; not installed here. |
+
+The smoke report deliberately keeps different claims separate: REA installed is
+not the same as an MCP connection; an MCP connection does not prove native binary
+analysis; Ghidra loading an architecture does not prove that it recognizes a PSP
+PRX. See `docs/decomp-progress.md` for the current decompilation blocker.
+
+## Reproducible bootstrap
+
+Pinned releases and digests live in `config/toolchain.lock`. The scripts default to
+report-only; `--dry-run` prints a selective plan, and only `--install` changes the
+external tool directory. They do not elevate silently, edit `PATH`/the registry,
+or download `mwccpsp`. Downloads are SHA-256 checked and ZIP members are validated
+before extraction. Python tools use isolated environments under `%USERPROFILE%\.seto`
+or `~/.seto`. The generated, ignored `config/seto.bootstrap.toml` holds their
+paths; the optional user `config/seto.local.toml` is merged last and wins.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap_toolchain.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap_toolchain.ps1 `
+    -Install -Tool splat,m2c,objdump,ghidra,rea
+py -3.12 -m seto toolchain --smoke --json --out build/toolchain-report.json
+```
+
+```bash
+bash scripts/bootstrap_toolchain.sh --dry-run
+bash scripts/bootstrap_toolchain.sh --install --tool splat --tool m2c --tool wibo
+python3 -m seto toolchain --smoke --json --out build/toolchain-report.json
+```
+
+On POSIX, the bootstrap prefers the official `decompals/wibo` release where a
+pinned host binary exists; otherwise it leaves Wine/build-from-source as a
+documented operator choice. REA is installed into an isolated npm prefix only when
+selected, from the official npm registry with lifecycle scripts disabled. No REA
+client configuration is written by the bootstrap.
 
 ## Reproducing on Windows
 
@@ -86,11 +134,14 @@ See `docs/decomp-progress.md`.
 3. Extract `PSP_GAME` from your own copy of `TF1.iso` into
    `private/original/PSP_GAME` (git-ignored), or point `[baseline] extracted_root`
    at wherever you extracted it.
-4. Place a licensed `mwccpsp.exe` somewhere and register it:
+4. Bootstrap the open tools, then place a licensed `mwccpsp.exe` somewhere and
+   register it. The bootstrap never downloads the proprietary compiler:
 
    ```powershell
-   $env:SETO_MWCCPSP = "C:\tools\mwccpsp.exe"
-   py -3.12 -m seto toolchain
+    $env:SETO_MWCCPSP = "C:\tools\mwccpsp.exe"
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap_toolchain.ps1 `
+        -Install -Tool splat,m2c,objdump,ghidra,rea
+    py -3.12 -m seto toolchain --smoke
    ```
 
 5. Run the suite:
@@ -112,8 +163,9 @@ git clone <this repo> seto && cd seto
 python3.12 -m venv .venv && . .venv/bin/activate
 python -m pip install -e ".[dev,disasm,yaml]"
 
-# Win32 loader for mwccpsp.exe
-cargo install wibo   # or download a release binary and put it on PATH
+# Install the pinned wibo release where a binary exists; the script warns before
+# a package-manager command that needs root.
+bash scripts/bootstrap_toolchain.sh --install --tool wibo
 
 export SETO_MWCCPSP=/mnt/c/tools/mwccpsp.exe
 export SETO_WIBO="$(command -v wibo)"
@@ -133,8 +185,9 @@ stream keeps at most `max_output` bytes in memory (the rest is counted and
 discarded) so a runaway tool cannot exhaust memory; on timeout the child is
 killed and the readers are joined, so the call always returns.
 
-A missing or non-executable tool can never look like success: launching fails and
-the status becomes `MISSING` / the command exits `4` (`BLOCKED`).
+A missing tool is `MISSING`; a file that exists but cannot be launched is
+`INCOMPATIBLE`. Neither can look like `READY` or make a required command report
+success.
 
 ## Optional Python extras
 

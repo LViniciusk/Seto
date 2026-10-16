@@ -9,7 +9,7 @@ import pytest
 
 from seto import cli
 from seto.hashing import fingerprint_file
-from seto.toolchain import RunResult, ToolStatus
+from seto.toolchain import NOT_APPLICABLE, RunResult, ToolStatus
 
 from conftest import (
     SHF_ALLOC,
@@ -697,12 +697,34 @@ def test_toolchain_reports_availability(capsys) -> None:
     assert "missing:" in out
 
 
+def test_toolchain_does_not_list_not_applicable_tools_as_missing(monkeypatch, capsys) -> None:
+    statuses = (
+        ToolStatus(
+            "wibo",
+            "loader",
+            False,
+            reason="not needed on this platform",
+            state=NOT_APPLICABLE,
+        ),
+    )
+    monkeypatch.setattr(cli, "detect_all", lambda settings: statuses)
+    assert cli.main(["toolchain"]) == cli.EXIT_OK
+    output = capsys.readouterr().out
+    assert "wibo" in output and "NOT_APPLICABLE" in output
+    assert "missing: none" in output
+
+
 def test_toolchain_json(capsys) -> None:
     assert cli.main(["toolchain", "--json"]) == cli.EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     names = {tool["name"] for tool in payload["tools"]}
     assert "mwccpsp" in names
     assert "ghidra" in names
+    for tool in payload["tools"]:
+        assert tool["state"] in {"available", "missing"}
+        assert tool["capability"] in {
+            "MISSING", "INSTALLED", "READY", "INCOMPATIBLE", "UNSUPPORTED", "BLOCKED", "NOT_APPLICABLE"
+        }
 
 
 # --------------------------------------------------------------------- inventory

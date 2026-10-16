@@ -25,6 +25,8 @@ path = ""
 
 [tools.m2c]
 path = ""
+# Optional m2c target; leave empty to use m2c's default MIPS target.
+target = ""
 
 [tools.ghidra]
 # Ghidra *installation directory* (not the launcher).
