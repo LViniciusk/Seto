@@ -18,6 +18,7 @@ from seto.mips import (
     is_return,
     jump_target,
     opcode,
+    parse_function_name,
     rd,
     rs,
     rt,
@@ -123,6 +124,24 @@ def test_function_properties() -> None:
 def test_function_name_is_address_derived() -> None:
     assert function_name(0x244) == "func_00000244"
     assert function_name(0xFFFFFFF0) == "func_FFFFFFF0"
+
+
+def test_parse_function_name_is_the_inverse_of_function_name() -> None:
+    for address in (0x0, 0x244, 0x2EDC, 0xFFFFFFF0):
+        assert parse_function_name(function_name(address)) == address
+
+
+def test_parse_function_name_rejects_anything_else() -> None:
+    for name in (
+        "sceHttp_DynSetSslCb",
+        "func_244",
+        "func_000000244",
+        "func_00002ED",
+        "func_0000ZZZZ",
+        "Func_00002EDC",
+        "",
+    ):
+        assert parse_function_name(name) is None
 
 
 # ------------------------------------------------------------- find_functions

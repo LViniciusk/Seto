@@ -12,11 +12,19 @@ value together with the ``R_MIPS_LO16`` that resolves it, so pairs are
 associated from the relocation table (never from mere adjacency) and compared as
 a unit.
 
+A call is the one case where the same reference is encoded differently on the
+two sides: a linked module stores the address of the trampoline it calls, while a
+relocatable object stores a *symbol name* because no address exists yet.  A
+caller may therefore supply a :data:`CallResolver` that turns either encoding
+into a proven identity; it is only ever consulted where the literal comparison
+cannot decide, and an inconclusive answer becomes ``INCONCLUSIVE``.
+
 The result is deliberately conservative.  Byte equality alone is **not** treated
 as proof of a matching decompilation: whenever the available evidence cannot
 establish equivalence (a raw blob candidate, an unmodelled relocation type, a
-symbol present on only one side, a HI16 with no resolvable LO16, ...) the
-outcome is ``INCONCLUSIVE`` rather than ``MATCHED``.
+symbol present on only one side, a HI16 with no resolvable LO16, a call whose
+destination cannot be identified, ...) the outcome is ``INCONCLUSIVE`` rather
+than ``MATCHED``.
 
 Statuses
 --------
@@ -28,10 +36,12 @@ Statuses
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Callable
 
 from seto.binio import ParseError
 from seto.elf import (
+    R_MIPS_26,
     R_MIPS_HI16,
     R_MIPS_LO16,
     Relocation,
@@ -56,6 +66,71 @@ EVIDENCE_BINARY_RANGE = "binary-range"
 #: caller that actually compiled the object may set it.  A ``MATCHED`` with this
 #: evidence is a verified decompilation match.
 EVIDENCE_COMPILED_OBJECT = "compiled-object"
+
+#: What a ``MATCHED`` proves when every byte of the compared range agrees, so the
+#: two streams are identical as they stand.
+EQUIVALENCE_BINARY = "binary equality of the compared range"
+#: What a ``MATCHED`` proves when it rests on canonically resolved call
+#: relocations: the instruction streams agree and every call resolves to the same
+#: proven identity, even though a linked module and a relocatable object encode
+#: that reference differently.  This is *not* full binary equality: that claim
+#: would require linking the object and comparing the linked result.
+EQUIVALENCE_RESOLVED_RELOCATIONS = "function equivalence with canonically resolved relocations"
+
+#: Relocation types whose in-place field is a jump/call target.  A call reference
+#: is the one relocated field whose encoding legitimately differs between a
+#: linked module (which stores the trampoline address) and a relocatable object
+#: (which stores a symbol name), so it is the only field a caller may ask to be
+#: resolved to a proven identity instead of compared literally.
+CALL_RELOCATION_TYPES: tuple[int, ...] = (R_MIPS_26,)
+
+
+#: The first half of the identity of a call to another function of the same
+#: module.  A library name is read from a NUL-terminated string, so it can never
+#: contain a NUL and this marker can never collide with a real library: two
+#: identical NIDs in two libraries stay distinct, and a module function is never
+#: confused with an import.
+SELF_LIBRARY = "\x00self"
+
+
+@dataclass(frozen=True)
+class CallTarget:
+    """The proven destination of a call reference.
+
+    An imported call is identified by ``(library, nid)``; a call to another
+    function of the same module by ``(SELF_LIBRARY, address)``.  ``nid`` is the
+    second half of the identity in both cases - the imported function's NID, or
+    the address of the module function - while ``stub_address`` is the address
+    the reference itself points at (the trampoline, or the function).
+
+    ``origin`` records *how* the identity was obtained (an address stored in the
+    instruction, or a symbol name that had to be looked up); it is left out of
+    equality on purpose, because the identity is the pair alone.
+    """
+
+    library: str
+    nid: int
+    stub_address: int
+    origin: str = field(default="", compare=False)
+
+    @property
+    def identity(self) -> tuple[str, int]:
+        return (self.library, self.nid)
+
+    @property
+    def is_import(self) -> bool:
+        return self.library != SELF_LIBRARY
+
+    def describe(self) -> str:
+        if not self.is_import:
+            return f"this module @ 0x{self.nid:x}"
+        detail = f", {self.origin}" if self.origin else ""
+        return f"{self.library}/0x{self.nid:08X} (stub 0x{self.stub_address:x}{detail})"
+
+
+#: Turns a call relocation into a proven destination, or ``None`` when the
+#: evidence on hand is not enough to establish one.
+CallResolver = Callable[["RelocationSite"], "CallTarget | None"]
 
 
 @dataclass(frozen=True)
@@ -106,6 +181,7 @@ class MatchResult:
     relocation_issues: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
     evidence: str = EVIDENCE_BINARY_RANGE
+    resolved_calls: tuple[str, ...] = ()
 
     @property
     def percent(self) -> float:
@@ -126,12 +202,23 @@ class MatchResult:
         """True only for a MATCHED comparison against a compiled object."""
         return self.status == MATCHED and self.evidence == EVIDENCE_COMPILED_OBJECT
 
+    @property
+    def equivalence(self) -> str:
+        """What a ``MATCHED`` actually proves, in words.
+
+        Empty for any other status: there is no equivalence to name.
+        """
+        if self.status != MATCHED:
+            return ""
+        return EQUIVALENCE_RESOLVED_RELOCATIONS if self.resolved_calls else EQUIVALENCE_BINARY
+
     def summary(self) -> dict[str, object]:
         return {
             "name": self.name,
             "address": self.address,
             "status": self.status,
             "evidence": self.evidence,
+            "equivalence": self.equivalence,
             "percent": self.percent,
             "total_words": self.total_words,
             "matching_words": self.matching_words,
@@ -139,6 +226,7 @@ class MatchResult:
             "differences": [item.summary() for item in self.differences],
             "relocation_issues": list(self.relocation_issues),
             "limitations": list(self.limitations),
+            "resolved_calls": list(self.resolved_calls),
         }
 
 
@@ -291,12 +379,19 @@ def compare(
     max_differences: int = DEFAULT_MAX_DIFFERENCES,
     limitations: tuple[str, ...] | list[str] = (),
     evidence: str = EVIDENCE_BINARY_RANGE,
+    call_resolver: CallResolver | None = None,
 ) -> MatchResult:
     """Compare two instruction streams with relocation-aware semantics.
 
     ``original_section_offset``/``candidate_section_offset`` are the byte offsets
     of the compared region relative to the start of its section, i.e. the same
     space as :attr:`seto.elf.Relocation.section_offset`.
+
+    ``call_resolver`` is optional and only used where the literal comparison
+    cannot decide, i.e. two call relocations whose in-place targets differ.  It
+    is never allowed to turn a divergence into a match on its own: it either
+    proves that both sides name the same destination, proves that they name
+    different ones, or leaves the outcome inconclusive.
     """
     original_words = decode_words(original, f"{name}: original")
     candidate_words = decode_words(candidate, f"{name}: candidate")
@@ -314,6 +409,7 @@ def compare(
     )
     issues: list[str] = []
     differences: list[WordDifference] = []
+    resolved_calls: list[str] = []
     matching = 0
 
     total = max(len(original_words), len(candidate_words))
@@ -454,6 +550,34 @@ def compare(
             continue
 
         if site_a.addend != site_b.addend:
+            if site_a.type in CALL_RELOCATION_TYPES and call_resolver is not None:
+                # The two encodings of the same reference: a linked module stores
+                # the trampoline address, a relocatable object stores a symbol
+                # name.  Only the resolver can tell whether they are the same call
+                # - and it may only do so on evidence.
+                target_a = call_resolver(site_a)
+                target_b = call_resolver(site_b)
+                if target_a is not None and target_b is not None:
+                    if target_a.identity == target_b.identity:
+                        # Record the evidence: a MATCHED that rests on a resolved
+                        # reference must be able to show which one.
+                        resolved_calls.append(
+                            f"word {index} ({address + index * 4:#x}): "
+                            f"{target_a.describe()} <=> {target_b.describe()}"
+                        )
+                        count_matching(index)
+                        continue
+                    record_difference(
+                        index,
+                        f"call target {target_a.describe()} vs {target_b.describe()}",
+                    )
+                    continue
+                limitations.append(
+                    f"word {index}: call targets 0x{site_a.addend:x} and 0x{site_b.addend:x} "
+                    "differ and at least one of them has no proven imported identity; "
+                    "equivalence cannot be proven"
+                )
+                continue
             record_difference(index, f"addend 0x{site_a.addend:x} vs 0x{site_b.addend:x}")
             continue
 
@@ -482,6 +606,7 @@ def compare(
         relocation_issues=tuple(dict.fromkeys(issues)),
         limitations=tuple(dict.fromkeys(limitations)),
         evidence=evidence,
+        resolved_calls=tuple(resolved_calls),
     )
 
 
@@ -517,6 +642,7 @@ def compare_region(
     address: int = 0,
     candidate_section_offset: int = 0,
     candidate_relocations: tuple[Relocation, ...] | list[Relocation] = (),
+    call_resolver: CallResolver | None = None,
 ) -> MatchResult:
     """Compare a slice of the original binary against a candidate slice.
 
@@ -535,16 +661,23 @@ def compare_region(
         candidate_relocations=candidate_relocations,
         original_section_offset=original_section_offset,
         candidate_section_offset=candidate_section_offset,
+        call_resolver=call_resolver,
     )
 
 
 __all__ = [
     "BLOCKED",
+    "CALL_RELOCATION_TYPES",
     "EVIDENCE_BINARY_RANGE",
     "EVIDENCE_COMPILED_OBJECT",
+    "EQUIVALENCE_BINARY",
+    "EQUIVALENCE_RESOLVED_RELOCATIONS",
     "INCONCLUSIVE",
     "MATCHED",
     "NONMATCHING",
+    "SELF_LIBRARY",
+    "CallResolver",
+    "CallTarget",
     "Hi16Lo16Pairing",
     "MatchResult",
     "RelocationMap",

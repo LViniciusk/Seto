@@ -127,6 +127,22 @@ def function_name(address: int) -> str:
     return f"func_{address:08X}"
 
 
+def parse_function_name(name: str) -> int | None:
+    """Inverse of :func:`function_name`: ``"func_00002EDC"`` -> ``0x2EDC``.
+
+    Returns ``None`` for anything that is not an address-derived provisional
+    name, so a caller can never mistake a real symbol for one.  The name is only
+    a way of *naming* an address; it proves nothing by itself.
+    """
+    prefix = "func_"
+    if not name.startswith(prefix):
+        return None
+    digits = name[len(prefix) :]
+    if len(digits) != 8 or any(char not in "0123456789abcdefABCDEF" for char in digits):
+        return None
+    return int(digits, 16)
+
+
 def find_functions(code: bytes, base: int = 0, name: str = "<code>") -> tuple[Function, ...]:
     """Discover function boundaries in a code section.
 
