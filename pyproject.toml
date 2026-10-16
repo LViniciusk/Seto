@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seto"
+version = "0.1.0"
+description = "Matching decompilation infrastructure for Yu-Gi-Oh! GX Tag Force 1 (PSP, ULUS10136)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Seto contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+# Optional: richer disassembly listings for `seto disasm`. Never used for matching.
+disasm = ["capstone>=5.0"]
+# Optional: cross-checking the emitted splat YAML.
+yaml = ["PyYAML>=6.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+seto = "seto.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: requires the original media or a proprietary toolchain; skipped when unavailable",
+]

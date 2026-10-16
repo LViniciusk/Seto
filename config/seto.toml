@@ -1,0 +1,44 @@
+# Seto configuration.
+#
+# Every path here is optional: when a value is empty or missing, Seto falls
+# back to the tool's environment variable and then to PATH, and reports a
+# precise diagnosis when the tool is unavailable.
+
+[baseline]
+# Documented reference for Yu-Gi-Oh! GX Tag Force 1 (PSP, USA).
+iso = "TF1.iso"
+disc_id = "ULUS10136"
+disc_version = "1.03"
+title = "Yu-Gi-Oh! GX Tag Force"
+size = 701693952
+sha256 = "FB22D0F06BB9F45A2D0EFF0EF66D541E61210599105037063DB60421E1A3C906"
+# Where the extracted PSP_GAME tree lives (git-ignored).
+extracted_root = "private/original/PSP_GAME"
+
+[tools.mwccpsp]
+path = ""
+# Environment variable fallback: SETO_MWCCPSP
+
+[tools.splat]
+path = ""
+# Environment variable fallback: SETO_SPLAT
+
+[tools.m2c]
+path = ""
+
+[tools.ghidra]
+# Ghidra *installation directory* (not the launcher).
+path = ""
+# Environment variable fallback: SETO_GHIDRA_HOME, GHIDRA_HOME, GHIDRA_INSTALL_DIR
+
+[tools.objdump]
+path = ""
+
+[match]
+# Candidate Metrowerks flags for this game family. These are *hypotheses*:
+# the Tag Force 5 decompilation project documents `-O4,p -sdatathreshold 0`,
+# while this task initially suggested `-O4,s`. Both must be validated by
+# experiment against the original instructions before being trusted.
+flags = ["-O4,p", "-sdatathreshold", "0"]
+alternative_flags = ["-O4,s", "-sdatathreshold", "0"]
+includes = ["decomp/include"]

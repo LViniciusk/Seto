@@ -1,0 +1,19 @@
+
+# Arquivos originais do jogo
+*.iso
+*.cso
+*.zip
+private/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+
+# Artefatos gerados que nunca devem ser versionados
+asm/
