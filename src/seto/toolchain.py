@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,7 +174,16 @@ def run(
     env: Mapping[str, str] | None = None,
     max_output: int = DEFAULT_MAX_OUTPUT,
 ) -> RunResult:
-    """Run a command with an argument list, no shell, a timeout and bounded output."""
+    """Run a command with an argument list, no shell, a timeout and bounded output.
+
+    ``subprocess`` gives the child two OS pipes.  They must be consumed *while*
+    the child runs: a chatty compiler that fills the ~64 KiB pipe buffer would
+    otherwise block on ``write`` forever while we block on ``wait`` (a classic
+    deadlock).  Two daemon reader threads drain stdout and stderr concurrently
+    and keep at most ``max_output`` bytes *per stream* in memory; the rest is
+    counted and discarded.  On timeout the child is killed and the readers are
+    joined, so the call always returns.
+    """
     arguments = tuple(str(part) for part in argv)
     if not arguments:
         raise ValueError("argv must not be empty")
@@ -182,42 +192,77 @@ def run(
         child_env = dict(os.environ)
         child_env.update(env)
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             list(arguments),
-            capture_output=True,
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=str(cwd) if cwd is not None else None,
             env=child_env,
-            check=False,
+            shell=False,
         )
     except FileNotFoundError as exc:
         return RunResult(arguments, None, "", f"failed to launch: {exc}")
     except PermissionError as exc:
         return RunResult(arguments, None, "", f"permission denied: {exc}")
-    except subprocess.TimeoutExpired as exc:
-        return RunResult(
-            arguments,
-            None,
-            _decode(exc.stdout, max_output)[0],
-            _decode(exc.stderr, max_output)[0],
-            timed_out=True,
-        )
-    stdout, out_truncated = _decode(completed.stdout, max_output)
-    stderr, err_truncated = _decode(completed.stderr, max_output)
+    except OSError as exc:
+        return RunResult(arguments, None, "", f"failed to launch: {exc}")
+
+    assert process.stdout is not None and process.stderr is not None
+    out_chunks: list[bytes] = []
+    out_stats = [0, 0]
+    err_chunks: list[bytes] = []
+    err_stats = [0, 0]
+    threads = [
+        threading.Thread(
+            target=_drain, args=(process.stdout, out_chunks, out_stats, max_output), daemon=True
+        ),
+        threading.Thread(
+            target=_drain, args=(process.stderr, err_chunks, err_stats, max_output), daemon=True
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+
+    timed_out = False
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        returncode = process.wait()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
     return RunResult(
         arguments,
-        completed.returncode,
-        stdout,
-        stderr,
-        truncated=out_truncated or err_truncated,
+        returncode,
+        _join(out_chunks),
+        _join(err_chunks),
+        timed_out=timed_out,
+        truncated=out_stats[0] > max_output or err_stats[0] > max_output,
     )
 
 
-def _decode(raw: bytes | None, max_output: int) -> tuple[str, bool]:
-    if not raw:
-        return "", False
-    truncated = len(raw) > max_output
-    return raw[:max_output].decode("utf-8", "replace"), truncated
+def _drain(stream, chunks: list[bytes], stats: list[int], limit: int) -> None:
+    """Read a pipe to EOF, keeping at most ``limit`` bytes (stats[0] = total)."""
+    read = getattr(stream, "read1", stream.read)
+    try:
+        while True:
+            chunk = read(65536)
+            if not chunk:
+                break
+            stats[0] += len(chunk)
+            remaining = limit - stats[1]
+            if remaining > 0:
+                kept = chunk[:remaining]
+                chunks.append(kept)
+                stats[1] += len(kept)
+    finally:
+        stream.close()
+
+
+def _join(chunks: list[bytes]) -> str:
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 @dataclass(frozen=True)

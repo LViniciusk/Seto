@@ -76,6 +76,52 @@ def test_run_forwards_extra_environment() -> None:
     assert result.stdout.strip() == "42"
 
 
+def test_run_captures_stderr_separately_from_stdout() -> None:
+    result = run(
+        [PYTHON, "-c", "import sys; sys.stdout.write('out'); sys.stderr.write('err')"]
+    )
+    assert result.stdout == "out"
+    assert result.stderr == "err"
+
+
+def test_run_drains_output_larger_than_the_pipe_buffer_without_deadlocking() -> None:
+    # 512 KiB is far larger than the OS pipe buffer; a naive wait() would
+    # deadlock because the child blocks on write() once the buffer fills.
+    result = run(
+        [PYTHON, "-c", "import sys; sys.stdout.write('x' * (512 * 1024))"],
+        timeout=30,
+        max_output=1024,
+    )
+    assert result.timed_out is False
+    assert result.returncode == 0
+    assert result.truncated is True
+    assert len(result.stdout) == 1024
+
+
+def test_run_drains_stderr_larger_than_the_pipe_buffer() -> None:
+    result = run(
+        [PYTHON, "-c", "import sys; sys.stderr.write('e' * (512 * 1024))"],
+        timeout=30,
+        max_output=1024,
+    )
+    assert result.timed_out is False
+    assert result.truncated is True
+    assert len(result.stderr) == 1024
+
+
+def test_run_still_times_out_while_the_child_is_chatty() -> None:
+    result = run(
+        [
+            PYTHON,
+            "-c",
+            "import sys, time; sys.stdout.write('x' * (512 * 1024)); sys.stdout.flush(); time.sleep(30)",
+        ],
+        timeout=1.0,
+    )
+    assert result.timed_out is True
+    assert not result.ok
+
+
 # -------------------------------------------------------------------- settings
 
 

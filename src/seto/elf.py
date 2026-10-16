@@ -52,6 +52,18 @@ PROGRAM_HEADER_SIZE = 0x20
 SYMBOL_SIZE = 0x10
 REL_ENTRY_SIZE = 0x08
 
+STT_NOTYPE = 0
+STT_OBJECT = 1
+STT_FUNC = 2
+STT_SECTION = 3
+STT_FILE = 4
+
+SHN_UNDEF = 0
+SHN_LORESERVE = 0xFF00
+SHN_ABS = 0xFFF1
+SHN_COMMON = 0xFFF2
+SHN_XINDEX = 0xFFFF
+
 R_MIPS_NONE = 0
 R_MIPS_32 = 2
 R_MIPS_REL32 = 3
@@ -223,8 +235,17 @@ class Symbol:
     shndx: int
 
     @property
+    def type(self) -> int:
+        return self.info & 0xF
+
+    @property
+    def is_function(self) -> bool:
+        return self.type == STT_FUNC
+
+    @property
     def is_defined(self) -> bool:
-        return self.shndx != 0
+        """False for undefined symbols and for the reserved (special) indices."""
+        return SHN_UNDEF < self.shndx < SHN_LORESERVE
 
 
 @dataclass(frozen=True)

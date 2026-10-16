@@ -113,9 +113,20 @@ seto toolchain
 ```
 
 `wibo` (or `wine`) is prepended to the compiler command line by
-`scripts/match_function.py --loader wibo`. No shell is ever involved: every
-process is spawned with an argument list, a timeout, and bounded output
-(`seto.toolchain.run`).
+`scripts/match_function.py --loader wibo`.
+
+## Subprocess safety
+
+Every external process is spawned with an argument list and **never**
+`shell=True`. `seto.toolchain.run` uses `subprocess.Popen` with two pipes, drained
+concurrently by two daemon reader threads. This matters: if a chatty child filled
+the OS pipe buffer while we blocked on `wait()`, the call would deadlock. Each
+stream keeps at most `max_output` bytes in memory (the rest is counted and
+discarded) so a runaway tool cannot exhaust memory; on timeout the child is
+killed and the readers are joined, so the call always returns.
+
+A missing or non-executable tool can never look like success: launching fails and
+the status becomes `MISSING` / the command exits `4` (`BLOCKED`).
 
 ## Optional Python extras
 

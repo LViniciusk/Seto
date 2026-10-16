@@ -30,6 +30,18 @@ WARNING = "warning"
 ERROR = "error"
 
 
+def _require_int(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ParseError(f"layout field {field!r} must be an integer")
+    return value
+
+
+def _require_str(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise ParseError(f"layout field {field!r} must be a string")
+    return value
+
+
 @dataclass(frozen=True)
 class Subsegment:
     offset: int
@@ -92,33 +104,92 @@ class Layout:
         return json.dumps(self.summary(), indent=2, sort_keys=True) + "\n"
 
     @staticmethod
-    def from_dict(data: dict) -> Layout:
+    def from_dict(data: object) -> Layout:
+        """Build a layout from parsed JSON, rejecting malformed structures."""
+        if not isinstance(data, dict):
+            raise ParseError("layout JSON must be an object")
+        for key in ("basename", "file_size", "image_delta", "segments"):
+            if key not in data:
+                raise ParseError(f"layout JSON is missing the {key!r} field")
+        file_size = _require_int(data["file_size"], "file_size")
+        if file_size <= 0:
+            raise ParseError("layout field 'file_size' must be positive")
+        image_delta = _require_int(data["image_delta"], "image_delta")
+        if image_delta < 0:
+            raise ParseError("layout field 'image_delta' must not be negative")
+        raw_segments = data["segments"]
+        if not isinstance(raw_segments, list) or not raw_segments:
+            raise ParseError("layout field 'segments' must be a non-empty list")
+
         segments = []
-        for raw_segment in data["segments"]:
-            subsegments = tuple(
-                Subsegment(
-                    offset=item["offset"],
-                    kind=item["kind"],
-                    name=item["name"],
-                    size=item["size"],
-                )
-                for item in raw_segment["subsegments"]
-            )
-            segments.append(
-                LayoutSegment(
-                    name=raw_segment["name"],
-                    type=raw_segment["type"],
-                    start=raw_segment["start"],
-                    vram=raw_segment["vram"],
-                    subsegments=subsegments,
-                )
-            )
+        for index, raw_segment in enumerate(raw_segments):
+            segments.append(_segment_from_dict(raw_segment, index))
         return Layout(
-            basename=data["basename"],
-            file_size=data["file_size"],
-            image_delta=data["image_delta"],
+            basename=_require_str(data["basename"], "basename"),
+            file_size=file_size,
+            image_delta=image_delta,
             segments=tuple(segments),
         )
+
+
+def _segment_from_dict(raw_segment: object, index: int) -> LayoutSegment:
+    if not isinstance(raw_segment, dict):
+        raise ParseError(f"layout segment {index} must be an object")
+    for key in ("name", "type", "start", "vram", "subsegments"):
+        if key not in raw_segment:
+            raise ParseError(f"layout segment {index} is missing the {key!r} field")
+    raw_subsegments = raw_segment["subsegments"]
+    if not isinstance(raw_subsegments, list) or not raw_subsegments:
+        raise ParseError(f"layout segment {index} 'subsegments' must be a non-empty list")
+    subsegments = tuple(
+        _subsegment_from_dict(item, index, position)
+        for position, item in enumerate(raw_subsegments)
+    )
+    return LayoutSegment(
+        name=_require_str(raw_segment["name"], f"segments[{index}].name"),
+        type=_require_str(raw_segment["type"], f"segments[{index}].type"),
+        start=_require_int(raw_segment["start"], f"segments[{index}].start"),
+        vram=_require_int(raw_segment["vram"], f"segments[{index}].vram"),
+        subsegments=subsegments,
+    )
+
+
+def _subsegment_from_dict(item: object, segment: int, position: int) -> Subsegment:
+    if not isinstance(item, dict):
+        raise ParseError(f"layout subsegment {segment}.{position} must be an object")
+    for key in ("offset", "kind", "name", "size"):
+        if key not in item:
+            raise ParseError(
+                f"layout subsegment {segment}.{position} is missing the {key!r} field"
+            )
+    size = _require_int(item["size"], f"segments[{segment}].subsegments[{position}].size")
+    offset = _require_int(item["offset"], f"segments[{segment}].subsegments[{position}].offset")
+    if size <= 0:
+        raise ParseError(f"layout subsegment {segment}.{position} has a non-positive size")
+    if offset < 0:
+        raise ParseError(f"layout subsegment {segment}.{position} has a negative offset")
+    return Subsegment(
+        offset=offset,
+        kind=_require_str(item["kind"], f"segments[{segment}].subsegments[{position}].kind"),
+        name=_require_str(item["name"], f"segments[{segment}].subsegments[{position}].name"),
+        size=size,
+    )
+
+
+def load_layout(path: str | Path) -> Layout:
+    """Read and validate a ``layout.json`` file, rejecting malformed input."""
+    source = Path(path)
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ParseError(f"cannot read layout {source}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ParseError(
+            f"{source}: invalid layout JSON ({exc.msg} at line {exc.lineno} column {exc.colno})"
+        ) from exc
+    return Layout.from_dict(data)
 
 
 @dataclass(frozen=True)
@@ -142,6 +213,8 @@ def build_layout(elf: ElfFile, basename: str) -> Layout:
         if section.is_allocated
         and section.type != SHT_NULL
         and section.size > 0
+        # SHT_NOBITS sections (.bss) occupy no file bytes, so they never take
+        # part in a *file* layout; validate_layout reports them explicitly.
         and not section.is_nobits
     ]
     if not image:
@@ -212,13 +285,25 @@ def build_layout(elf: ElfFile, basename: str) -> Layout:
 
 
 def validate_layout(layout: Layout, elf: ElfFile) -> tuple[LayoutIssue, ...]:
-    """Check a layout against the ELF it was derived from."""
+    """Check a layout against the ELF it was derived from.
+
+    The layout must tile the file with no gaps and no overlaps: every region
+    starts exactly where the previous one ends, the first starts at 0 and the
+    last ends at the file size.  ``SHT_NOBITS`` sections (such as ``.bss``) own
+    no file bytes, so they are reported explicitly instead of being treated as
+    an unexplained gap.
+    """
     issues: list[LayoutIssue] = []
     sections_by_offset = {
         section.offset: section
         for section in elf.sections
         if section.is_allocated and section.size > 0 and not section.is_nobits
     }
+    nobits = [
+        section
+        for section in elf.sections
+        if section.is_allocated and section.is_nobits and section.size > 0
+    ]
 
     if layout.file_size != elf.reader.size:
         issues.append(
@@ -262,6 +347,14 @@ def validate_layout(layout: Layout, elf: ElfFile) -> tuple[LayoutIssue, ...]:
                         f"({subsegment.offset:#x} < {previous_end:#x})",
                     )
                 )
+            elif subsegment.offset > previous_end:
+                issues.append(
+                    LayoutIssue(
+                        ERROR,
+                        f"gap of {subsegment.offset - previous_end:#x} bytes before subsegment "
+                        f"{subsegment.name!r} ({previous_end:#x} -> {subsegment.offset:#x})",
+                    )
+                )
             previous_end = max(previous_end, subsegment.end)
 
             reference = sections_by_offset.get(subsegment.offset)
@@ -297,6 +390,14 @@ def validate_layout(layout: Layout, elf: ElfFile) -> tuple[LayoutIssue, ...]:
             LayoutIssue(
                 ERROR,
                 f"layout covers [0, {previous_end:#x}) but the file is {layout.file_size:#x} bytes",
+            )
+        )
+    for section in nobits:
+        issues.append(
+            LayoutIssue(
+                WARNING,
+                f"section {section.name!r} is SHT_NOBITS: it owns no file bytes and is "
+                "intentionally absent from the file layout",
             )
         )
     return tuple(issues)
