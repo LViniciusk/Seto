@@ -49,7 +49,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -63,6 +63,8 @@ from seto.cli import (  # noqa: E402
 )
 from seto.hashing import sha256_file  # noqa: E402
 from seto.matching import (  # noqa: E402
+    EQUIVALENCE_BINARY,
+    EQUIVALENCE_RESOLVED_RELOCATIONS,
     EVIDENCE_COMPILED_OBJECT,
     INCONCLUSIVE,
     MATCHED,
@@ -91,6 +93,7 @@ class MatchRecord:
     section: str
     status: str
     evidence: str
+    equivalence: str
     verified_decompilation: bool
     exit_code: int
     symbol: str | None
@@ -111,6 +114,7 @@ class MatchRecord:
             "symbol": self.symbol,
             "status": self.status,
             "evidence": self.evidence,
+            "equivalence": self.equivalence,
             "verified_decompilation": self.verified_decompilation,
             "exit_code": self.exit_code,
             "provenance": {
@@ -124,6 +128,23 @@ class MatchRecord:
                 "defines": list(self.defines),
             },
         }
+
+
+def equivalence_of(status: str, payload: Mapping) -> str:
+    """Name what a ``MATCHED`` proves, from the comparator's own evidence.
+
+    A compiled ``ET_REL`` object can never be byte-identical to a linked module:
+    the field a call relocation covers holds a symbol reference instead of an
+    address.  A ``MATCHED`` is therefore either plain binary equality of the
+    compared range (nothing had to be resolved) or equivalence whose call
+    references were canonically resolved.  *Full binary equality after linking* is
+    never claimed by this script, because this script does not link.
+    """
+    if status != MATCHED:
+        return ""
+    if payload.get("resolved_calls"):
+        return EQUIVALENCE_RESOLVED_RELOCATIONS
+    return EQUIVALENCE_BINARY
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -307,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         section=arguments.section,
         status=match_status,
         evidence=EVIDENCE_COMPILED_OBJECT,
+        equivalence=equivalence_of(match_status, payload),
         verified_decompilation=match_status == MATCHED,
         exit_code=exit_code,
         symbol=symbol,
@@ -336,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"function {record.function} @ 0x{record.address:x}")
         print(f"  status:   {record.status}")
         print(f"  evidence: {record.evidence}")
+        print(f"  equivalence: {record.equivalence or '-'}")
         print(f"  verified decompilation: {'yes' if record.verified_decompilation else 'no'}")
         print(f"  source:   {record.source} ({record.source_sha256})")
         print(f"  object:   {record.object} ({record.object_sha256})")

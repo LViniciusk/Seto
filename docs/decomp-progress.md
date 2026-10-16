@@ -14,7 +14,8 @@ Status vocabulary, used strictly:
 * **INCONCLUSIVE** — the comparison ran but the evidence is insufficient to
   decide (a raw/non-ELF candidate, an unmodelled relocation type, a symbol
   exposed on only one side, a HI16/LO16 association that can only be inferred from
-  relocation order, or several candidate functions and nothing selecting one).
+  relocation order, a call whose destination cannot be identified, or several
+  candidate functions and nothing selecting one).
 * **BLOCKED** — the comparison could not run because a required tool is missing.
   Never reported as success.
 
@@ -22,6 +23,10 @@ Status vocabulary, used strictly:
 | --- | --- | --- |
 | `libhtml_view.prx` inventory (16 functions) | `seto functions` | **OK** |
 | `libhtml_view.prx` layout (15 subsegments) | `seto split` + `seto check-layout` | **OK** |
+| `config/splat/libhtml_view.yaml` consumed by `splat64[mips]` 0.50.1 | `seto split --run-splat` | **OK** (0 issues, `.text` 509 words + `.sceStub.text` 2536 words verified against the original bytes) |
+| PSP import identity (8 libraries, 1268 trampolines) | `seto imports` | **OK** (0 limitations; every trampoline cross-checked against its bytes) |
+| Call classification of `.text` (72 `R_MIPS_26`) | `seto imports` | **OK** (50 imported, 22 local, 0 unresolved) |
+| The four `jal`s of `func_00000244` | `seto imports --function 0x244` | **PROVEN** — `(library, NID)` recovered for each |
 | Comparator sanity check (`func_00000244` vs itself) | `seto match` | **MATCHED** (`evidence: binary-range`, *not* a decompiled function) |
 | `func_00000244` reconstructed C vs original | `scripts/match_function.py` | **BLOCKED** (no `mwccpsp`) |
 
@@ -33,7 +38,51 @@ Status vocabulary, used strictly:
    image delta is constant (`0x60`). `SHT_NOBITS` sections (`.bss`) own no file
    bytes and are reported explicitly. These are reproducible facts, not claims.
 
-2. **The comparator works.** Comparing `func_00000244` against the same bytes,
+2. **The generated splat configuration is really consumed by splat.** The config
+   `config/splat/libhtml_view.yaml` is written by `seto split` (not hand-edited)
+   and `seto split --run-splat` runs `splat64[mips]` on it, then reads the
+   listings splat produced and checks every word back against the original file:
+
+   ```powershell
+   py -3.12 -m seto split `
+       --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
+       --out build/split --run-splat
+   ```
+
+   Result: exit `0`, `Split 21 KB (100.00%)`, and the listing verification reports
+   `0 issues` for `.text` (509 words) and `.sceStub.text` (2536 words) — i.e. the
+   file offset, the address and the bytes of every listed word agree with the
+   original. A listing that does not agree, or that fails to cover the segment, is
+   an **error** (`EXIT_MISMATCH`), never a success. The generated `assets/`,
+   `include/`, `asm/`, `undefined_*_auto.txt` and `.splache` are git-ignored:
+   they are reproducible build output, not sources.
+
+3. **The PSP import identities are recovered from the module itself.** The
+   module declares its imports in `.lib.stub` (one `SceLibraryStubTable` per
+   library), pointing at `.rodata.sceResident` (library name), `.rodata.sceNid`
+   (one NID per imported function) and `.sceStub.text` (one 8-byte `jr $ra; nop`
+   trampoline per imported function). `seto imports` walks that table, requires
+   every pointer field to carry the `R_MIPS_32` relocation a loader would use,
+   requires every pointer and count to lie inside the section it names, and
+   checks the bytes at every trampoline address really are `jr $ra`. Result for
+   `libhtml_view.prx`: **8 libraries, 1268 imported functions, 0 limitations**.
+
+   The identity of an imported function is the **(library, NID)** pair. Two
+   identical NIDs in different libraries are *not* the same function, and the
+   comparison refuses to treat them as equivalent; the provisional
+   `func_<address>` name only *names* an address and is never itself the proof.
+
+   ```powershell
+   py -3.12 -m seto imports `
+       --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
+       --out decomp/imports/libhtml_view.json
+   ```
+
+   Every `R_MIPS_26` in `.text` is classified: 50 reach an import trampoline, 22
+   reach another function of the module, 0 are unresolved. An unresolved call is
+   reported with the exact missing link and makes the command exit `5`.
+
+4. **The comparator works.** Comparing `func_00000244` against the same bytes,
    with the module's own relocations on both sides, yields:
 
    ```
@@ -81,6 +130,44 @@ Two instruction streams are compared word by word:
 * `MATCHED` requires **zero** differences, issues and limitations. Any limitation
   downgrades it to `INCONCLUSIVE`.
 
+### Calls: one reference, two encodings
+
+A call is the one field that is legitimately encoded differently on the two
+sides. A linked module stores the **address of the trampoline** it calls; a
+compiled object stores a **symbol name**, because no address exists yet. Comparing
+those literally would report a false `NONMATCHING` for every function that calls
+an imported function.
+
+`compare()` therefore takes an optional *call resolver*
+(`seto.imports.resolve_call_target`) which is consulted **only** when the two
+in-place targets differ, and which returns a proven identity or nothing:
+
+* both sides resolve to the same `(library, NID)` → the word counts as matching,
+  and the resolution is recorded in the result (`resolved_calls`) as evidence;
+* both resolve, but to different identities → `NONMATCHING` (a call to the wrong
+  stub can never match);
+* either side cannot be resolved → `INCONCLUSIVE`, never `MATCHED`.
+
+The resolver is authoritative only about what the *module* proves. An address is
+accepted when the module's validated table claims it (and its bytes are a
+trampoline), or when it lies inside the module's own code (then the identity is
+the address itself, so a call to a sibling function can be compared without either
+side pretending to know a name). Anything else — a gap between the two — has no
+proven identity and stays `INCONCLUSIVE`.
+
+### What a `MATCHED` claims
+
+A compiled `ET_REL` object cannot be byte-identical to a linked module: the field
+a relocation covers holds a symbol reference instead of an address. Every
+`MATCHED` therefore carries an explicit `equivalence`:
+
+* `binary equality of the compared range` — nothing had to be resolved;
+* `function equivalence with canonically resolved relocations` — the instruction
+  streams agree and every call resolves to the same proven identity.
+
+`full binary equality after linking` is **never** claimed, because the pipeline
+does not link: it compares the object as the compiler emitted it.
+
 Candidate location is proved, not guessed: `--candidate-symbol` is only accepted
 when the symbol's `shndx` is exactly the requested section (`ET_REL` values are
 section-relative; linked values are rebased by the section address), undefined,
@@ -99,20 +186,47 @@ information needed to prove the association.
 ## `func_00000244` (the worked example)
 
 13 words, `0x34` bytes at `0x244`. Four `jal`s into `.sceStub.text` trampolines
-(targets taken from the relocation table) surrounded by a standard 0x10-byte
-frame. See `decomp/src/func_00000244.c` and `decomp/include/sce_stubs.h`.
+surrounded by a standard 0x10-byte frame. See `decomp/src/func_00000244.c` and
+`decomp/include/sce_stubs.h`.
 
-Why it is a good first target:
+The four call targets are relocations, and each one now has a proven identity
+taken from the module's own import tables — not from its provisional name:
+
+| Call site | Trampoline | Library | NID | Stub index |
+| --- | --- | --- | --- | --- |
+| `0x24c` | `0x2edc` | `sceHttp` | `0x76D1363B` | 0 |
+| `0x254` | `0x2f0c` | `sceHttp` | `0xF9D8EB63` | 6 |
+| `0x25c` | `0x2ef4` | `sceHttp` | `0xD1C8945E` | 3 |
+| `0x264` | `0x2f54` | `sceSsl` | `0x191CDEFF` | 0 |
+
+Reproduce it with:
+
+```powershell
+py -3.12 -m seto imports `
+    --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
+    --function 0x244
+```
+
+The machine-readable report is committed at `decomp/imports/libhtml_view.json`
+(regenerate it with `--out`; it is deterministic and uses POSIX paths).
+
+Why this is a good first target:
 
 * the call targets are **relocations**, so they are exact and cannot be guessed
   wrong — the failure mode "I picked the wrong function" is impossible;
+* the imported identities are **confirmed by the module's own tables**, so the
+  four calls are no longer hypotheses;
 * the body has no data flow, so the C structure is unambiguous;
 * it exercises the relocation-aware comparator on all three MIPS relocation
   types used by the module.
 
 The reconstruction is complete and readable but **unverified**: `mwccpsp` is not
 available here, so no object file exists to compare. That is reported as
-`BLOCKED`, not as a match.
+`BLOCKED`, not as a match. The *names* of the four imported functions are also
+still unknown: the module stores NIDs, not names, so a name would have to come
+from the exporting library's table in another module. The declarations in
+`decomp/include/sce_stubs.h` therefore stay keyed by address and carry the
+recovered `(library, NID)` in their comments.
 
 To finish it once a licensed compiler is available:
 
@@ -127,7 +241,7 @@ py -3.12 scripts/match_function.py `
 The flags come from `[match] flags` in `config/seto.toml` unless `--flag`
 overrides them. Exit `0` means `MATCHED`, `3` means `NONMATCHING` (the differing
 words are printed), `4` means the compiler is still missing and `5` means
-`INCONCLUSIVE`.
+`INCONCLUSIVE`. The record it writes names the `equivalence` the match claims.
 
 The script — not `seto match` — is what turns a `MATCHED` result into a *verified
 decompilation*: it compiles, deletes any previous object, hashes the source and the
@@ -154,17 +268,21 @@ Neither is recorded as proven.
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
 | Any real `MATCHED` | `mwccpsp` is proprietary and absent | supply a licensed compiler, then run the command above |
-| Running `splat` on `config/splat/*.yaml` | `splat` not installed | `pip install splat64` (or the reference `splat`) |
 | Draft C for the other 15 functions | `m2c` not installed | install `m2c` |
 | Allegrex-specific analysis (VFPU, `ghidra-allegrex`) | Ghidra not configured | set `GHIDRA_HOME` |
+| Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
+| Python 3.11 run of the suite | no 3.11 interpreter in the development environment (`py -3.11` is unavailable); the suite was run on 3.12 | run `python -m pytest` on 3.11 (CI does, on Ubuntu and Windows) |
 | MCP-driven analysis | REA refuses PSP PRX (`0xFFA0`) upstream; no MCP server configured | use Ghidra headless scripts instead |
+
+`seto toolchain` reports the exact state of every tool, so this table can be
+re-derived rather than trusted.
 
 ## Next steps
 
 1. Install `mwccpsp` and run `scripts/match_function.py` for `func_00000244`;
    record the real status and the flag set that produced it.
-2. Validate `config/splat/libhtml_view.yaml` by actually running `splat` and
-   diffing the regenerated `.text` against the original bytes.
-3. Install `m2c` and iterate over the remaining functions in `.text`.
-4. Recover real names for the `.sceStub.text` targets (via Ghidra/REA on a module
-   whose imports resolve) and rename the declarations in `decomp/include/`.
+2. Install `m2c` and iterate over the remaining functions in `.text`, using the
+   recovered import identities (they are already resolvable by `seto match`).
+3. Recover real *names* for the `(library, NID)` pairs from a module or firmware
+   image that carries the exporting libraries' tables, and rename the declarations
+   in `decomp/include/`.

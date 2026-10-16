@@ -457,6 +457,11 @@ def mwcc_argv(
     return tuple(arguments)
 
 
+def splat_argv(splat: str | Path, config: str | Path) -> tuple[str, ...]:
+    """Build the ``splat split`` command line for one configuration file."""
+    return (str(splat), "split", str(config))
+
+
 def ghidra_headless_argv(
     launcher: str | Path,
     project_dir: str | Path,

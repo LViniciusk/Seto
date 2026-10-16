@@ -1,0 +1,1019 @@
+{
+  "function": null,
+  "imports": {
+    "code_range": [
+      "0x0",
+      "0x7f4"
+    ],
+    "limitations": [],
+    "module": "libhtml_view.prx",
+    "stub_count": 1268,
+    "table_count": 8,
+    "tables": [
+      {
+        "attribute": "0x0001",
+        "length_words": 6,
+        "library": "libehsys",
+        "library_pointer": "0x309c",
+        "nid_range": [
+          "0x3128",
+          "0x449c"
+        ],
+        "stub_count": 1245,
+        "stub_range": [
+          "0x7f4",
+          "0x2edc"
+        ],
+        "table_offset": "0x0",
+        "version": "0x4800",
+        "vstub_count": 2
+      },
+      {
+        "attribute": "0x0009",
+        "length_words": 5,
+        "library": "sceNet",
+        "library_pointer": "0x30ac",
+        "nid_range": [
+          "0x44d0",
+          "0x44d8"
+        ],
+        "stub_count": 2,
+        "stub_range": [
+          "0x2f44",
+          "0x2f54"
+        ],
+        "table_offset": "0x18",
+        "version": "0x1100",
+        "vstub_count": 0
+      },
+      {
+        "attribute": "0x0009",
+        "length_words": 5,
+        "library": "sceNetInet",
+        "library_pointer": "0x30b8",
+        "nid_range": [
+          "0x44c0",
+          "0x44c8"
+        ],
+        "stub_count": 2,
+        "stub_range": [
+          "0x2f24",
+          "0x2f34"
+        ],
+        "table_offset": "0x2c",
+        "version": "0x1100",
+        "vstub_count": 0
+      },
+      {
+        "attribute": "0x0009",
+        "length_words": 5,
+        "library": "sceNetApctl",
+        "library_pointer": "0x30c8",
+        "nid_range": [
+          "0x44b8",
+          "0x44c0"
+        ],
+        "stub_count": 2,
+        "stub_range": [
+          "0x2f14",
+          "0x2f24"
+        ],
+        "table_offset": "0x40",
+        "version": "0x1100",
+        "vstub_count": 0
+      },
+      {
+        "attribute": "0x0009",
+        "length_words": 5,
+        "library": "sceNetResolver",
+        "library_pointer": "0x30d8",
+        "nid_range": [
+          "0x44c8",
+          "0x44d0"
+        ],
+        "stub_count": 2,
+        "stub_range": [
+          "0x2f34",
+          "0x2f44"
+        ],
+        "table_offset": "0x54",
+        "version": "0x1100",
+        "vstub_count": 0
+      },
+      {
+        "attribute": "0x0009",
+        "length_words": 5,
+        "library": "sceSsl",
+        "library_pointer": "0x30ec",
+        "nid_range": [
+          "0x44d8",
+          "0x44e0"
+        ],
+        "stub_count": 2,
+        "stub_range": [
+          "0x2f54",
+          "0x2f64"
+        ],
+        "table_offset": "0x68",
+        "version": "0x1100",
+        "vstub_count": 0
+      },
+      {
+        "attribute": "0x0009",
+        "length_words": 5,
+        "library": "sceHttp",
+        "library_pointer": "0x30f8",
+        "nid_range": [
+          "0x449c",
+          "0x44b8"
+        ],
+        "stub_count": 7,
+        "stub_range": [
+          "0x2edc",
+          "0x2f14"
+        ],
+        "table_offset": "0x7c",
+        "version": "0x1100",
+        "vstub_count": 0
+      },
+      {
+        "attribute": "0x4001",
+        "length_words": 5,
+        "library": "sceUtility",
+        "library_pointer": "0x3104",
+        "nid_range": [
+          "0x44e0",
+          "0x44f8"
+        ],
+        "stub_count": 6,
+        "stub_range": [
+          "0x2f64",
+          "0x2f94"
+        ],
+        "table_offset": "0x90",
+        "version": "0x1100",
+        "vstub_count": 0
+      }
+    ]
+  },
+  "prx": "private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx",
+  "references": [
+    {
+      "address": "0x1c",
+      "delay_slot": "0x24c64850",
+      "import": {
+        "library": "libehsys",
+        "nid": "0xB4471B5E",
+        "stub_address": "0x1f04",
+        "stub_index": 738,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x1f04"
+    },
+    {
+      "address": "0x40",
+      "delay_slot": "0x24054000",
+      "import": {
+        "library": "libehsys",
+        "nid": "0xEA748E31",
+        "stub_address": "0x964",
+        "stub_index": 46,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x964"
+    },
+    {
+      "address": "0x48",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x6e4"
+    },
+    {
+      "address": "0x50",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x704"
+    },
+    {
+      "address": "0x60",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "libehsys",
+        "nid": "0xF1BC43DB",
+        "stub_address": "0x2adc",
+        "stub_index": 1117,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2adc"
+    },
+    {
+      "address": "0x70",
+      "delay_slot": "0x00002821",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x08813E19",
+        "stub_address": "0x295c",
+        "stub_index": 1069,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x295c"
+    },
+    {
+      "address": "0x98",
+      "delay_slot": "0xafb00008",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x1579A159",
+        "stub_address": "0x2f6c",
+        "stub_index": 1,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f6c"
+    },
+    {
+      "address": "0xac",
+      "delay_slot": "0x24040003",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x1579A159",
+        "stub_address": "0x2f6c",
+        "stub_index": 1,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f6c"
+    },
+    {
+      "address": "0xc0",
+      "delay_slot": "0x24040004",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x1579A159",
+        "stub_address": "0x2f6c",
+        "stub_index": 1,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f6c"
+    },
+    {
+      "address": "0xd4",
+      "delay_slot": "0x24040005",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x1579A159",
+        "stub_address": "0x2f6c",
+        "stub_index": 1,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f6c"
+    },
+    {
+      "address": "0xe8",
+      "delay_slot": "0x24040006",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x1579A159",
+        "stub_address": "0x2f6c",
+        "stub_index": 1,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f6c"
+    },
+    {
+      "address": "0xfc",
+      "delay_slot": "0x24040007",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x1579A159",
+        "stub_address": "0x2f6c",
+        "stub_index": 1,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f6c"
+    },
+    {
+      "address": "0x118",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x134"
+    },
+    {
+      "address": "0x13c",
+      "delay_slot": "0x24040007",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x64D50C56",
+        "stub_address": "0x2f74",
+        "stub_index": 2,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f74"
+    },
+    {
+      "address": "0x144",
+      "delay_slot": "0x24040006",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x64D50C56",
+        "stub_address": "0x2f74",
+        "stub_index": 2,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f74"
+    },
+    {
+      "address": "0x14c",
+      "delay_slot": "0x24040005",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x64D50C56",
+        "stub_address": "0x2f74",
+        "stub_index": 2,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f74"
+    },
+    {
+      "address": "0x154",
+      "delay_slot": "0x24040004",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x64D50C56",
+        "stub_address": "0x2f74",
+        "stub_index": 2,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f74"
+    },
+    {
+      "address": "0x15c",
+      "delay_slot": "0x24040003",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x64D50C56",
+        "stub_address": "0x2f74",
+        "stub_index": 2,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f74"
+    },
+    {
+      "address": "0x164",
+      "delay_slot": "0x24040001",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x64D50C56",
+        "stub_address": "0x2f74",
+        "stub_index": 2,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f74"
+    },
+    {
+      "address": "0x188",
+      "delay_slot": "0xafb00008",
+      "import": {
+        "library": "sceSsl",
+        "nid": "0x957ECBE2",
+        "stub_address": "0x2f5c",
+        "stub_index": 1,
+        "table_offset": "0x68"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f5c"
+    },
+    {
+      "address": "0x1a0",
+      "delay_slot": "0x34448000",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0xAB1ABE07",
+        "stub_address": "0x2eec",
+        "stub_index": 2,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2eec"
+    },
+    {
+      "address": "0x1b4",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x244"
+    },
+    {
+      "address": "0x1cc",
+      "delay_slot": "0x00003821",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0xE4D21302",
+        "stub_address": "0x2efc",
+        "stub_index": 4,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2efc"
+    },
+    {
+      "address": "0x1e0",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x244"
+    },
+    {
+      "address": "0x1f0",
+      "delay_slot": "0x00002821",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0x87797BDD",
+        "stub_address": "0x2ee4",
+        "stub_index": 1,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2ee4"
+    },
+    {
+      "address": "0x204",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x244"
+    },
+    {
+      "address": "0x214",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0xF1657B22",
+        "stub_address": "0x2f04",
+        "stub_index": 5,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f04"
+    },
+    {
+      "address": "0x228",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x244"
+    },
+    {
+      "address": "0x24c",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0x76D1363B",
+        "stub_address": "0x2edc",
+        "stub_index": 0,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2edc"
+    },
+    {
+      "address": "0x254",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0xF9D8EB63",
+        "stub_address": "0x2f0c",
+        "stub_index": 6,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f0c"
+    },
+    {
+      "address": "0x25c",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceHttp",
+        "nid": "0xD1C8945E",
+        "stub_address": "0x2ef4",
+        "stub_index": 3,
+        "table_offset": "0x7c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2ef4"
+    },
+    {
+      "address": "0x264",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceSsl",
+        "nid": "0x191CDEFF",
+        "stub_address": "0x2f54",
+        "stub_index": 0,
+        "table_offset": "0x68"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f54"
+    },
+    {
+      "address": "0x280",
+      "delay_slot": "0xafb00008",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x8c"
+    },
+    {
+      "address": "0x2a4",
+      "delay_slot": "0x00004021",
+      "import": {
+        "library": "sceNet",
+        "nid": "0x39AF39A6",
+        "stub_address": "0x2f4c",
+        "stub_index": 1,
+        "table_offset": "0x18"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f4c"
+    },
+    {
+      "address": "0x2bc",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceNetInet",
+        "nid": "0x17943399",
+        "stub_address": "0x2f24",
+        "stub_index": 0,
+        "table_offset": "0x2c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f24"
+    },
+    {
+      "address": "0x2d0",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x358"
+    },
+    {
+      "address": "0x2e0",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceNetResolver",
+        "nid": "0xF3370E61",
+        "stub_address": "0x2f3c",
+        "stub_index": 1,
+        "table_offset": "0x54"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f3c"
+    },
+    {
+      "address": "0x2f4",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x358"
+    },
+    {
+      "address": "0x304",
+      "delay_slot": "0x24050030",
+      "import": {
+        "library": "sceNetApctl",
+        "nid": "0xE2F91F9B",
+        "stub_address": "0x2f1c",
+        "stub_index": 1,
+        "table_offset": "0x40"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f1c"
+    },
+    {
+      "address": "0x318",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x358"
+    },
+    {
+      "address": "0x328",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x178"
+    },
+    {
+      "address": "0x33c",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x358"
+    },
+    {
+      "address": "0x360",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x244"
+    },
+    {
+      "address": "0x368",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceNetApctl",
+        "nid": "0xB3EDD0EC",
+        "stub_address": "0x2f14",
+        "stub_index": 0,
+        "table_offset": "0x40"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f14"
+    },
+    {
+      "address": "0x370",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceNetResolver",
+        "nid": "0x6138194A",
+        "stub_address": "0x2f34",
+        "stub_index": 0,
+        "table_offset": "0x54"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f34"
+    },
+    {
+      "address": "0x378",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceNetInet",
+        "nid": "0xA9ED66B9",
+        "stub_address": "0x2f2c",
+        "stub_index": 1,
+        "table_offset": "0x2c"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f2c"
+    },
+    {
+      "address": "0x380",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceNet",
+        "nid": "0x281928A9",
+        "stub_address": "0x2f44",
+        "stub_index": 0,
+        "table_offset": "0x18"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f44"
+    },
+    {
+      "address": "0x388",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x134"
+    },
+    {
+      "address": "0x3a4",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x31454993",
+        "stub_address": "0x2364",
+        "stub_index": 878,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2364"
+    },
+    {
+      "address": "0x420",
+      "delay_slot": "0x00808021",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x1F190478",
+        "stub_address": "0x2354",
+        "stub_index": 876,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2354"
+    },
+    {
+      "address": "0x458",
+      "delay_slot": "0x24a547a4",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x476FD94A",
+        "stub_address": "0x8a4",
+        "stub_index": 22,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x8a4"
+    },
+    {
+      "address": "0x470",
+      "delay_slot": "0x24a547d0",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x476FD94A",
+        "stub_address": "0x8a4",
+        "stub_index": 22,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x8a4"
+    },
+    {
+      "address": "0x488",
+      "delay_slot": "0x24a54800",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x476FD94A",
+        "stub_address": "0x8a4",
+        "stub_index": 22,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x8a4"
+    },
+    {
+      "address": "0x4a0",
+      "delay_slot": "0x24a547d0",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x476FD94A",
+        "stub_address": "0x8a4",
+        "stub_index": 22,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x8a4"
+    },
+    {
+      "address": "0x4cc",
+      "delay_slot": "0x24a54830",
+      "import": {
+        "library": "libehsys",
+        "nid": "0xEC6F1CF2",
+        "stub_address": "0x894",
+        "stub_index": 20,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x894"
+    },
+    {
+      "address": "0x4dc",
+      "delay_slot": "0x24060020",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x10F3BB61",
+        "stub_address": "0x854",
+        "stub_index": 12,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x854"
+    },
+    {
+      "address": "0x4e4",
+      "delay_slot": "0x27a40010",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x57018B7C",
+        "stub_address": "0x2d0c",
+        "stub_index": 1187,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2d0c"
+    },
+    {
+      "address": "0x4f0",
+      "delay_slot": "0x27a50010",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x476FD94A",
+        "stub_address": "0x8a4",
+        "stub_index": 22,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x8a4"
+    },
+    {
+      "address": "0x52c",
+      "delay_slot": "0x240600a4",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x10F3BB61",
+        "stub_address": "0x854",
+        "stub_index": 12,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x854"
+    },
+    {
+      "address": "0x538",
+      "delay_slot": "0xae020000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x39c"
+    },
+    {
+      "address": "0x544",
+      "delay_slot": "0x00002021",
+      "import": {
+        "library": "libehsys",
+        "nid": "0x8171F765",
+        "stub_address": "0x235c",
+        "stub_index": 877,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x235c"
+    },
+    {
+      "address": "0x598",
+      "delay_slot": "0xae110030",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x414"
+    },
+    {
+      "address": "0x5c8",
+      "delay_slot": "0x24844b18",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x4b8"
+    },
+    {
+      "address": "0x618",
+      "delay_slot": "0xae000078",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0xCDC3AA41",
+        "stub_address": "0x2f84",
+        "stub_index": 4,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f84"
+    },
+    {
+      "address": "0x64c",
+      "delay_slot": "0x26104864",
+      "import": {
+        "library": "libehsys",
+        "nid": "0xE8D57DC6",
+        "stub_address": "0xb1c",
+        "stub_index": 101,
+        "table_offset": "0x0"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0xb1c"
+    },
+    {
+      "address": "0x654",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0xBDA7D894",
+        "stub_address": "0x2f7c",
+        "stub_index": 3,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f7c"
+    },
+    {
+      "address": "0x69c",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0x05AFB9E4",
+        "stub_address": "0x2f64",
+        "stub_index": 0,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f64"
+    },
+    {
+      "address": "0x6ac",
+      "delay_slot": "0x00000000",
+      "import": {
+        "library": "sceUtility",
+        "nid": "0xF5CE1134",
+        "stub_address": "0x2f8c",
+        "stub_index": 5,
+        "table_offset": "0x90"
+      },
+      "kind": "import",
+      "relocation": "R_MIPS_26",
+      "target": "0x2f8c"
+    },
+    {
+      "address": "0x74c",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x278"
+    },
+    {
+      "address": "0x76c",
+      "delay_slot": "0x8c444b9c",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x508"
+    },
+    {
+      "address": "0x7a0",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x634"
+    },
+    {
+      "address": "0x7c8",
+      "delay_slot": "0x00000000",
+      "kind": "local",
+      "relocation": "R_MIPS_26",
+      "target": "0x358"
+    }
+  ],
+  "section": ".text",
+  "sha256": "319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26",
+  "unresolved": 0
+}
