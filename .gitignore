@@ -18,6 +18,10 @@ venv/
 # Artefatos gerados que nunca devem ser versionados
 asm/
 
+# Caminhos de ferramentas específicos da máquina, escritos pelo bootstrap
+config/seto.local.toml
+config/seto.bootstrap.toml
+
 # saída do splat (asm/, assets/ e os arquivos de símbolos são derivados do PRX)
 /assets/
 /include/

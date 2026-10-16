@@ -1,0 +1,58 @@
+# Pinned versions for the toolchain bootstrap.
+#
+# Both scripts/bootstrap_toolchain.ps1 and scripts/bootstrap_toolchain.sh read
+# this file, so no version and no URL is ever duplicated in code: a version
+# changes here or not at all.  A download whose sha256 is empty is refused, so a
+# release cannot be fetched without a checksum to check it against.
+#
+# `seto toolchain` never reads this file; it describes what is installed, and the
+# scripts install.  Keeping the two apart is what stops an installer from
+# claiming a capability it never verified.
+
+# ---------------------------------------------------------------- Python tools
+# splat64[mips] carries spimdisasm, the MIPS disassembler splat needs.
+pypi_index=https://pypi.org/simple
+splat=0.50.1
+
+# m2c is not on PyPI; it is installed from this exact commit.
+m2c_url=https://github.com/matt-kempster/m2c.git
+m2c_commit=708d2d2cb2698f091a92492b328f73b24209f72d
+
+# ---------------------------------------------------------------------- Ghidra
+# Ghidra and the Allegrex processor module must be a matching pair: the module
+# ships one archive per Ghidra release.
+ghidra=12.1.3
+ghidra_zip=ghidra_12.1.3_PUBLIC_20260817.zip
+ghidra_sha256=93a5d11a9ad510622acaaf908c556a7b9b764d338e78a7567f3689bf5081fd54
+ghidra_url=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip
+
+ghidra_allegrex=v21.4
+ghidra_allegrex_zip=ghidra_12.1.3_PUBLIC_20260825_ghidra-allegrex.zip
+ghidra_allegrex_sha256=62e829fa9e6ed6f2bd343763fb339a3f8812b02a4e0ed5a9409b14007b408243
+ghidra_allegrex_url=https://github.com/kotcrab/ghidra-allegrex/releases/download/v21.4/ghidra_12.1.3_PUBLIC_20260825_ghidra-allegrex.zip
+
+# --------------------------------------------------------------------- REA/npm
+# REA needs Node 24.11+; it is installed into an isolated npm prefix only when
+# selected and lifecycle scripts are disabled.
+rea=6.5.0
+npm_registry=https://registry.npmjs.org/
+
+# ------------------------------------------------------------------------ wibo
+# Official decompals/wibo 1.2.0 release assets.  The x86_64 Linux artifact is
+# preferred over Wine; unsupported host architectures are reported, not guessed.
+wibo=1.2.0
+wibo_linux_x86_64_url=https://github.com/decompals/wibo/releases/download/1.2.0/wibo-x86_64
+wibo_linux_x86_64_sha256=13f86a2d618f0dbe67179d349625345eabf9b46450295cb4c904e49f6aff85af
+wibo_linux_i686_url=https://github.com/decompals/wibo/releases/download/1.2.0/wibo-i686
+wibo_linux_i686_sha256=2575d3b0a2f408b2c2b0850db56f1af5d005a138394a6774eba77b6708ecc304
+wibo_macos_x86_64_url=https://github.com/decompals/wibo/releases/download/1.2.0/wibo-macos
+wibo_macos_x86_64_sha256=2b3000ef6a7a490c24ccd71967735ae0005e218922e51806cca1b8d77fd3cf7c
+
+# Windows' UCRT64 MSYS2 package used by the PowerShell bootstrap.  This is a
+# native LLVM distribution; `llvm-objdump` is still required to pass Seto's MIPS
+# ELF32 smoke test before it is considered compatible.
+msys2_llvm=21.1.8-4
+
+# ---------------------------------------------------------------------- mwccpsp
+# The Metrowerks compiler is proprietary.  There is no URL here on purpose: it
+# can only be supplied by the user, and the bootstrap reports it as BLOCKED.

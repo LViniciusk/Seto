@@ -30,8 +30,13 @@ from seto.matching import (
     MatchResult,
     compare,
 )
+from seto.smoke import smoke_report
 from seto.toolchain import (
+    BLOCKED,
+    INCOMPATIBLE,
+    MISSING,
     TOOL_SPECS,
+    UNSUPPORTED,
     Settings,
     detect_all,
     find_tool,
@@ -177,6 +182,29 @@ def build_parser() -> argparse.ArgumentParser:
         "toolchain", help="report external tool availability"
     )
     toolchain_parser.add_argument("--json", action="store_true")
+    toolchain_parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="prove what each tool can actually do with a synthetic input",
+    )
+    toolchain_parser.add_argument(
+        "--tool",
+        action="append",
+        default=None,
+        metavar="NAME",
+        choices=tuple(spec.name for spec in TOOL_SPECS) + ("ghidra",),
+        help="restrict --smoke to this tool (repeatable)",
+    )
+    toolchain_parser.add_argument(
+        "--smoke-workspace",
+        type=Path,
+        default=None,
+        help="keep the synthetic inputs and artefacts here instead of a temporary directory",
+    )
+    toolchain_parser.add_argument(
+        "--out", type=Path, default=None,
+        help="also write the JSON report to this path",
+    )
 
     return parser
 
@@ -389,44 +417,14 @@ def _run_splat(
     # splat resolves ``base_path`` relative to the configuration file's own
     # directory, so the emitted artefacts are found from there.
     base = (yaml_path.parent / arguments.base_path).resolve()
-    asm_dir = base / asm_path
-    original = arguments.prx.read_bytes()
-
-    for segment in layout.segments:
-        if segment.type != split.CODE_TYPE:
-            continue
-        for subsegment in segment.subsegments:
-            if subsegment.kind != split.ASM_KIND:
-                continue
-            path = asm_dir / f"{subsegment.name}.s"
-            if not path.is_file():
-                issues.append(
-                    split.LayoutIssue(split.ERROR, f"splat did not write {path}")
-                )
-                continue
-            address = segment.vram + (subsegment.offset - segment.start)
-            try:
-                entries = split.parse_listing(
-                    path.read_text(encoding="utf-8", errors="replace"), str(path)
-                )
-            except ParseError as exc:
-                issues.append(split.LayoutIssue(split.ERROR, str(exc)))
-                continue
-            found = split.verify_listing(
-                entries,
-                original,
-                label=str(path),
-                address=address,
-                file_offset=subsegment.offset,
-                size=subsegment.size,
-            )
-            issues += found
-            verdict = (
-                "verified against the original bytes"
-                if not found
-                else f"{len(found)} issue(s), see below"
-            )
-            print(f"listing: {path.name} {len(entries)} words ({verdict})")
+    for listing in split.verify_splat_output(layout, arguments.prx.read_bytes(), base / asm_path):
+        issues += listing.issues
+        verdict = (
+            "verified against the original bytes"
+            if listing.verified
+            else f"{len(listing.issues)} issue(s), see below"
+        )
+        print(f"listing: {listing.name} {listing.words} words ({verdict})")
     return None
 
 
@@ -955,15 +953,70 @@ def _print_match(result: MatchResult, region: CandidateRegion) -> None:
 
 
 def _command_toolchain(arguments: argparse.Namespace, settings: Settings) -> int:
-    statuses = detect_all(settings)
-    if arguments.json:
-        print(json.dumps({"tools": [status.summary() for status in statuses]}, indent=2, sort_keys=True))
+    """Report what is installed, and - with ``--smoke`` - what actually works."""
+    if arguments.out is not None and not arguments.json:
+        print("error: --out requires --json", file=sys.stderr)
+        return EXIT_ERROR
+    if (arguments.tool or arguments.smoke_workspace is not None) and not arguments.smoke:
+        print("error: --tool and --smoke-workspace require --smoke", file=sys.stderr)
+        return EXIT_ERROR
+    if not arguments.smoke:
+        statuses = detect_all(settings)
+        if arguments.json:
+            payload = {"tools": [status.summary() for status in statuses]}
+            text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            if arguments.out is not None:
+                inventory.write_text(arguments.out, text)
+            print(text, end="")
+            return EXIT_OK
+        print("external tools")
+        for status in statuses:
+            print(f"  {status.line()}")
+        missing = [status.name for status in statuses if status.state == MISSING]
+        print(f"missing: {', '.join(missing) if missing else 'none'}")
+        print("run `seto toolchain --smoke` to prove what each tool can do")
         return EXIT_OK
-    print("external tools")
+
+    statuses = smoke_report(
+        settings,
+        tools=arguments.tool,
+        workspace=arguments.smoke_workspace,
+    )
+    if arguments.json:
+        payload = {"tools": [status.summary() for status in statuses]}
+        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        if arguments.out is not None:
+            inventory.write_text(arguments.out, text)
+        print(text, end="")
+        return EXIT_OK
+
+    print("external tools (smoke test)")
     for status in statuses:
         print(f"  {status.line()}")
-    missing = [status.name for status in statuses if not status.found]
-    print(f"missing: {', '.join(missing) if missing else 'none'}")
+        for capability in status.capabilities:
+            print(capability.line())
+    blocked = [
+        status.name
+        for status in statuses
+        if status.state in (MISSING, INCOMPATIBLE, UNSUPPORTED, BLOCKED)
+    ]
+    failed_capabilities = [
+        f"{status.name}/{capability.name}"
+        for status in statuses
+        for capability in status.capabilities
+        if capability.state in (MISSING, INCOMPATIBLE, UNSUPPORTED)
+    ]
+    unproven = [
+        f"{status.name}/{capability.name}"
+        for status in statuses
+        for capability in status.capabilities
+        if capability.state == BLOCKED
+    ]
+    print("not usable for PSP analysis: " + (", ".join(blocked) if blocked else "none"))
+    if failed_capabilities:
+        print("failed capabilities: " + ", ".join(failed_capabilities))
+    if unproven:
+        print("not demonstrated here: " + ", ".join(unproven))
     return EXIT_OK
 
 
