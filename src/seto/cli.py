@@ -14,27 +14,41 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Sequence
 
-from seto import __version__, elf, formats, inventory, mips, split
+from seto import __version__, elf, formats, imports, inventory, mips, split
 from seto.binio import ParseError, SetoError
-from seto.hashing import verify_file
+from seto.hashing import sha256_file, verify_file
 from seto.matching import (
     INCONCLUSIVE,
     MATCHED,
     NONMATCHING,
+    CallResolver,
     MatchResult,
     compare,
 )
-from seto.toolchain import Settings, detect_all, load_settings
+from seto.toolchain import (
+    TOOL_SPECS,
+    Settings,
+    detect_all,
+    find_tool,
+    load_settings,
+    run,
+    splat_argv,
+)
 
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_MISMATCH = 3
 EXIT_BLOCKED = 4
 EXIT_INCONCLUSIVE = 5
+
+#: splat disassembles a whole module; a small one takes seconds, but the bound
+#: exists so a wedged tool can never hang the pipeline.
+SPLAT_TIMEOUT = 900.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,10 +99,17 @@ def build_parser() -> argparse.ArgumentParser:
     split_parser.add_argument("--prx", type=Path, required=True)
     split_parser.add_argument("--out", type=Path, default=Path("build/split"))
     split_parser.add_argument("--basename", default=None)
-    split_parser.add_argument("--base-path", default="..")
+    split_parser.add_argument(
+        "--base-path", default="../..",
+        help="splat base_path, relative to the config file's own directory",
+    )
     split_parser.add_argument("--target-path", default=None)
     split_parser.add_argument("--asm-path", default=None)
     split_parser.add_argument("--ld-script-path", default=None)
+    split_parser.add_argument(
+        "--run-splat", action="store_true",
+        help="run splat on the emitted config and verify its listing against the module",
+    )
 
     check_parser = subparsers.add_parser(
         "check-layout", help="validate a layout.json against the real module"
@@ -137,6 +158,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     match_parser.add_argument("--json", action="store_true")
 
+    imports_parser = subparsers.add_parser(
+        "imports", help="recover the imported-function identity of the module's calls"
+    )
+    imports_parser.add_argument("--prx", type=Path, required=True)
+    imports_parser.add_argument("--section", default=".text")
+    imports_parser.add_argument(
+        "--function", type=lambda value: int(value, 0), default=None,
+        help="restrict the call report to the function starting at this address",
+    )
+    imports_parser.add_argument("--json", action="store_true")
+    imports_parser.add_argument(
+        "--out", type=Path, default=None,
+        help="also write the JSON report to this path",
+    )
+
     toolchain_parser = subparsers.add_parser(
         "toolchain", help="report external tool availability"
     )
@@ -163,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "check-layout": _command_check_layout,
         "disasm": _command_disasm,
         "match": _command_match,
+        "imports": _command_imports,
         "toolchain": _command_toolchain,
     }
     try:
@@ -270,21 +307,22 @@ def _command_functions(arguments: argparse.Namespace, settings: Settings) -> int
 
 
 def _command_split(arguments: argparse.Namespace, settings: Settings) -> int:
-    del settings
     parsed = elf.parse(arguments.prx)
     basename = arguments.basename or arguments.prx.stem
     layout = split.build_layout(parsed, basename)
-    issues = split.validate_layout(layout, parsed)
+    issues = list(split.validate_layout(layout, parsed))
 
     output_dir = Path(arguments.out)
     layout_path = inventory.write_text(output_dir / "layout.json", layout.to_json())
     target_path = arguments.target_path or str(arguments.prx)
+    asm_path = arguments.asm_path or f"asm/{basename}"
+    ld_script_path = arguments.ld_script_path or f"build/{basename}.ld"
     yaml_text = split.emit_splat_yaml(
         layout,
         base_path=arguments.base_path,
         target_path=target_path,
-        asm_path=arguments.asm_path or f"asm/{basename}",
-        ld_script_path=arguments.ld_script_path or f"build/{basename}.ld",
+        asm_path=asm_path,
+        ld_script_path=ld_script_path,
     )
     issues += split.cross_check_yaml(yaml_text, layout)
     yaml_path = inventory.write_text(output_dir / f"{basename}.yaml", yaml_text)
@@ -295,6 +333,12 @@ def _command_split(arguments: argparse.Namespace, settings: Settings) -> int:
         f"segments: {len(layout.segments)}  subsegments: {len(layout.subsegments())}  "
         f"image delta: 0x{layout.image_delta:x}"
     )
+
+    if arguments.run_splat:
+        blocked = _run_splat(arguments, settings, layout, yaml_path, asm_path, issues)
+        if blocked is not None:
+            return blocked
+
     errors = [issue for issue in issues if issue.severity == split.ERROR]
     for issue in issues:
         print(f"  {issue.render()}")
@@ -303,6 +347,87 @@ def _command_split(arguments: argparse.Namespace, settings: Settings) -> int:
         return EXIT_MISMATCH
     print("layout validated against the real module")
     return EXIT_OK
+
+
+def _run_splat(
+    arguments: argparse.Namespace,
+    settings: Settings,
+    layout: split.Layout,
+    yaml_path: Path,
+    asm_path: str,
+    issues: list[split.LayoutIssue],
+) -> int | None:
+    """Run splat on the emitted config and verify what it produced.
+
+    Returns an exit code when the pipeline cannot continue (the tool is missing,
+    or it failed), and ``None`` when the artefacts were produced and checked, in
+    which case ``issues`` carries whatever the check found.
+    """
+    spec = next(item for item in TOOL_SPECS if item.name == "splat")
+    status = find_tool(spec, settings.tool_path("splat"))
+    if not status.found or status.path is None:
+        print(f"BLOCKED: splat is unavailable: {status.reason}", file=sys.stderr)
+        return EXIT_BLOCKED
+
+    result = run(splat_argv(status.path, yaml_path), timeout=SPLAT_TIMEOUT)
+    if not result.ok:
+        reason = "timed out" if result.timed_out else f"exit code {result.returncode}"
+        print(f"error: splat failed ({reason})", file=sys.stderr)
+        for line in result.combined().splitlines()[-5:]:
+            print(f"  {line}", file=sys.stderr)
+        return EXIT_ERROR
+
+    print(f"splat:  {status.path} ({status.version or 'unknown version'})")
+    lines = [line.rstrip() for line in result.stdout.splitlines()]
+    start = next((index for index, line in enumerate(lines) if line.startswith("Split ")), None)
+    if start is not None:
+        for line in lines[start:]:
+            if not line.strip():
+                break
+            print(f"  {line.strip()}")
+
+    # splat resolves ``base_path`` relative to the configuration file's own
+    # directory, so the emitted artefacts are found from there.
+    base = (yaml_path.parent / arguments.base_path).resolve()
+    asm_dir = base / asm_path
+    original = arguments.prx.read_bytes()
+
+    for segment in layout.segments:
+        if segment.type != split.CODE_TYPE:
+            continue
+        for subsegment in segment.subsegments:
+            if subsegment.kind != split.ASM_KIND:
+                continue
+            path = asm_dir / f"{subsegment.name}.s"
+            if not path.is_file():
+                issues.append(
+                    split.LayoutIssue(split.ERROR, f"splat did not write {path}")
+                )
+                continue
+            address = segment.vram + (subsegment.offset - segment.start)
+            try:
+                entries = split.parse_listing(
+                    path.read_text(encoding="utf-8", errors="replace"), str(path)
+                )
+            except ParseError as exc:
+                issues.append(split.LayoutIssue(split.ERROR, str(exc)))
+                continue
+            found = split.verify_listing(
+                entries,
+                original,
+                label=str(path),
+                address=address,
+                file_offset=subsegment.offset,
+                size=subsegment.size,
+            )
+            issues += found
+            verdict = (
+                "verified against the original bytes"
+                if not found
+                else f"{len(found)} issue(s), see below"
+            )
+            print(f"listing: {path.name} {len(entries)} words ({verdict})")
+    return None
 
 
 def _command_check_layout(arguments: argparse.Namespace, settings: Settings) -> int:
@@ -412,6 +537,12 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
         print(f"INCONCLUSIVE: {exc}", file=sys.stderr)
         return EXIT_INCONCLUSIVE
 
+    # A call is the one reference the two sides may encode differently: the
+    # module stores the trampoline it calls, a relocatable object stores the
+    # symbol its author declared for it.  The module's own import table is the
+    # authority that decides whether both name the same imported function.
+    resolver = _call_resolver(original_elf, region.symbol_addresses)
+
     # ``seto match`` compares instructions and relocations; it cannot know where
     # the candidate came from, so its evidence is always "binary-range" and a
     # MATCHED result here is never by itself a verified decompilation.  Only
@@ -426,6 +557,7 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
         original_section_offset=region_offset,
         candidate_section_offset=region.section_offset,
         limitations=region.limitations,
+        call_resolver=resolver,
     )
 
     if arguments.json:
@@ -445,6 +577,92 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
     return EXIT_INCONCLUSIVE
 
 
+def _relative_posix(path: Path) -> str:
+    """Render a path the same way on every machine.
+
+    Reports are written to be diffed, so a path is expressed relative to the
+    working directory and with ``/`` separators; a path that is not below the
+    working directory keeps its own (absolute) form rather than pretending to be
+    relative.
+    """
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _command_imports(arguments: argparse.Namespace, settings: Settings) -> int:
+    del settings
+    original_elf = elf.parse(arguments.prx)
+    table = imports.build_import_table(original_elf)
+    section = original_elf.require_section(arguments.section)
+
+    start = end = None
+    name = arguments.section
+    if arguments.function is not None:
+        code = original_elf.section_data(section)
+        functions = mips.find_functions(code, section.addr, f"{arguments.prx.name}:{section.name}")
+        function = next((item for item in functions if item.start == arguments.function), None)
+        if function is None:
+            print(
+                f"error: no function starts at 0x{arguments.function:x} in {section.name}",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        start, end = function.start, function.end
+        name = function.name()
+
+    references = imports.call_references(
+        original_elf, table, section=section.name, start=start, end=end
+    )
+    unresolved = [item for item in references if item.kind == "unknown"]
+
+    payload = {
+        "prx": _relative_posix(arguments.prx),
+        "sha256": sha256_file(arguments.prx),
+        "section": section.name,
+        "function": None if start is None else f"0x{start:x}",
+        "imports": table.summary(),
+        "references": [item.summary() for item in references],
+        "unresolved": len(unresolved),
+    }
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if arguments.out is not None:
+        inventory.write_text(arguments.out, text)
+
+    if arguments.json:
+        print(text, end="")
+    else:
+        _print_imports(arguments, table, name, references, unresolved)
+
+    return EXIT_INCONCLUSIVE if unresolved else EXIT_OK
+
+
+def _print_imports(
+    arguments: argparse.Namespace,
+    table: imports.ImportTable,
+    name: str,
+    references: tuple[imports.CallReference, ...],
+    unresolved: list[imports.CallReference],
+) -> None:
+    print(f"{arguments.prx} :: {table.module}")
+    if not table.tables:
+        print(f"no {imports.LIB_STUB_SECTION} table: this module declares no imports")
+        return
+    print(f"{'library':<16} {'stubs':>6}  {'stub range':<20} {'nid range':<20}")
+    for item in table.tables:
+        stub_range = f"[0x{item.stub_table:x}, 0x{item.stub_end:x})"
+        nid_range = f"[0x{item.nid_table:x}, 0x{item.nid_end:x})"
+        print(f"{item.library:<16} {item.stub_count:>6}  {stub_range:<20} {nid_range:<20}")
+    print(f"total: {len(table.tables)} libraries, {len(table.imports)} imported functions")
+    if references:
+        print(f"calls in {name}:")
+        for item in references:
+            print(f"  {item.line()}")
+    if unresolved:
+        print(f"UNRESOLVED: {len(unresolved)} call reference(s) could not be identified")
+
+
 @dataclass(frozen=True)
 class CandidateRegion:
     """A candidate region located inside a compiled or raw file."""
@@ -454,6 +672,9 @@ class CandidateRegion:
     relocations: tuple[elf.Relocation, ...]
     limitations: tuple[str, ...]
     description: str
+    #: Symbol name -> module address, for a *linked* candidate only (``ET_REL``
+    #: values are section offsets, which name no module address).
+    symbol_addresses: dict[str, int] = field(default_factory=dict)
 
 
 class Inconclusive(Exception):
@@ -543,6 +764,30 @@ def _load_candidate(
         relocations=candidate_elf.relocations_for(section_name),
         limitations=tuple(limitations),
         description=description,
+        symbol_addresses=imports.symbol_addresses(candidate_elf),
+    )
+
+
+def _call_resolver(
+    original_elf: elf.ElfFile,
+    candidate_symbols: dict[str, int],
+) -> CallResolver | None:
+    """A resolver for the module's call references, or ``None``.
+
+    Returns ``None`` only when the module declares no imports at all - no
+    ``.lib.stub`` section - in which case call relocations keep being compared
+    literally, which is exactly what a module without trampolines needs.  When
+    the section exists but its table could not be fully recovered, a resolver is
+    still returned: it will fail to identify the calls it cannot prove, which
+    makes the comparison inconclusive instead of silently different.
+    """
+    if original_elf.section(imports.LIB_STUB_SECTION) is None:
+        return None
+    table = imports.build_import_table(original_elf)
+    return partial(
+        imports.resolve_call_target,
+        module_imports=table,
+        candidate_symbols=candidate_symbols or None,
     )
 
 

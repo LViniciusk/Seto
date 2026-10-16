@@ -2,23 +2,32 @@
  * Imported SCE library entry points reached through libhtml_view's
  * `.sceStub.text` trampolines.
  *
- * The reference module is stripped, so the real NIDs and names are not
- * recoverable from this binary alone.  Each declaration below is keyed by the
- * *stub address* the call site targets, which is an exact, verifiable fact taken
- * from the module's own relocation table (the `jal` targets).  The provisional
- * `func_<addr>` names deliberately encode that address so nothing is invented.
+ * IDENTITY.  Each stub below is identified by the (library, NID) pair the module
+ * itself declares: `.lib.stub` points at the library name in
+ * `.rodata.sceResident` and at the NID array in `.rodata.sceNid`, and every
+ * trampoline address is checked against the bytes at that address (a real
+ * `jr $ra`).  The pair is the identity - two libraries may export the same NID,
+ * and two identical NIDs in different libraries are NOT the same function.
  *
- * When real names are recovered (from REA/Ghidra on a module that resolves its
- * imports, or from the SCE import tables of a non-stripped build) only these
- * identifiers need to change; the call sites are already correct.
+ * The full, reproducible report is decomp/imports/libhtml_view.json:
+ *
+ *   python -m seto imports --prx <libhtml_view.prx> --out decomp/imports/libhtml_view.json
+ *
+ * NAMES.  The module is stripped and its own import table stores no per-function
+ * names, so the *names* of these entry points are not recoverable from this
+ * binary alone: a name would have to come from the exporting library's table in
+ * another module.  The identifiers below therefore stay provisional and are
+ * keyed by the stub address the call site targets, which is an exact fact taken
+ * from the relocation table.  The comments record the recovered identity.
  */
 #ifndef SETO_DECOMP_SCE_STUBS_H
 #define SETO_DECOMP_SCE_STUBS_H
 
-/* libhtml_view.prx, .sceStub.text trampolines (each `jr $ra; nop`). */
-extern void func_00002EDC(void); /* stub @ 0x2edc */
-extern void func_00002F0C(void); /* stub @ 0x2f0c */
-extern void func_00002EF4(void); /* stub @ 0x2ef4 */
-extern void func_00002F54(void); /* stub @ 0x2f54 */
+/* libhtml_view.prx, .sceStub.text trampolines (each `jr $ra; nop`).
+ * These four are the ones func_00000244 calls, in call order. */
+extern void func_00002EDC(void); /* stub @ 0x2edc; sceHttp  NID 0x76D1363B */
+extern void func_00002F0C(void); /* stub @ 0x2f0c; sceHttp  NID 0xF9D8EB63 */
+extern void func_00002EF4(void); /* stub @ 0x2ef4; sceHttp  NID 0xD1C8945E */
+extern void func_00002F54(void); /* stub @ 0x2f54; sceSsl   NID 0x191CDEFF */
 
 #endif /* SETO_DECOMP_SCE_STUBS_H */
