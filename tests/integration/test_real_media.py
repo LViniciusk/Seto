@@ -158,7 +158,13 @@ def test_a_call_can_be_told_apart_from_another_import(parsed: elf.ElfFile) -> No
     assert ssl.identity == ("sceSsl", 0x191CDEFF)
 
 
-def test_split_run_splat_verifies_the_real_listing(tmp_path) -> None:
+def test_split_run_splat_verifies_the_real_listing(tmp_path, capsys) -> None:
+    """splat really consumes the generated config, and its listing is checked.
+
+    The exit code alone is not the evidence: splat's own output must name the
+    two code listings and every word of them must have been verified against the
+    original bytes (509 words in ``.text``, 2536 in ``.sceStub.text``).
+    """
     splat = find_tool(next(spec for spec in TOOL_SPECS if spec.name == "splat"))
     if not splat.found:
         pytest.skip("splat is not installed")
@@ -169,25 +175,15 @@ def test_split_run_splat_verifies_the_real_listing(tmp_path) -> None:
             "--base-path", "..", "--target-path", str(MODULE), "--run-splat",
         ]
     )
+    printed = capsys.readouterr().out
     assert code == 0
     assert (out / "libhtml_view.yaml").is_file()
     assert (tmp_path / "asm" / "libhtml_view" / "text.s").is_file()
-
-
-def test_split_run_splat_verifies_the_real_listing(tmp_path) -> None:
-    splat = find_tool(next(spec for spec in TOOL_SPECS if spec.name == "splat"))
-    if not splat.found:
-        pytest.skip("splat is not installed")
-    out = tmp_path / "split"
-    code = cli.main(
-        [
-            "split", "--prx", str(MODULE), "--out", str(out),
-            "--base-path", "..", "--target-path", str(MODULE), "--run-splat",
-        ]
+    assert "listing: text.s 509 words (verified against the original bytes)" in printed
+    assert (
+        "listing: sceStub_text.s 2536 words (verified against the original bytes)"
+        in printed
     )
-    assert code == 0
-    assert (out / "libhtml_view.yaml").is_file()
-    assert (tmp_path / "asm" / "libhtml_view" / "text.s").is_file()
 
 
 def test_inventory_over_the_extracted_media() -> None:

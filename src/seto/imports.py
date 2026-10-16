@@ -56,14 +56,21 @@ JUMP_RELOCATION_TYPES = (R_MIPS_26, R_MIPS_X_J26, R_MIPS_X_JAL26)
 #: The one jump relocation this module models.
 MODELLED_CALL_RELOCATION = R_MIPS_26
 
-#: A trampoline is two instructions, so its address advances by 8 bytes.
-STUB_ENTRY_SIZE = 8
-#: ``jr $ra`` (``0x03E00008``) little-endian: the first instruction of every
-#: trampoline.  A stub address that does not begin with it is not a trampoline,
-#: whatever the table says.
-TRAMPOLINE = b"\x08\x00\xe0\x03"
 #: Every field of a ``SceLibraryStubTable`` is 4 bytes wide.
 FIELD_SIZE = 4
+#: A trampoline is two instructions, so its address advances by 8 bytes.
+STUB_ENTRY_SIZE = 8
+#: The whole trampoline, ``jr $ra; nop``, in memory order: ``jr $ra``
+#: (``0x03E00008``) followed by its branch delay slot, a ``nop``.  Both
+#: instructions are checked - a stub address that does not begin with ``jr $ra``
+#: is not a trampoline, and one whose delay slot is not a ``nop`` is not the
+#: trampoline this table claims either.  The pair is not an assumption: all 1268
+#: trampolines of the reference module are exactly these eight bytes.
+TRAMPOLINE = b"\x08\x00\xe0\x03\x00\x00\x00\x00"
+#: ``jr $ra`` - the first instruction on its own.
+TRAMPOLINE_HEAD = TRAMPOLINE[:FIELD_SIZE]
+#: The delay slot of a trampoline, a ``nop``.
+TRAMPOLINE_TAIL = TRAMPOLINE[FIELD_SIZE:]
 #: ``libname``, version/attribute, len/vstubcount/stubcount, nidtable, stubtable.
 MIN_TABLE_SIZE = 5 * FIELD_SIZE
 #: The same, plus ``vstubtable`` (present when ``len`` is 6 words).
@@ -401,12 +408,25 @@ def build_import_table(parsed: ElfFile) -> ImportTable:
             )
             stub_address = stub_table + index * STUB_ENTRY_SIZE
             begin = stub_base + index * STUB_ENTRY_SIZE
-            if stub_data[begin : begin + FIELD_SIZE] != TRAMPOLINE:
+            entry = stub_data[begin : begin + STUB_ENTRY_SIZE]
+            if entry[:FIELD_SIZE] != TRAMPOLINE_HEAD:
                 # The table says this address is a trampoline; the bytes say it is
                 # not.  Without a trampoline the address proves nothing.
                 limitations.append(
                     f"{label}: stub 0x{stub_address:x} of {library!r} does not begin with "
                     "'jr $ra', so it is not a trampoline of this module"
+                )
+                continue
+            if entry[FIELD_SIZE:] != TRAMPOLINE_TAIL:
+                # The first instruction is right but the delay slot is not a
+                # ``nop``, so these bytes are not the ``jr $ra; nop`` pair this
+                # table declares.  Rejecting it is not arbitrary: it is what the
+                # reference module's own trampolines look like, and a caller that
+                # wanted another form would have to show one.
+                limitations.append(
+                    f"{label}: stub 0x{stub_address:x} of {library!r} is 'jr $ra' followed "
+                    f"by 0x{int.from_bytes(entry[FIELD_SIZE:], 'little'):08x}, not the "
+                    "'jr $ra; nop' trampoline the table declares"
                 )
                 continue
             candidates.append(
@@ -461,6 +481,13 @@ def resolve_call_target(
       final say, so a name that points at something that is not a trampoline of
       this module proves nothing.
 
+    A symbolic reference whose addend is **not zero** is *not* the symbol: the
+    addend is a displacement on top of it, so ``func_00002EDC+4`` is a different
+    destination from ``func_00002EDC``.  Nothing in the object says what that
+    displacement means - bytes, instructions, or a fragment of a split reference -
+    so this function refuses to normalise it and returns ``None`` (inconclusive).
+    Accepting it would silently claim that a reference to ``X+4`` reaches ``X``.
+
     A target the table does not claim but that lies inside the module's own code
     is another function of this module: its identity is the address itself
     (:data:`~seto.matching.SELF_LIBRARY`), which both encodings can agree on
@@ -476,6 +503,12 @@ def resolve_call_target(
         return None
 
     if relocation.symbol is not None:
+        if relocation.addend:
+            # ``symbol + addend`` is a distinct destination, and the meaning of
+            # the displacement is not demonstrated by the object, so no identity
+            # can be claimed.  This is what keeps ``func_00002EDC+4`` from being
+            # reported as ``func_00002EDC``.
+            return None
         address = None if candidate_symbols is None else candidate_symbols.get(relocation.symbol)
         if address is None:
             address = parse_function_name(relocation.symbol)
