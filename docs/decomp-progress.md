@@ -122,6 +122,14 @@ blindly.
 | `func_000006E4` | `0x6E4–0x704`, `0x20` bytes, 8 instructions | `decomp/src/func_000006E4.c` | Straight-line initialization: store `1` at `0x604860`, form image address `0x4860`, store it at `0x604B9C`. Ghidra and m2c agree on operations; stripped global names/types remain provisional. **UNVERIFIED**; compile **BLOCKED**. | Verify global types/relocations with the original compiler. |
 | `func_000004B8` | `0x4B8–0x508`, `0x50` bytes, 20 instructions | `decomp/src/func_000004B8.c` | One pointer-like argument, a `0x20`-byte stack buffer, and four ordered helper calls. Ghidra and assembly show the first helper receives both the original argument and `/PSP/SAVEDATA/`; m2c omitted the first argument. C follows Ghidra/instructions and flags helper prototypes as provisional. **UNVERIFIED**; compile **BLOCKED**. | Confirm helper prototypes and compile/match when `mwccpsp` is supplied. |
 
+For `func_00000244`, the body has no explicit setup of `$a0`–`$a3`, does not read
+`$v0` after any of its four calls, and m2c/Ghidra both render a no-argument,
+no-return C body. Ghidra reports compiler-spec ID `default` for
+`Allegrex:LE:32:default`; the actual PRX `.comment` identifies the MW MIPS
+compiler. These are the observed ABI cues, not proof of the imported functions'
+SDK prototypes: the stripped import table carries only `(library, NID)`. Exact
+Metrowerks ABI/code-generation equivalence remains unverified until compilation.
+
 The 8-byte candidate at `0x84` disassembles as `jr $ra; nop`, but Ghidra's
 automatic analysis did not define a function there. It was excluded rather than
 counted as a reconstruction without independent boundary evidence.
