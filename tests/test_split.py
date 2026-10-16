@@ -12,7 +12,7 @@ from seto.binio import ParseError
 from seto.elf import Section
 from seto.split import Layout, LayoutSegment, Subsegment
 
-from conftest import SHF_ALLOC, SHF_EXECINSTR, build_elf32
+from conftest import SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, build_elf32
 
 TEXT_ADDR = 0x0
 TEXT_OFFSET = 0x100
@@ -149,6 +149,84 @@ def test_validate_layout_flags_a_span_leaving_the_file() -> None:
     broken = Layout(basename="x", file_size=layout.file_size, image_delta=0, segments=segments)
     issues = split.validate_layout(broken, parsed)
     assert any("leaves the file" in issue.message for issue in issues)
+
+
+def test_validate_layout_flags_a_gap_between_regions() -> None:
+    parsed = _module()
+    segments = (
+        LayoutSegment("a", split.BIN_KIND, 0, 0, (Subsegment(0, split.BIN_KIND, "a", 8),)),
+        LayoutSegment("b", split.BIN_KIND, 12, 0, (Subsegment(12, split.BIN_KIND, "b", 4),)),
+    )
+    layout = Layout(basename="x", file_size=16, image_delta=0, segments=segments)
+    issues = split.validate_layout(layout, parsed)
+    assert any(issue.severity == split.ERROR and "gap" in issue.message for issue in issues)
+
+
+def test_validate_layout_reports_nobits_sections_explicitly() -> None:
+    parsed = elf.parse(
+        build_elf32(
+            e_type=elf.ET_MIPS_PSP_PRX,
+            sections=[
+                {
+                    "name": ".text",
+                    "type": elf.SHT_PROGBITS,
+                    "flags": SHF_ALLOC | SHF_EXECINSTR,
+                    "addr": 0,
+                    "size": 0x20,
+                    "data": b"\x00" * 0x20,
+                },
+                {
+                    "name": ".bss",
+                    "type": elf.SHT_NOBITS,
+                    "flags": SHF_ALLOC | SHF_WRITE,
+                    "addr": 0x20,
+                    "size": 0x10,
+                },
+            ],
+        )
+    )
+    layout = split.build_layout(parsed, "module")
+    # .bss owns no file bytes and must not appear as a file subsegment.
+    assert all("bss" not in segment.name for segment in layout.segments)
+    issues = split.validate_layout(layout, parsed)
+    assert not any(issue.severity == split.ERROR for issue in issues)
+    assert any("SHT_NOBITS" in issue.message for issue in issues)
+
+
+# ------------------------------------------------------------------- load_layout
+
+
+def test_load_layout_round_trips(tmp_path) -> None:
+    layout = split.build_layout(_module(), "module")
+    path = tmp_path / "layout.json"
+    path.write_text(layout.to_json(), encoding="utf-8")
+    assert split.load_layout(path) == layout
+
+
+def test_load_layout_rejects_invalid_json(tmp_path) -> None:
+    path = tmp_path / "layout.json"
+    path.write_text("{ this is not json", encoding="utf-8")
+    with pytest.raises(ParseError, match="invalid layout JSON"):
+        split.load_layout(path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[]",
+        "{}",
+        '{"basename": "x", "file_size": 16, "image_delta": 0}',
+        '{"basename": "x", "file_size": 0, "image_delta": 0, "segments": [{"name": "s", "type": "code", "start": 0, "vram": 0, "subsegments": [{"offset": 0, "kind": "bin", "name": "a", "size": 4}]}]}',
+        '{"basename": "x", "file_size": 16, "image_delta": 0, "segments": []}',
+        '{"basename": "x", "file_size": 16, "image_delta": 0, "segments": [{"name": "s", "type": "code", "start": 0, "vram": 0, "subsegments": [{"offset": 0, "kind": "bin", "name": "a", "size": -4}]}]}',
+        '{"basename": "x", "file_size": 16, "image_delta": 0, "segments": [{"name": "s", "type": "code", "start": 0, "vram": 0, "subsegments": [{"offset": -4, "kind": "bin", "name": "a", "size": 4}]}]}',
+    ],
+)
+def test_load_layout_rejects_malformed_structures(tmp_path, payload) -> None:
+    path = tmp_path / "layout.json"
+    path.write_text(payload, encoding="utf-8")
+    with pytest.raises(ParseError):
+        split.load_layout(path)
 
 
 def test_layout_issue_render() -> None:

@@ -293,6 +293,28 @@ def build_symbol_table(names: Sequence[str]) -> tuple[bytes, bytes]:
     return bytes(entries), strtab
 
 
+def build_symbols(entries: Sequence[Mapping[str, Any]]) -> tuple[bytes, bytes]:
+    """Build a (symtab, strtab) pair from explicit symbol specs.
+
+    Each ``entry`` may carry ``name``, ``value``, ``size``, ``info``, ``other``
+    and ``shndx``.  Symbol ``i`` is ``entries[i]``.
+    """
+    strtab, offsets = _build_string_table([str(entry.get("name", "")) for entry in entries])
+    blob = bytearray()
+    for entry in entries:
+        name = str(entry.get("name", ""))
+        blob += struct.pack(
+            "<IIIBBH",
+            offsets.get(name, 0),
+            int(entry.get("value", 0)),
+            int(entry.get("size", 0)),
+            int(entry.get("info", 0x10)),
+            int(entry.get("other", 0)),
+            int(entry.get("shndx", 0)),
+        )
+    return bytes(blob), strtab
+
+
 def build_relocations(entries: Sequence[tuple[int, int, int]]) -> bytes:
     """Build an ``Elf32_Rel`` blob from ``(r_offset, type, symbol_index)`` tuples."""
     blob = bytearray()
