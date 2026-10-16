@@ -91,11 +91,13 @@ function Resolve-Python {
     $candidates = @()
     if ($env:SETO_PYTHON) { $candidates += @{ exe = $env:SETO_PYTHON; args = @() } }
     $candidates += @(
+        # Prefer the interpreter which launched the caller (venv/setup-python)
+        # before consulting the global launcher for a different version.
+        @{ exe = "python"; args = @() },
+        @{ exe = "python3"; args = @() },
         @{ exe = "py"; args = @("-3.12") },
         @{ exe = "py"; args = @("-3.11") },
-        @{ exe = "py"; args = @("-3") },
-        @{ exe = "python3"; args = @() },
-        @{ exe = "python"; args = @() }
+        @{ exe = "py"; args = @("-3") }
     )
     foreach ($candidate in $candidates) {
         $probe = $null
@@ -125,9 +127,26 @@ function Invoke-Python {
 }
 
 function Invoke-Seto {
-    param([string[]]$Arguments)
-    $env:PYTHONPATH = Join-Path $RepoRoot "src"
-    return Invoke-Python (@("-m", "seto") + $Arguments)
+    param([string[]]$Arguments, [switch]$Quiet)
+    $previousPythonPath = [System.Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+    $sourcePath = Join-Path $RepoRoot "src"
+    try {
+        if ([string]::IsNullOrEmpty($previousPythonPath)) {
+            $env:PYTHONPATH = $sourcePath
+        }
+        else {
+            $env:PYTHONPATH = $sourcePath + [System.IO.Path]::PathSeparator + $previousPythonPath
+        }
+        return Invoke-Python (@("-m", "seto") + $Arguments) -Quiet:$Quiet
+    }
+    finally {
+        if ($null -eq $previousPythonPath) {
+            Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:PYTHONPATH = $previousPythonPath
+        }
+    }
 }
 
 function Test-Sha256 {
@@ -404,7 +423,7 @@ if ($Workspace) { $smokeArguments += @("--smoke-workspace", $Workspace) }
 
 Write-Host ""
 Write-Host "verifying with: seto $($smokeArguments -join ' ')"
-$code = Invoke-Python (@("-m", "seto") + $smokeArguments) -Quiet
+$code = Invoke-Seto -Arguments $smokeArguments -Quiet
 if ($code -ne 0) { throw "seto toolchain --smoke failed (exit $code)" }
 
 $capabilities = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
