@@ -4,11 +4,11 @@ name: libhtml_view
 options:
   platform: psp
   basename: libhtml_view
-  base_path: ..
+  base_path: ../..
   target_path: private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx
   asm_path: asm/libhtml_view
   ld_script_path: build/libhtml_view.ld
-  compiler: MWCC
+  compiler: MWCCPS2
   find_file_boundaries: False
   section_order: [".text", ".rodata", ".data", ".bss"]
 segments:

@@ -24,6 +24,11 @@ py -3.12 -m seto toolchain --json
 | `rea` / `node` | analyzer-mcp | MCP analysis server (needs Node.js). | No |
 | `java` | runtime | Required by Ghidra. | No |
 
+Nothing proprietary is ever downloaded or redistributed. `splat` is the open
+`splat64[mips]` distribution (`pip install "splat64[mips]"`), which brings the
+MIPS dependencies Seto relies on (Rabbitizer for the Allegrex instruction set,
+spimdisasm for the listings) without any proprietary component.
+
 ## Resolution order
 
 For every tool Seto tries, in order:
@@ -49,20 +54,23 @@ Measured with `seto toolchain` in the environment this repo was developed in:
 | Tool | Status |
 | --- | --- |
 | `mwccpsp` | **MISSING** (proprietary; must be supplied by the user) |
-| `splat` | MISSING |
+| `splat` | available (`splat 0.50.1`, from `splat64[mips]`) |
 | `m2c` | MISSING |
 | `wibo` | MISSING |
 | `wine` | MISSING |
 | `mips*-objdump` | MISSING |
 | `rea` | MISSING |
 | `ghidra` | MISSING (not configured) |
-| `node` | available |
-| `java` | available |
+| `node` | available (v24.21.0) |
+| `java` | available (Corretto 25.0.3) |
 
 Consequently, real compilation and real matching are **BLOCKED** in this
 environment. `seto match` still runs and still proves things (self-comparison,
-raw-blob comparison, relocation-type comparison); it only cannot compare against
-a freshly compiled object. See `docs/decomp-progress.md`.
+raw-blob comparison, relocation-type comparison, and — since the module's import
+tables are recovered — call identity); it only cannot compare against a freshly
+compiled object. `splat` being present means the split pipeline is fully
+exercised here: `seto split --run-splat` really runs it and verifies its output.
+See `docs/decomp-progress.md`.
 
 ## Reproducing on Windows
 

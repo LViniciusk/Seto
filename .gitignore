@@ -17,3 +17,10 @@ venv/
 
 # Artefatos gerados que nunca devem ser versionados
 asm/
+
+# saída do splat (asm/, assets/ e os arquivos de símbolos são derivados do PRX)
+/assets/
+/include/
+/undefined_funcs_auto.txt
+/undefined_syms_auto.txt
+/.splache

@@ -28,6 +28,8 @@ Out of scope: a native PC port, multiplayer, extra cards, or any gameplay change
 
 * Python **3.11+** (developed and tested with 3.12). The core is **stdlib-only**.
 * Optional: `capstone` (listings), `PyYAML` (YAML cross-check), `pytest` (tests).
+* Optional, to run the open splitter end to end: `splat64[mips]`
+  (`pip install "splat64[mips]"`).
 * Optional, for real matching: a licensed Metrowerks `mwccpsp` (proprietary) and,
   on Linux/WSL2, `wibo` or `wine`.
 
@@ -51,7 +53,9 @@ seto toolchain                                # what external tools are availabl
 seto detect private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx
 seto functions --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx
 seto split --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx --out build/split
+seto split --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx --out build/split --run-splat
 seto check-layout --layout build/split/layout.json --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx
+seto imports --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx --function 0x244
 seto disasm --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx --function 0x244
 seto match --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx --function 0x244 --candidate build/match/func_00000244.o
 ```
@@ -128,11 +132,73 @@ segments: 3  subsegments: 15  image delta: 0x60
 layout validated against the real module
 ```
 
-The committed config is `config/splat/libhtml_view.yaml`. It is a *candidate*
-until `splat` is actually run on it.
+The committed config is `config/splat/libhtml_view.yaml`. It is generated from the
+validated layout, never hand-edited, and `--run-splat` proves it is really
+consumable: it runs `splat64[mips]` on it, then reads the listings splat wrote and
+checks every word back against the original file.
+
+```text
+$ seto split --prx ...\libhtml_view.prx --out build/split --run-splat
+layout: build\split\layout.json
+splat:  build\split\libhtml_view.yaml
+segments: 3  subsegments: 15  image delta: 0x60
+splat:  ...\Scripts\splat.EXE (splat 0.50.1)
+  Split 21 KB (100.00%) in defined segments
+listing: text.s 509 words (verified against the original bytes)
+listing: sceStub_text.s 2536 words (verified against the original bytes)
+layout validated against the real module
+```
+
+A listing that disagrees with the file, or that fails to cover a whole segment, is
+an **error** (exit `3`), never a success. Without splat installed the command
+reports `BLOCKED` (exit `4`). The `assets/`, `include/`, `asm/`, `.splache` and
+`undefined_*_auto.txt` output is git-ignored: it is reproducible build output.
 
 `check-layout` validates the layout model against the real ELF section table —
 nothing more. It does **not** mean `splat` ran, nor that the module recompiles.
+
+### `seto imports` — PSP import identity
+
+Every imported function a PSP module declares is recovered from the module's own
+tables: `.lib.stub` (one `SceLibraryStubTable` per library) points at the library
+name in `.rodata.sceResident`, at the NID array in `.rodata.sceNid`, and at one
+8-byte `jr $ra; nop` trampoline in `.sceStub.text` per imported function.
+
+```text
+$ seto imports --prx ...\libhtml_view.prx --function 0x244
+...\libhtml_view.prx :: libhtml_view.prx
+library           stubs  stub range           nid range
+libehsys           1245  [0x7f4, 0x2edc)      [0x3128, 0x449c)
+sceHttp               7  [0x2edc, 0x2f14)     [0x449c, 0x44b8)
+sceSsl                2  [0x2f54, 0x2f64)     [0x44d8, 0x44e0)
+...
+total: 8 libraries, 1268 imported functions
+calls in func_00000244:
+  0x00024c  R_MIPS_26  +4:00000000 -> 0x002edc  sceHttp/0x76D1363B (stub #0)
+  0x000254  R_MIPS_26  +4:00000000 -> 0x002f0c  sceHttp/0xF9D8EB63 (stub #6)
+  0x00025c  R_MIPS_26  +4:00000000 -> 0x002ef4  sceHttp/0xD1C8945E (stub #3)
+  0x000264  R_MIPS_26  +4:00000000 -> 0x002f54  sceSsl/0x191CDEFF (stub #0)
+```
+
+The identity of an imported function is the **(library, NID)** pair — two
+identical NIDs in different libraries are *not* the same function. Every pointer
+and count is required to lie inside the section it names, every pointer field must
+carry the `R_MIPS_32` relocation a loader would use, and the bytes at every
+trampoline address must really be `jr $ra`. Structural damage (a truncated entry,
+a length that overruns the section, a missing section) is a loud parse error; a
+pointer without its relocation or a trampoline whose bytes disagree is a
+*limitation*, and the entry is dropped rather than guessed.
+
+`--json` emits the full deterministic report, `--out <path>` writes it (the
+committed one is `decomp/imports/libhtml_view.json`), and `--function <addr>`
+limits the call listing to one function. Exit `0` when every call was classified,
+`5` when any call has no proven destination — an unresolved call is reported with
+the exact missing link, never as a match.
+
+Each call site is also validated before it is trusted: the relocation must land
+inside the section, the instruction it describes must really be `j`/`jal`, the
+relocation type must be the modelled `R_MIPS_26`, and the call must have a delay
+slot inside the section.
 
 ### `seto disasm` — relocation-annotated listing (needs capstone)
 
@@ -179,6 +245,19 @@ bytes but always flagged.
 candidate came from, so its evidence is always `binary-range` and a `MATCHED`
 result here is **never** by itself a verified decompilation.
 
+A *call* is the one field that is legitimately encoded differently on the two
+sides: a linked module stores the trampoline **address**, a compiled object stores
+a **symbol name**. When the two in-place targets differ, `seto match` consults the
+module's recovered import table (see `seto imports`) and compares the proven
+identities instead: the same `(library, NID)` matches, a different one is
+`NONMATCHING`, and anything that cannot be identified is `INCONCLUSIVE`. Each
+resolved call is listed in the result as evidence.
+
+Every `MATCHED` names what it proves: `binary equality of the compared range` when
+nothing had to be resolved, or `function equivalence with canonically resolved
+relocations` when a call identity was resolved. *Full binary equality after
+linking* is never claimed — the pipeline does not link.
+
 ```text
 $ seto match --prx ...\libhtml_view.prx --function 0x244 --candidate ...\libhtml_view.prx
 function func_00000244 @ 0x244
@@ -199,10 +278,11 @@ and the candidate `location`).
 $ seto toolchain
 external tools
   mwccpsp   MISSING  not found (looked for mwccpsp, mwccpsp.exe, ...)
+  splat     OK       ...\Scripts\splat.EXE  (splat 0.50.1)
   ...
   node      OK       C:\Program Files\nodejs\node.exe  (v24.21.0)
   java      OK       ... (openjdk 25.0.3)
-missing: mwccpsp, splat, m2c, wibo, wine, objdump, rea, ghidra
+missing: mwccpsp, m2c, wibo, wine, objdump, rea, ghidra
 ```
 
 ### `scripts/match_function.py` — automated compile + compare
@@ -248,11 +328,12 @@ verifiable log of a local execution, not an unforgeable attestation.
 ## Repository layout
 
 ```text
-src/seto/            stdlib-only package (sfo, elf, mips, matching, split, inventory, toolchain, cli)
+src/seto/            stdlib-only package (sfo, elf, mips, matching, imports, split, inventory, toolchain, cli)
 config/seto.toml     baseline values and tool paths
-config/splat/        generated, candidate splat configs
+config/splat/        generated splat configs (verified by `seto split --run-splat`)
 decomp/src/          reconstructed C
 decomp/include/      shared reconstruction headers
+decomp/imports/      recovered PSP import identities (generated JSON)
 scripts/             compile+compare automation
 docs/                baseline, toolchain, decomp progress
 tests/               unit tests (synthetic fixtures) + tests/integration (real media)
@@ -279,6 +360,7 @@ no ISO, no commercial PRX and no proprietary compiler are ever downloaded.
 * [`docs/baseline.md`](docs/baseline.md) — measured facts about the disc, SFO and modules.
 * [`docs/toolchain.md`](docs/toolchain.md) — tool resolution, subprocess safety, Windows and WSL2 setup.
 * [`docs/decomp-progress.md`](docs/decomp-progress.md) — MATCHED / NONMATCHING / INCONCLUSIVE / BLOCKED report.
+* [`decomp/imports/libhtml_view.json`](decomp/imports/libhtml_view.json) — recovered `(library, NID)` identities.
 
 ## Licence
 
