@@ -50,6 +50,7 @@ Everything below then works as `seto ...`; without installing,
 seto verify                                   # check TF1.iso against the baseline
 seto inventory --extracted private/original/PSP_GAME --no-verify
 seto toolchain                                # what external tools are available
+seto toolchain --smoke --json                 # what the installed tools can actually do
 seto detect private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx
 seto functions --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx
 seto split --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx --out build/split
@@ -275,15 +276,33 @@ and the candidate `location`).
 ### `seto toolchain` — external tool status
 
 ```text
-$ seto toolchain
+$ seto toolchain --json
 external tools
   mwccpsp   MISSING  not found (looked for mwccpsp, mwccpsp.exe, ...)
-  splat     OK       ...\Scripts\splat.EXE  (splat 0.50.1)
+  splat     INSTALLED ...\splat.EXE  (splat 0.50.1)
   ...
-  node      OK       C:\Program Files\nodejs\node.exe  (v24.21.0)
-  java      OK       ... (openjdk 25.0.3)
-missing: mwccpsp, m2c, wibo, wine, objdump, rea, ghidra
+  node      INSTALLED C:\Program Files\nodejs\node.exe  (v24.21.0)
+  java      INSTALLED ... (openjdk 25.0.3)
 ```
+
+`seto toolchain` does not run slow smoke tests. Use `--smoke` to feed tools a
+synthetic ELF32 MIPS object or source file and report separate capabilities (for
+example `ghidra:allegrex`, `rea:mcp`, and `ghidra:prx`). A version string never
+earns `READY`; an untested PRX capability stays `BLOCKED`.
+
+The pinned open tools can be prepared without touching `private/`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap_toolchain.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap_toolchain.ps1 `
+    -Install -Tool splat,m2c,objdump,ghidra,rea
+py -3.12 -m seto toolchain --smoke --json --out build/toolchain-report.json
+```
+
+Use `bash scripts/bootstrap_toolchain.sh --dry-run` / `--install --tool NAME` on
+POSIX. Both scripts use `config/toolchain.lock`, verify downloads, keep Python
+environments outside the repository, and write paths to the ignored
+`config/seto.bootstrap.toml`. Neither ever downloads `mwccpsp`.
 
 ### `scripts/match_function.py` — automated compile + compare
 
@@ -328,13 +347,14 @@ verifiable log of a local execution, not an unforgeable attestation.
 ## Repository layout
 
 ```text
-src/seto/            stdlib-only package (sfo, elf, mips, matching, imports, split, inventory, toolchain, cli)
+src/seto/            stdlib-only package (sfo, elf, mips, matching, imports, split, inventory, toolchain, smoke, cli)
 config/seto.toml     baseline values and tool paths
+config/toolchain.lock pinned open-tool versions, URLs and release digests
 config/splat/        generated splat configs (verified by `seto split --run-splat`)
 decomp/src/          reconstructed C
 decomp/include/      shared reconstruction headers
 decomp/imports/      recovered PSP import identities (generated JSON)
-scripts/             compile+compare automation
+scripts/             bootstrap variants, safe extraction, and compile+compare automation
 docs/                baseline, toolchain, decomp progress
 tests/               unit tests (synthetic fixtures) + tests/integration (real media)
 private/             original game data (git-ignored)

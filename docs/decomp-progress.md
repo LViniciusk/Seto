@@ -29,6 +29,12 @@ Status vocabulary, used strictly:
 | The four `jal`s of `func_00000244` | `seto imports --function 0x244` | **PROVEN** — `(library, NID)` recovered for each |
 | Comparator sanity check (`func_00000244` vs itself) | `seto match` | **MATCHED** (`evidence: binary-range`, *not* a decompiled function) |
 | `func_00000244` reconstructed C vs original | `scripts/match_function.py` | **BLOCKED** (no `mwccpsp`) |
+| Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
+| `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
+| Ghidra native MIPS32 / Allegrex language | headless forced-language imports | **READY** (`MIPS:LE:32:default`, `Allegrex:LE:32:default`) |
+| Ghidra automatic selection of the synthetic ELF32 ET_REL | `seto toolchain --smoke --tool ghidra` | **INCOMPATIBLE** (Ghidra selected `MIPS:LE:64:64-32R6addr`; this is not accepted as ELF32 proof) |
+| Ghidra automatic selection of the real PSP PRX | `tests/integration/test_toolchain_real.py` | **PROVEN** (`libhtml_view.prx` selected `Allegrex:LE:32:default`) |
+| REA MCP transport | initialize + `tools/list` handshake | **READY** (207 tools); native-provider analysis and REA PRX support remain unproven |
 
 ## What is actually proven
 
@@ -228,6 +234,17 @@ from the exporting library's table in another module. The declarations in
 `decomp/include/sce_stubs.h` therefore stay keyed by address and carry the
 recovered `(library, NID)` in their comments.
 
+The external-tool status is equally explicit. The bootstrap installed `splat`,
+`m2c`, LLVM `objdump`, Ghidra 12.1.3 with `ghidra-allegrex` v21.4, and the REA
+6.5.0 CLI into machine-local tool directories. Synthetic smoke tests prove
+splitting, decompilation, ELF32 MIPS inspection, the Ghidra headless runtime, and
+forced MIPS32/Allegrex language loads. The Ghidra integration test additionally
+proves that the real `libhtml_view.prx` is automatically loaded as Allegrex. The
+synthetic smoke report still labels `ghidra:prx` `BLOCKED`, because it deliberately
+does not consume `private/`; the integration evidence is reported separately.
+REA's MCP handshake succeeds, but that alone proves neither a configured native
+analysis provider nor PSP-PRX support.
+
 To finish it once a licensed compiler is available:
 
 ```powershell
@@ -268,20 +285,20 @@ Neither is recorded as proven.
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
 | Any real `MATCHED` | `mwccpsp` is proprietary and absent | supply a licensed compiler, then run the command above |
-| Draft C for the other 15 functions | `m2c` not installed | install `m2c` |
-| Allegrex-specific analysis (VFPU, `ghidra-allegrex`) | Ghidra not configured | set `GHIDRA_HOME` |
+| Draft C for the other 15 functions | not yet iterated; m2c smoke only proves the tool on a synthetic function | use m2c and review/refine each function |
+| Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
 | Python 3.11 run of the suite | no 3.11 interpreter in the development environment (`py -3.11` is unavailable); the suite was run on 3.12 | run `python -m pytest` on 3.11 (CI does, on Ubuntu and Windows) |
-| MCP-driven analysis | REA refuses PSP PRX (`0xFFA0`) upstream; no MCP server configured | use Ghidra headless scripts instead |
+| REA native analysis / PSP PRX | MCP transport is connected, but no native provider or PRX analysis is demonstrated | configure/test a native provider separately; do not infer PRX support from MCP connectivity |
 
 `seto toolchain` reports the exact state of every tool, so this table can be
 re-derived rather than trusted.
 
 ## Next steps
 
-1. Install `mwccpsp` and run `scripts/match_function.py` for `func_00000244`;
+1. Supply a licensed `mwccpsp` and run `scripts/match_function.py` for `func_00000244`;
    record the real status and the flag set that produced it.
-2. Install `m2c` and iterate over the remaining functions in `.text`, using the
+2. Iterate with the installed `m2c` over the remaining functions in `.text`, using the
    recovered import identities (they are already resolvable by `seto match`).
 3. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
