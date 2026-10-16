@@ -6,6 +6,7 @@ Exit codes
 ``1``  usage, I/O or parse error
 ``3``  a verification or matching check failed (the operation ran, the answer is "not equal")
 ``4``  blocked: a required external tool is unavailable
+``5``  inconclusive: the operation ran but the evidence is insufficient to decide
 """
 
 from __future__ import annotations
@@ -13,19 +14,29 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 from seto import __version__, elf, formats, inventory, mips, split
 from seto.binio import ParseError, SetoError
 from seto.hashing import verify_file
-from seto.matching import MATCHED, MatchResult, compare
+from seto.matching import (
+    EVIDENCE_BINARY_RANGE,
+    EVIDENCE_COMPILED_OBJECT,
+    INCONCLUSIVE,
+    MATCHED,
+    NONMATCHING,
+    MatchResult,
+    compare,
+)
 from seto.toolchain import Settings, detect_all, load_settings
 
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_MISMATCH = 3
 EXIT_BLOCKED = 4
+EXIT_INCONCLUSIVE = 5
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,7 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
     match_parser.add_argument("--candidate-section", default=None)
     match_parser.add_argument(
         "--candidate-offset", type=lambda value: int(value, 0), default=None,
-        help="byte offset of the region inside the candidate",
+        help="absolute file offset of the region inside the candidate",
+    )
+    match_parser.add_argument(
+        "--candidate-section-offset", type=lambda value: int(value, 0), default=None,
+        help="offset of the region relative to its section inside the candidate",
+    )
+    match_parser.add_argument(
+        "--candidate-symbol", default=None,
+        help="ELF symbol that starts the function inside the candidate (preferred)",
     )
     match_parser.add_argument("--json", action="store_true")
 
@@ -287,7 +306,7 @@ def _command_split(arguments: argparse.Namespace, settings: Settings) -> int:
 def _command_check_layout(arguments: argparse.Namespace, settings: Settings) -> int:
     del settings
     parsed = elf.parse(arguments.prx)
-    layout = split.Layout.from_dict(inventory.load_manifest(arguments.layout))
+    layout = split.load_layout(arguments.layout)
     issues = split.validate_layout(layout, parsed)
     for issue in issues:
         print(f"  {issue.render()}")
@@ -376,94 +395,250 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
     original = code[region_offset : region_offset + size]
 
     candidate_section_name = arguments.candidate_section or arguments.section
-    candidate, candidate_section_offset, candidate_relocations, limitations = _load_candidate(
-        path=arguments.candidate,
-        section_relative=region_offset,
-        size=size,
-        section_name=candidate_section_name,
-        explicit_offset=arguments.candidate_offset,
-    )
+    try:
+        region = _load_candidate(
+            path=arguments.candidate,
+            size=size,
+            section_name=candidate_section_name,
+            original_section_relative=region_offset,
+            file_offset=arguments.candidate_offset,
+            section_relative=arguments.candidate_section_offset,
+            symbol=arguments.candidate_symbol,
+        )
+    except Inconclusive as exc:
+        print(f"INCONCLUSIVE: {exc}", file=sys.stderr)
+        return EXIT_INCONCLUSIVE
 
     result = compare(
         original,
-        candidate,
+        region.data,
         name=name,
         address=start,
         original_relocations=original_elf.relocations_for(arguments.section),
-        candidate_relocations=candidate_relocations,
+        candidate_relocations=region.relocations,
         original_section_offset=region_offset,
-        candidate_section_offset=candidate_section_offset,
-        limitations=limitations,
+        candidate_section_offset=region.section_offset,
+        limitations=region.limitations,
+        evidence=region.evidence,
     )
 
     if arguments.json:
-        print(json.dumps(result.summary(), indent=2, sort_keys=True))
+        payload = result.summary()
+        payload["candidate"] = {
+            "path": str(arguments.candidate),
+            "location": region.description,
+            "section_offset": region.section_offset,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        _print_match(result)
-    return EXIT_OK if result.is_matched else EXIT_MISMATCH
+        _print_match(result, region)
+    if result.status == MATCHED:
+        return EXIT_OK
+    if result.status == NONMATCHING:
+        return EXIT_MISMATCH
+    return EXIT_INCONCLUSIVE
+
+
+@dataclass(frozen=True)
+class CandidateRegion:
+    """A candidate region located inside a compiled or raw file."""
+
+    data: bytes
+    section_offset: int
+    relocations: tuple[elf.Relocation, ...]
+    limitations: tuple[str, ...]
+    description: str
+    evidence: str = EVIDENCE_BINARY_RANGE
+
+
+class Inconclusive(Exception):
+    """The candidate region cannot be pinned down unambiguously."""
 
 
 def _load_candidate(
     *,
     path: Path,
-    section_relative: int,
     size: int,
     section_name: str,
-    explicit_offset: int | None,
-) -> tuple[bytes, int, tuple[elf.Relocation, ...], tuple[str, ...]]:
-    """Load the candidate region.
+    original_section_relative: int,
+    file_offset: int | None = None,
+    section_relative: int | None = None,
+    symbol: str | None = None,
+) -> CandidateRegion:
+    """Locate the candidate region, distinguishing file and section offsets.
 
-    Returns the bytes, the region's offset relative to its own section start
-    (the same space as ``Relocation.section_offset``), the candidate's
-    relocations for that section, and any limitations.  When the candidate is a
-    linked module the region defaults to the same section-relative offset as
-    the original; when it is a raw blob it defaults to offset 0.
-    ``--candidate-offset`` always wins.
+    Resolution order (highest priority first):
+
+    1. ``--candidate-offset``: an absolute file offset.
+    2. ``--candidate-section-offset``: an offset relative to its section.
+    3. ``--candidate-symbol``: an ELF symbol whose ``value`` starts the function.
+    4. For ``ET_REL`` objects, the only function discovered in the section.
+    5. For linked modules, the same section-relative offset as the original.
+
+    A raw (non-ELF) file is compared as bytes but is explicitly flagged as a
+    limitation, so it can never yield a *verified* ``MATCHED``.  A file that
+    begins with the ELF magic but fails to parse is rejected instead of being
+    silently downgraded to a raw blob.
     """
     if not path.is_file():
         raise FileNotFoundError(f"candidate not found: {path}")
-    try:
-        candidate_elf = elf.parse(path)
-    except ParseError as exc:
+    magic = _read_magic(path)
+
+    if magic != elf.ELF_MAGIC:
+        if section_relative is not None or symbol is not None:
+            raise ParseError("--candidate-section-offset/--candidate-symbol require an ELF candidate")
+        offset = file_offset or 0
         data = path.read_bytes()
-        offset = explicit_offset or 0
-        if offset + size > len(data):
-            raise ParseError(
-                f"candidate {path} is too small: need {size} bytes at 0x{offset:x}, "
-                f"file is {len(data)} bytes"
-            ) from exc
-        return (
-            data[offset : offset + size],
-            offset,
-            (),
-            (f"candidate is not ELF ({exc}); compared as raw bytes without relocations",),
+        _validate_file_range(offset, size, len(data), f"{path}")
+        return CandidateRegion(
+            data=data[offset : offset + size],
+            section_offset=offset,
+            relocations=(),
+            limitations=(
+                "candidate is not ELF; compared as raw bytes without relocations",
+            ),
+            description=f"raw bytes at absolute file offset 0x{offset:x}",
         )
 
+    candidate_elf = elf.parse(path)  # a malformed ELF raises ParseError here
     section = candidate_elf.section(section_name)
     if section is None:
         raise ParseError(f"candidate {path} has no section {section_name!r}")
-    file_offset = (
-        explicit_offset
-        if explicit_offset is not None
-        else section.offset + section_relative
+    if section.is_nobits or section.size == 0:
+        raise ParseError(f"candidate section {section_name!r} has no file bytes")
+
+    limitations: list[str] = []
+    located, description = _locate_candidate_offset(
+        candidate_elf,
+        section,
+        size=size,
+        original_section_relative=original_section_relative,
+        file_offset=file_offset,
+        section_relative=section_relative,
+        symbol=symbol,
+        limitations=limitations,
     )
-    if file_offset < section.offset or file_offset + size > section.offset + section.size:
+    return CandidateRegion(
+        data=candidate_elf.reader.bytes_at(section.offset + located, size),
+        section_offset=located,
+        relocations=candidate_elf.relocations_for(section_name),
+        limitations=tuple(limitations),
+        description=description,
+        evidence=(
+            EVIDENCE_COMPILED_OBJECT
+            if candidate_elf.header.e_type == elf.ET_REL
+            else EVIDENCE_BINARY_RANGE
+        ),
+    )
+
+
+def _read_magic(path: Path) -> bytes:
+    with path.open("rb") as handle:
+        return handle.read(4)
+
+
+def _validate_file_range(offset: int, size: int, total: int, label: str) -> None:
+    if offset < 0:
+        raise ParseError(f"{label}: negative offset 0x{offset:x}")
+    if offset % 4:
+        raise ParseError(f"{label}: unaligned offset 0x{offset:x} (MIPS code is word-aligned)")
+    if offset + size > total:
         raise ParseError(
-            f"candidate section {section_name!r} does not contain {size} bytes at 0x{file_offset:x}"
+            f"{label}: needs {size} bytes at 0x{offset:x} but the file is {total} bytes"
         )
+
+
+def _validate_section_offset(offset: int, size: int, section_size: int, label: str) -> None:
+    if offset < 0:
+        raise ParseError(f"{label}: negative section offset 0x{offset:x}")
+    if offset % 4:
+        raise ParseError(f"{label}: unaligned section offset 0x{offset:x}")
+    if offset + size > section_size:
+        raise ParseError(
+            f"{label}: needs {size} bytes at section offset 0x{offset:x} but the section "
+            f"is {section_size} bytes"
+        )
+
+
+def _locate_candidate_offset(
+    candidate_elf: elf.ElfFile,
+    section: elf.Section,
+    *,
+    size: int,
+    original_section_relative: int,
+    file_offset: int | None,
+    section_relative: int | None,
+    symbol: str | None,
+    limitations: list[str],
+) -> tuple[int, str]:
+    label = f"candidate section {section.name!r}"
+
+    if file_offset is not None:
+        if file_offset < section.offset or file_offset + size > section.offset + section.size:
+            raise ParseError(
+                f"{label}: absolute file offset 0x{file_offset:x} does not contain {size} bytes"
+            )
+        return file_offset - section.offset, f"absolute file offset 0x{file_offset:x}"
+
+    if section_relative is not None:
+        _validate_section_offset(section_relative, size, section.size, label)
+        return section_relative, f"section-relative offset 0x{section_relative:x}"
+
+    if symbol:
+        match = _find_symbol(candidate_elf, symbol, section)
+        if match is not None:
+            offset = match.value - section.addr
+            _validate_section_offset(offset, size, section.size, label)
+            return offset, f"symbol {symbol!r} (0x{match.value:x})"
+        limitations.append(
+            f"requested symbol {symbol!r} was not found in the candidate; "
+            "fell back to automatic detection"
+        )
+
+    if candidate_elf.header.e_type == elf.ET_REL:
+        data = candidate_elf.section_data(section)
+        discovered = mips.find_functions(data, section.addr, f"{candidate_elf.reader.name}:{section.name}")
+        if len(discovered) == 1:
+            offset = discovered[0].start - section.addr
+            _validate_section_offset(offset, size, section.size, label)
+            return offset, f"the only function in {section.name!r} ({discovered[0].name()})"
+        if not discovered:
+            raise Inconclusive(
+                f"{candidate_elf.reader.name}: no function was discovered in {section.name!r}; "
+                "pass --candidate-section-offset or --candidate-symbol"
+            )
+        raise Inconclusive(
+            f"{candidate_elf.reader.name}: {len(discovered)} functions were discovered in "
+            f"{section.name!r}; pass --candidate-section-offset or --candidate-symbol to select one"
+        )
+
+    _validate_section_offset(original_section_relative, size, section.size, label)
     return (
-        candidate_elf.reader.bytes_at(file_offset, size),
-        file_offset - section.offset,
-        candidate_elf.relocations_for(section_name),
-        (),
+        original_section_relative,
+        f"assumed identical layout (section-relative 0x{original_section_relative:x})",
     )
 
 
-def _print_match(result: MatchResult) -> None:
+def _find_symbol(candidate_elf: elf.ElfFile, name: str, section: elf.Section) -> elf.Symbol | None:
+    for candidate in candidate_elf.symbols:
+        if candidate.name != name:
+            continue
+        if candidate.shndx == section.index:
+            return candidate
+        # ET_REL symbol values are section-relative; when shndx does not name the
+        # section, only accept a symbol that fits inside it.
+        if 0 <= candidate.value < section.size:
+            return candidate
+    return None
+
+
+def _print_match(result: MatchResult, region: CandidateRegion) -> None:
     print(f"function {result.name} @ 0x{result.address:x}")
     print(f"  status:  {result.status}")
     print(f"  match:   {result.percent:.2f}% ({result.matching_words}/{result.total_words} words)")
     print(f"  diffs:   {result.difference_count}")
+    print(f"  evidence: {result.evidence}")
+    print(f"  located: {region.description}")
     for difference in result.differences:
         print(
             f"    +0x{difference.word_index * 4:x} @0x{difference.address:x}: "
@@ -474,7 +649,14 @@ def _print_match(result: MatchResult) -> None:
     for limitation in result.limitations:
         print(f"    note: {limitation}")
     if result.status == MATCHED:
-        print("  result: MATCHED (no divergence proven in the validated range)")
+        if result.is_verified_decompilation:
+            print("  result: MATCHED (verified decompilation: candidate is a compiled object)")
+        else:
+            print("  result: MATCHED (binary-range equivalence only; not a verified decompilation)")
+    elif result.status == INCONCLUSIVE:
+        print("  result: INCONCLUSIVE (evidence is insufficient to prove equivalence)")
+    else:
+        print("  result: NONMATCHING (a divergence was proven)")
 
 
 def _command_toolchain(arguments: argparse.Namespace, settings: Settings) -> int:
@@ -490,4 +672,12 @@ def _command_toolchain(arguments: argparse.Namespace, settings: Settings) -> int
     return EXIT_OK
 
 
-__all__ = ["EXIT_BLOCKED", "EXIT_ERROR", "EXIT_MISMATCH", "EXIT_OK", "build_parser", "main"]
+__all__ = [
+    "EXIT_BLOCKED",
+    "EXIT_ERROR",
+    "EXIT_INCONCLUSIVE",
+    "EXIT_MISMATCH",
+    "EXIT_OK",
+    "build_parser",
+    "main",
+]

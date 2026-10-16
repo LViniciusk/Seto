@@ -7,9 +7,14 @@ import pytest
 from seto.binio import ParseError
 from seto.elf import R_MIPS_26, R_MIPS_HI16, R_MIPS_LO16, R_MIPS_32, Relocation
 from seto.matching import (
+    BLOCKED,
+    EVIDENCE_BINARY_RANGE,
+    EVIDENCE_COMPILED_OBJECT,
+    INCONCLUSIVE,
     MATCHED,
     NONMATCHING,
     RelocationSite,
+    combine_hi16_lo16,
     compare,
     compare_region,
     relocation_sites,
@@ -182,7 +187,9 @@ def test_symbol_mismatch_is_a_difference() -> None:
     assert "symbol" in result.differences[0].reason
 
 
-def test_one_sided_symbol_is_a_recorded_limitation_not_a_difference() -> None:
+def test_one_sided_symbol_is_inconclusive_not_matched() -> None:
+    # The words and addends agree, but a symbol is only exposed on one side, so
+    # symbol identity cannot be proven: this must not be reported as MATCHED.
     result = compare(
         _code(jal(0x40)),
         _code(jal(0x40)),
@@ -190,13 +197,15 @@ def test_one_sided_symbol_is_a_recorded_limitation_not_a_difference() -> None:
         original_relocations=[rel(0, R_MIPS_26, addend=0x40, symbol="memcpy")],
         candidate_relocations=[rel(0, R_MIPS_26, addend=0x40)],
     )
-    assert result.status == MATCHED
+    assert result.status == INCONCLUSIVE
+    assert result.is_inconclusive
+    assert not result.is_matched
     assert result.limitations
     assert "only one side" in result.limitations[0]
 
 
-def test_unmodelled_relocation_falls_back_to_exact_word_match() -> None:
-    # R_MIPS_16 (type 1) has no known mask.
+def test_unmodelled_relocation_is_inconclusive_not_matched() -> None:
+    # R_MIPS_16 (type 1) has no known mask: byte equality is not proof.
     result = compare(
         _code(0x00001234),
         _code(0x00001234),
@@ -204,8 +213,22 @@ def test_unmodelled_relocation_falls_back_to_exact_word_match() -> None:
         original_relocations=[rel(0, 1)],
         candidate_relocations=[rel(0, 1)],
     )
+    assert result.status == INCONCLUSIVE
+    assert any("not modelled" in item for item in result.limitations)
+
+
+def test_caller_limitations_downgrade_a_perfect_score_to_inconclusive() -> None:
+    # A raw-blob candidate is reported by the caller as a limitation; even though
+    # every byte matches it must not be claimed as MATCHED.
+    result = compare(_code(NOP, NOP), _code(NOP, NOP), name="f", limitations=["candidate is not ELF"])
+    assert result.status == INCONCLUSIVE
+    assert result.percent == 100.0
+    assert result.limitations == ("candidate is not ELF",)
+
+
+def test_no_limitations_and_no_differences_is_matched() -> None:
+    result = compare(_code(NOP), _code(NOP), name="f")
     assert result.status == MATCHED
-    assert any("no known mask" in item for item in result.limitations)
 
 
 def test_unmodelled_relocation_reports_a_difference_when_words_differ() -> None:
@@ -290,6 +313,106 @@ def test_relocation_sites_skip_offsets_before_or_misaligned_with_the_region() ->
         0x100,
     )
     assert set(sites) == {1}
+
+
+def test_relocation_sites_ignore_relocations_past_the_region_end() -> None:
+    sites = relocation_sites(
+        [rel(0x100, R_MIPS_32), rel(0x104, R_MIPS_32), rel(0x108, R_MIPS_32)],
+        0x100,
+        region_size=8,
+    )
+    assert set(sites) == {0, 1}
+    sites = relocation_sites(
+        [rel(0x100, R_MIPS_32), rel(0x104, R_MIPS_32)],
+        0x100,
+        region_size=4,
+    )
+    assert set(sites) == {0}
+
+
+def test_duplicate_relocations_are_rejected_not_silently_overwritten() -> None:
+    with pytest.raises(ParseError, match="duplicate relocation"):
+        relocation_sites([rel(0x100, R_MIPS_26), rel(0x100, R_MIPS_HI16)], 0x100)
+
+
+# -------------------------------------------------------------------- HI16/LO16
+
+
+def test_hi16_lo16_pair_with_equal_combined_value_matches() -> None:
+    original = _code(0x3C040000, 0x24840000)
+    candidate = _code(0x3C040000, 0x24840000)
+    result = compare(
+        original,
+        candidate,
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0001),
+            rel(4, R_MIPS_LO16, addend=0x0002),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0001),
+            rel(4, R_MIPS_LO16, addend=0x0002),
+        ],
+    )
+    assert result.status == MATCHED
+    assert result.matching_words == 2
+
+
+def test_hi16_lo16_pair_with_different_combined_value_is_a_difference() -> None:
+    original = _code(0x3C040000, 0x24840000)
+    candidate = _code(0x3C040000, 0x24840000)
+    result = compare(
+        original,
+        candidate,
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0001),
+            rel(4, R_MIPS_LO16, addend=0x0002),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0002),
+            rel(4, R_MIPS_LO16, addend=0x0002),
+        ],
+    )
+    assert result.status == NONMATCHING
+    assert "HI16/LO16 pair" in result.differences[0].reason
+
+
+def test_combine_hi16_lo16_uses_the_raw_high_half_and_signed_low_half() -> None:
+    assert combine_hi16_lo16(0x0001, 0x0002) == 0x00010002
+    assert combine_hi16_lo16(0x0000, -4) == 0xFFFFFFFC
+    # The high half is masked to 16 bits before shifting.
+    assert combine_hi16_lo16(0xFFFF0001, 0) == 0x00010000
+
+
+def test_blocked_status_constant_exists() -> None:
+    assert BLOCKED == "BLOCKED"
+
+
+# ---------------------------------------------------------------------- evidence
+
+
+def test_default_evidence_is_binary_range() -> None:
+    result = compare(_code(NOP), _code(NOP), name="f")
+    assert result.evidence == EVIDENCE_BINARY_RANGE
+    assert not result.is_verified_decompilation
+    assert result.summary()["evidence"] == EVIDENCE_BINARY_RANGE
+
+
+def test_compiled_object_evidence_is_verified_only_when_matched() -> None:
+    matched = compare(_code(NOP), _code(NOP), name="f", evidence=EVIDENCE_COMPILED_OBJECT)
+    assert matched.is_verified_decompilation
+
+    inconclusive = compare(
+        _code(jal(0x40)),
+        _code(jal(0x40)),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_26, addend=0x40, symbol="a")],
+        candidate_relocations=[rel(0, R_MIPS_26, addend=0x40)],
+        evidence=EVIDENCE_COMPILED_OBJECT,
+    )
+    assert inconclusive.status == INCONCLUSIVE
+    assert not inconclusive.is_verified_decompilation
 
 
 # ---------------------------------------------------------------- compare_region

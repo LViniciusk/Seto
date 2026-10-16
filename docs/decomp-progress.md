@@ -2,10 +2,17 @@
 
 Status vocabulary, used strictly:
 
-* **MATCHED** — an automated comparison proved the candidate identical to the
-  original (every non-relocated word byte-equal, every relocated word equal in
-  type and addend). Requires a real compile of the reconstruction.
-* **NONMATCHING** — the comparison ran and found at least one proven divergence.
+* **MATCHED** — an automated comparison proved equivalence for the compared
+  range. It is only a *verified decompilation* when the candidate is a
+  relocatable object (`ET_REL`) actually produced by compiling the
+  reconstruction; a comparison between byte ranges is reported with
+  `evidence: binary-range` and must not be counted as a decompiled function.
+* **NONMATCHING** — the comparison ran and found at least one proven divergence
+  (including a relocation present on only one side).
+* **INCONCLUSIVE** — the comparison ran but the evidence is insufficient to
+  decide (a raw/non-ELF candidate, an unmodelled relocation type, a symbol
+  exposed on only one side, or several candidate functions and nothing selecting
+  one).
 * **BLOCKED** — the comparison could not run because a required tool is missing.
   Never reported as success.
 
@@ -13,15 +20,16 @@ Status vocabulary, used strictly:
 | --- | --- | --- |
 | `libhtml_view.prx` inventory (16 functions) | `seto functions` | **OK** |
 | `libhtml_view.prx` layout (15 subsegments) | `seto split` + `seto check-layout` | **OK** |
-| Comparator sanity check (`func_00000244` vs itself) | `seto match` | **MATCHED** |
+| Comparator sanity check (`func_00000244` vs itself) | `seto match` | **MATCHED** (`evidence: binary-range`, *not* a decompiled function) |
 | `func_00000244` reconstructed C vs original | `scripts/match_function.py` | **BLOCKED** (no `mwccpsp`) |
 
 ## What is actually proven
 
 1. **Inventory and layout** are verified against the real bytes: `seto check-layout`
-   confirms the layout covers the file exactly once, that every subsegment size
-   and kind matches the ELF section table, and that the image delta is constant
-   (`0x60`). These are reproducible facts, not claims.
+   confirms the layout tiles the file exactly, with no gap and no overlap, that
+   every subsegment size and kind matches the ELF section table, and that the
+   image delta is constant (`0x60`). `SHT_NOBITS` sections (`.bss`) own no file
+   bytes and are reported explicitly. These are reproducible facts, not claims.
 
 2. **The comparator works.** Comparing `func_00000244` against the same bytes,
    with the module's own relocations on both sides, yields:
@@ -31,14 +39,16 @@ Status vocabulary, used strictly:
      status:  MATCHED
      match:   100.00% (13/13 words)
      diffs:   0
+     evidence: binary-range
    ```
 
    This proves the relocation-aware pipeline is self-consistent. It is **not** a
    claim that the reconstruction in `decomp/src/` matches — that still requires a
-   compile.
+   compile, and it does not increase the count of decompiled functions.
 
 ## Matching semantics
 
+Four outcomes are possible: `MATCHED`, `NONMATCHING`, `INCONCLUSIVE`, `BLOCKED`.
 Two instruction streams are compared word by word:
 
 * a word covered by no relocation must be byte-identical;
@@ -46,15 +56,23 @@ Two instruction streams are compared word by word:
   same in-place *addend* on both sides, and must agree outside the bits the
   relocation can change (`R_MIPS_26` → `0x03FFFFFF`, `R_MIPS_HI16`/`LO16` →
   `0x0000FFFF`, `R_MIPS_32` → all bits);
+* a HI16 immediately followed by a LO16 is compared as the combined 32-bit value
+  it encodes;
 * when both sides expose a symbol name, the names must match; when only one side
-  does, the difference is recorded as a **limitation**, never smoothed over;
-* a relocation present on only one side is a hard **issue**, even if the words
-  happen to be byte-identical.
+  does, the result is downgraded to `INCONCLUSIVE` — never silently accepted;
+* a relocation present on only one side is a hard **issue** (`NONMATCHING`),
+  even if the words happen to be byte-identical;
+* an *unmodelled* relocation type (no known mask) makes the result
+  `INCONCLUSIVE`, even when the bytes coincide: byte equality is not proof;
+* duplicated relocations on the same word are rejected, not silently
+  overwritten; relocations outside the compared range are ignored;
+* `MATCHED` requires **zero** differences, issues and limitations. Any limitation
+  downgrades it to `INCONCLUSIVE`.
 
 The PSP PRX is stripped (`symbols: 0`), so every comparison against it currently
 carries the limitation *"symbol available on only one side"* whenever a compiled
-object supplies names. This is reported, not hidden. The match result is therefore
-deliberately conservative: it never reports `MATCHED` when it cannot prove it.
+object supplies names. This is reported, not hidden, and the verdict is
+`INCONCLUSIVE` rather than a false `MATCHED`.
 
 ## `func_00000244` (the worked example)
 
@@ -81,12 +99,13 @@ $env:SETO_MWCCPSP = "C:\tools\mwccpsp.exe"
 py -3.12 scripts/match_function.py `
     --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
     --function 0x244 `
-    --source decomp/src/func_00000244.c `
-    --flag=-O4,p --flag=-sdatathreshold --flag=0
+    --source decomp/src/func_00000244.c
 ```
 
-Exit `0` means `MATCHED`, `3` means `NONMATCHING` (with the differing words
-printed), `4` means the compiler is still missing.
+The flags come from `[match] flags` in `config/seto.toml` unless `--flag`
+overrides them. Exit `0` means `MATCHED`, `3` means `NONMATCHING` (the differing
+words are printed), `4` means the compiler is still missing and `5` means
+`INCONCLUSIVE`.
 
 ### Compiler-flag hypothesis
 
@@ -99,6 +118,7 @@ experiment, not assumption:
 Both are recorded in `config/seto.toml` (`[match] flags` /
 `alternative_flags`). A reconstruction is only `MATCHED` for whichever flag set
 actually reproduces the bytes; the report should name the flag set that did.
+Neither is recorded as proven.
 
 ## Blocked items and why
 
