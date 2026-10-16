@@ -656,3 +656,74 @@ def verify_listing(
             f"the listing covers 0x{max(covered, 0):x} of 0x{size:x} bytes"
         )
     return tuple(issues)
+
+
+@dataclass(frozen=True)
+class VerifiedListing:
+    """One listing splat wrote, and how much of it was checked."""
+
+    name: str
+    words: int
+    issues: tuple[LayoutIssue, ...]
+
+    @property
+    def verified(self) -> bool:
+        return not self.issues
+
+
+def verify_splat_output(
+    layout: Layout,
+    original: bytes,
+    asm_dir: str | Path,
+) -> tuple[VerifiedListing, ...]:
+    """Read and verify every assembly listing splat wrote for ``layout``.
+
+    This is the one place the produced listings are judged, so a caller only has
+    to decide what to do with the result: ``seto split --run-splat`` prints it,
+    and the splat smoke test turns it into a capability.  A listing that is
+    missing, unreadable or disagrees with the original bytes is an issue - never
+    a silent success.
+    """
+    directory = Path(asm_dir)
+    results: list[VerifiedListing] = []
+    for segment in layout.segments:
+        if segment.type != CODE_TYPE:
+            continue
+        for subsegment in segment.subsegments:
+            if subsegment.kind != ASM_KIND:
+                continue
+            path = directory / f"{subsegment.name}.s"
+            if not path.is_file():
+                results.append(
+                    VerifiedListing(
+                        path.name,
+                        0,
+                        (LayoutIssue(ERROR, f"splat did not write {path}"),),
+                    )
+                )
+                continue
+            address = segment.vram + (subsegment.offset - segment.start)
+            try:
+                entries = parse_listing(
+                    path.read_text(encoding="utf-8", errors="replace"), str(path)
+                )
+            except ParseError as exc:
+                results.append(
+                    VerifiedListing(path.name, 0, (LayoutIssue(ERROR, str(exc)),))
+                )
+                continue
+            results.append(
+                VerifiedListing(
+                    path.name,
+                    len(entries),
+                    verify_listing(
+                        entries,
+                        original,
+                        label=str(path),
+                        address=address,
+                        file_offset=subsegment.offset,
+                        size=subsegment.size,
+                    ),
+                )
+            )
+    return tuple(results)

@@ -7,16 +7,26 @@ import sys
 import pytest
 
 from seto.toolchain import (
+    BLOCKED,
     GHIDRA_ENV_VARS,
+    INCOMPATIBLE,
+    INSTALLED,
+    MISSING,
+    NOT_APPLICABLE,
+    READY,
     TOOL_SPECS,
+    Capability,
     Settings,
+    ToolStatus,
     detect_all,
     find_ghidra,
     find_tool,
     ghidra_headless_argv,
     ghidra_version,
     load_settings,
+    m2c_argv,
     mwcc_argv,
+    objdump_argv,
     run,
 )
 
@@ -154,7 +164,9 @@ def test_find_tool_prefers_the_configured_path() -> None:
     status = find_tool(_node_spec(), PYTHON, env={}, probe=False)
     assert status.found
     assert status.path == str(PYTHON)
-    assert status.state == "available"
+    # ``state`` is the verdict, ``detection`` keeps the original JSON value.
+    assert status.state == INSTALLED
+    assert status.detection == "available"
     assert "MISSING" not in status.line()
 
 
@@ -162,7 +174,101 @@ def test_find_tool_reports_a_broken_configured_path() -> None:
     status = find_tool(_node_spec(), "C:/nope/nope.exe", env={}, probe=False)
     assert not status.found
     assert "does not exist" in (status.reason or "")
+    assert status.state == MISSING
     assert "MISSING" in status.line()
+
+
+def test_a_configured_binary_that_cannot_be_executed_is_incompatible(tmp_path) -> None:
+    # A file that exists but is not a program is not a usable tool.
+    broken = tmp_path / "node"
+    broken.write_bytes(b"this is not an executable\n")
+    status = find_tool(_node_spec(), str(broken), env={}, probe=True)
+    assert status.found
+    assert status.state == INCOMPATIBLE
+    assert status.reason
+
+
+def test_a_tool_that_is_not_needed_here_is_still_looked_for(tmp_path) -> None:
+    # wibo only exists to run a Windows compiler on Linux/WSL2.
+    spec = next(spec for spec in TOOL_SPECS if spec.name == "wibo")
+    absent = find_tool(spec, None, env={}, platform="nt")
+    assert absent.state == NOT_APPLICABLE
+    assert not absent.found
+    assert "not needed on this platform" in (absent.reason or "")
+
+    present = tmp_path / "wibo"
+    present.write_bytes(b"")
+    found = find_tool(spec, str(present), env={}, probe=False, platform="nt")
+    assert found.found  # presence is a fact
+    assert found.state == NOT_APPLICABLE  # usability is the verdict
+    assert "not needed on this platform" in (found.reason or "")
+
+
+def test_a_tool_that_is_needed_elsewhere_is_missing_here() -> None:
+    spec = next(spec for spec in TOOL_SPECS if spec.name == "wine")
+    status = find_tool(spec, None, env={}, platform="posix")
+    assert status.state == MISSING
+
+
+def test_a_tool_whose_runtime_is_absent_is_blocked(monkeypatch) -> None:
+    # REA is a Node package: without Node there is nothing to run.  PATH is
+    # patched so the answer does not depend on what this machine happens to have.
+    monkeypatch.setattr("seto.toolchain.shutil.which", lambda name: None)
+    settings = Settings(data={"tools": {"rea": {"path": PYTHON}}})
+    statuses = detect_all(settings, env={}, platform="nt")
+    rea = next(status for status in statuses if status.name == "rea")
+    assert rea.found  # it is installed...
+    assert rea.state == BLOCKED  # ...but it cannot run
+    assert "node" in (rea.reason or "")
+
+
+def test_ghidra_without_a_jdk_is_blocked(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "ghidra"
+    (home / "support").mkdir(parents=True)
+    (home / "support" / "analyzeHeadless.bat").write_text("", encoding="utf-8")
+    monkeypatch.setattr("seto.toolchain.shutil.which", lambda name: None)
+    settings = Settings(data={"tools": {"ghidra": {"path": str(home)}}})
+    statuses = detect_all(settings, env={}, platform="nt")
+    ghidra = next(status for status in statuses if status.name == "ghidra")
+    assert ghidra.found
+    assert ghidra.state == BLOCKED
+    assert "java" in (ghidra.reason or "")
+
+
+def test_a_configured_windows_compiler_is_blocked_on_posix_without_a_loader(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("seto.toolchain.shutil.which", lambda name: None)
+    settings = Settings(data={"tools": {"mwccpsp": {"path": PYTHON}}})
+    statuses = detect_all(settings, env={}, platform="posix")
+    compiler = next(status for status in statuses if status.name == "mwccpsp")
+    assert compiler.found
+    assert compiler.state == BLOCKED
+    assert "wibo preferred, or wine" in (compiler.reason or "")
+
+
+def test_the_powerpc_compiler_is_not_accepted_as_the_psp_one() -> None:
+    spec = next(spec for spec in TOOL_SPECS if spec.name == "mwccpsp")
+    # ``mwcceppc`` builds PowerPC objects and can never match a MIPS module.
+    assert "mwcceppc" not in spec.names
+    assert spec.names == ("mwccpsp", "mwccpsp.exe")
+
+
+def test_the_summary_keeps_the_legacy_state_and_adds_the_capability() -> None:
+    status = ToolStatus(
+        "m2c",
+        "decompiler",
+        True,
+        path="C:/m2c",
+        state=READY,
+        capabilities=(Capability("decompile", READY, "produced C"),),
+    )
+    summary = status.summary()
+    assert summary["state"] == "available"
+    assert summary["capability"] == READY
+    assert summary["capabilities"] == [
+        {"name": "decompile", "state": READY, "detail": "produced C"}
+    ]
 
 
 def test_find_tool_uses_the_environment_variable(tmp_path) -> None:
@@ -301,3 +407,77 @@ def test_ghidra_headless_argv_layout() -> None:
         "-analysisTimeoutPerFile",
         "120",
     )
+
+
+def test_ghidra_headless_argv_can_demand_a_processor() -> None:
+    argv = ghidra_headless_argv(
+        "analyzeHeadless", "build/ghidra", "seto", "smoke.o",
+        processor="Allegrex:LE:32:default",
+    )
+    assert argv == (
+        "analyzeHeadless",
+        "build/ghidra",
+        "seto",
+        "-import",
+        "smoke.o",
+        "-processor",
+        "Allegrex:LE:32:default",
+    )
+
+
+def test_m2c_argv_layout() -> None:
+    assert m2c_argv("m2c", "f.s") == ("m2c", "f.s")
+    assert m2c_argv("m2c", "f.s", target="mips-ido-c") == ("m2c", "-t", "mips-ido-c", "f.s")
+
+
+def test_objdump_argv_layout() -> None:
+    argv = objdump_argv("llvm-objdump", "smoke.o")
+    assert argv == ("llvm-objdump", "-f", "-h", "-t", "-r", "-d", "smoke.o")
+    assert objdump_argv("objdump", "smoke.o", options=("-f",)) == ("objdump", "-f", "smoke.o")
+
+
+# ------------------------------------------------------------- local overlay
+
+
+def test_a_local_overlay_is_merged_over_the_configuration(tmp_path) -> None:
+    config = tmp_path / "seto.toml"
+    config.write_text(
+        '[baseline]\ndisc_id = "ULUS10136"\n[tools.m2c]\npath = ""\n', encoding="utf-8"
+    )
+    overlay = tmp_path / "seto.local.toml"
+    overlay.write_text('[tools.m2c]\npath = "C:/m2c"\n', encoding="utf-8")
+
+    settings = load_settings(config)
+    # The overlay fills in the empty path and leaves everything else alone.
+    assert settings.tool_path("m2c") == "C:/m2c"
+    assert settings.get("baseline", "disc_id") == "ULUS10136"
+    assert settings.path == config
+    assert settings.overlay == overlay
+
+
+def test_a_user_local_overlay_wins_over_bootstrap_paths(tmp_path) -> None:
+    config = tmp_path / "seto.toml"
+    config.write_text('[tools.m2c]\npath = ""\n', encoding="utf-8")
+    generated = tmp_path / "seto.bootstrap.toml"
+    generated.write_text('[tools.m2c]\npath = "C:/bootstrap/m2c"\n', encoding="utf-8")
+    local = tmp_path / "seto.local.toml"
+    local.write_text('[tools.m2c]\npath = "C:/local/m2c"\n', encoding="utf-8")
+
+    settings = load_settings(config)
+
+    assert settings.tool_path("m2c") == "C:/local/m2c"
+    assert settings.overlay == local
+
+
+def test_a_byte_order_mark_does_not_break_the_configuration(tmp_path) -> None:
+    config = tmp_path / "seto.toml"
+    config.write_text('[baseline]\ndisc_id = "X"\n', encoding="utf-8-sig")
+    assert load_settings(config).get("baseline", "disc_id") == "X"
+
+
+def test_without_an_overlay_nothing_is_merged(tmp_path) -> None:
+    config = tmp_path / "seto.toml"
+    config.write_text('[tools.m2c]\npath = ""\n', encoding="utf-8")
+    settings = load_settings(config)
+    assert settings.overlay is None
+    assert settings.tool_path("m2c") is None
