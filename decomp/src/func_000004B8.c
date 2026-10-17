@@ -1,13 +1,34 @@
 /*
  * libhtml_view.prx, .text 0x4B8-0x508 (0x50 bytes, 20 instructions).
  *
- * Evidence: splat's verified `text.s`, `seto disasm`, m2c 0.1.0 and Ghidra
- * 12.1.3 / Allegrex headless analysis. Ghidra confirms the function takes one
- * 32-bit pointer-like argument, uses a 0x20-byte stack buffer, passes the
- * argument and the string at image offset 0x4830 (`/PSP/SAVEDATA/`) to
- * func_00000894, initializes the buffer, passes it to func_00002D0C, then
- * passes both values to func_000008A4. The saved `$s0` preserves the original
- * argument across those calls.
+ * ORIGINAL (from the verified splat `text.s`, `seto disasm` and the module's
+ * own relocation table):
+ *
+ *   000004b8:  addiu $sp, $sp, -0x30
+ *   000004bc:  sw    $ra, 0xc($sp)
+ *   000004c0:  sw    $s0, 8($sp)
+ *   000004c4:  lui   $a1, 0            ; R_MIPS_HI16 addend 0x00000000
+ *   000004c8:  move  $s0, $a0
+ *   000004cc:  jal   0x894             ; R_MIPS_26 addend 0x894
+ *   000004d0:  addiu $a1, $a1, 0x4830  ; R_MIPS_LO16 addend 0x00004830
+ *   000004d4:  addiu $a0, $sp, 0x10
+ *   000004d8:  move  $a1, $zero
+ *   000004dc:  jal   0x854             ; R_MIPS_26 addend 0x854
+ *   000004e0:  addiu $a2, $zero, 0x20
+ *   000004e4:  jal   0x2d0c            ; R_MIPS_26 addend 0x2d0c
+ *   000004e8:  addiu $a0, $sp, 0x10
+ *   000004ec:  move  $a0, $s0
+ *   000004f0:  jal   0x8a4             ; R_MIPS_26 addend 0x8a4
+ *   000004f4:  addiu $a1, $sp, 0x10
+ *   000004f8:  lw    $ra, 0xc($sp)
+ *   000004fc:  lw    $s0, 8($sp)
+ *   00000500:  jr    $ra
+ *   00000504:  addiu $sp, $sp, 0x30
+ *
+ * The string the HI16/LO16 pair builds is PROVEN: combined addend 0x00004830
+ * lands inside `.data` (address 0x4768, size 0xe8) at offset 0xc8, and the
+ * fourteen bytes at that file offset (0x4890) really are "/PSP/SAVEDATA/".
+ * `seto datarefs` reports exactly that target.
  *
  * m2c's preliminary output omits the first argument to func_00000894. Ghidra's
  * disassembly shows `$a0` still contains the entry argument at 0x4CC and `$a1`

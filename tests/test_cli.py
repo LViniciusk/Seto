@@ -18,6 +18,7 @@ from conftest import (
     build_call_object,
     build_elf32,
     build_import_module,
+    build_relocations,
     build_symbols,
     jal,
     jr,
@@ -667,6 +668,96 @@ def test_imports_unknown_function_is_an_error(tmp_path, capsys) -> None:
     code_status = cli.main(["imports", "--prx", str(module), "--function", "0x999"])
     assert code_status == cli.EXIT_ERROR
     assert "no function starts" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------- datarefs
+
+
+def _data_reference_prx(tmp_path):
+    """A PRX whose function builds one global address and one string address."""
+    code = b"".join(
+        (
+            word(0x3C040060),  # lui   $a0, 0x60
+            word(0x24844860),  # addiu $a0, $a0, 0x4860  -> 0x604860
+            word(0x3C050000),  # lui   $a1, 0
+            word(0x24A54830),  # addiu $a1, $a1, 0x4830  -> .data + 0xc8
+            word(jr(31)),
+            word(0),
+        )
+    )
+    relocations = build_relocations(
+        [(0x00, 5, 0), (0x04, 6, 0), (0x08, 5, 0), (0x0C, 6, 0)]
+    )
+    module = build_elf32(
+        e_type=0xFFA0,
+        sections=[
+            {
+                "name": ".text",
+                "type": 1,
+                "flags": SHF_ALLOC | SHF_EXECINSTR,
+                "addr": 0,
+                "size": len(code),
+                "data": code,
+            },
+            {
+                "name": ".data",
+                "type": 1,
+                "flags": SHF_ALLOC,
+                "addr": 0x4768,
+                "size": 0xE8,
+                "data": b"\x00" * 0xE8,
+            },
+            {
+                "name": ".rel.text",
+                "type": 9,
+                "flags": 0,
+                "addr": 0,
+                "size": len(relocations),
+                "data": relocations,
+                "entsize": 8,
+            },
+        ],
+    )
+    path = tmp_path / "libtest.prx"
+    path.write_bytes(module)
+    return path
+
+
+def test_datarefs_recovers_a_proven_string_target(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    out = tmp_path / "report" / "datarefs.json"
+    status = cli.main(["datarefs", "--prx", str(module), "--out", str(out), "--json"])
+    # One reference resolves to a section, the other is outside every section, so
+    # the report is not fully proven: the exit code says so.
+    assert status == cli.EXIT_INCONCLUSIVE
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["section"] == ".text"
+    assert payload["functions"][0]["function"] == "func_00000000"
+    references = {item["instruction"]: item for item in payload["functions"][0]["references"]}
+    assert references["0xc"]["target"] == {"section": ".data", "offset": "0xc8"}
+    assert references["0xc"]["status"] == "PROVEN"
+    assert references["0xc"]["combined_addend"] == "0x00004830"
+    assert references["0x4"]["status"] == "UNKNOWN"
+    assert references["0x4"]["target"] is None
+    assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+
+def test_datarefs_unknown_function_is_an_error(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    assert (
+        cli.main(["datarefs", "--prx", str(module), "--function", "0x999"])
+        == cli.EXIT_ERROR
+    )
+    assert "no function starts" in capsys.readouterr().err
+
+
+def test_datarefs_writes_a_deterministic_report(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    first = tmp_path / "one.json"
+    second = tmp_path / "two.json"
+    cli.main(["datarefs", "--prx", str(module), "--out", str(first)])
+    cli.main(["datarefs", "--prx", str(module), "--out", str(second)])
+    assert first.read_bytes() == second.read_bytes()
 
 
 # ----------------------------------------------------------------------- disasm

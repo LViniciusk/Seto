@@ -12,12 +12,11 @@ value together with the ``R_MIPS_LO16`` that resolves it, so pairs are
 associated from the relocation table (never from mere adjacency) and compared as
 a unit.
 
-A call is the one case where the same reference is encoded differently on the
-two sides: a linked module stores the address of the trampoline it calls, while a
-relocatable object stores a *symbol name* because no address exists yet.  A
-caller may therefore supply a :data:`CallResolver` that turns either encoding
-into a proven identity; it is only ever consulted where the literal comparison
-cannot decide, and an inconclusive answer becomes ``INCONCLUSIVE``.
+A call or data reference may be encoded differently on the two sides. A caller
+may supply a :data:`CallResolver` for the module's proven call identities or
+separate data-target resolvers for proven section/offset identities. They are
+only consulted when their respective relocation kinds require them; unresolved
+targets become ``INCONCLUSIVE``.
 
 The result is deliberately conservative.  Byte equality alone is **not** treated
 as proof of a matching decompilation: whenever the available evidence cannot
@@ -42,6 +41,7 @@ from typing import Callable
 from seto.binio import ParseError
 from seto.elf import (
     R_MIPS_26,
+    R_MIPS_32,
     R_MIPS_HI16,
     R_MIPS_LO16,
     Relocation,
@@ -49,6 +49,7 @@ from seto.elf import (
     relocation_mask,
     relocation_type_name,
 )
+from seto.datarefs import DataTarget
 from seto.mips import decode_words
 
 MATCHED = "MATCHED"
@@ -70,11 +71,9 @@ EVIDENCE_COMPILED_OBJECT = "compiled-object"
 #: What a ``MATCHED`` proves when every byte of the compared range agrees, so the
 #: two streams are identical as they stand.
 EQUIVALENCE_BINARY = "binary equality of the compared range"
-#: What a ``MATCHED`` proves when it rests on canonically resolved call
-#: relocations: the instruction streams agree and every call resolves to the same
-#: proven identity, even though a linked module and a relocatable object encode
-#: that reference differently.  This is *not* full binary equality: that claim
-#: would require linking the object and comparing the linked result.
+#: What a ``MATCHED`` proves when it rests on canonically resolved call/data
+#: relocations: the streams agree and every resolved reference names the same
+#: proven identity. This is *not* full binary equality after linking.
 EQUIVALENCE_RESOLVED_RELOCATIONS = "function equivalence with canonically resolved relocations"
 
 #: Relocation types whose in-place field is a jump/call target.  A call reference
@@ -141,6 +140,7 @@ class RelocationSite:
     type: int
     addend: int
     symbol: str | None
+    symbol_index: int = 0
 
     @property
     def type_name(self) -> str:
@@ -149,6 +149,9 @@ class RelocationSite:
     @property
     def mask(self) -> int:
         return relocation_mask(self.type)
+
+
+DataTargetResolver = Callable[[RelocationSite, int], DataTarget | None]
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,7 @@ class MatchResult:
     limitations: tuple[str, ...] = ()
     evidence: str = EVIDENCE_BINARY_RANGE
     resolved_calls: tuple[str, ...] = ()
+    resolved_data: tuple[str, ...] = ()
 
     @property
     def percent(self) -> float:
@@ -210,7 +214,11 @@ class MatchResult:
         """
         if self.status != MATCHED:
             return ""
-        return EQUIVALENCE_RESOLVED_RELOCATIONS if self.resolved_calls else EQUIVALENCE_BINARY
+        return (
+            EQUIVALENCE_RESOLVED_RELOCATIONS
+            if self.resolved_calls or self.resolved_data
+            else EQUIVALENCE_BINARY
+        )
 
     def summary(self) -> dict[str, object]:
         return {
@@ -227,6 +235,7 @@ class MatchResult:
             "relocation_issues": list(self.relocation_issues),
             "limitations": list(self.limitations),
             "resolved_calls": list(self.resolved_calls),
+            "resolved_data": list(self.resolved_data),
         }
 
 
@@ -299,6 +308,7 @@ def relocation_sites(
             type=relocation.type,
             addend=relocation.addend,
             symbol=relocation.symbol,
+            symbol_index=relocation.symbol_index,
         )
     return RelocationMap(sites=sites, limitations=tuple(dict.fromkeys(limitations)))
 
@@ -307,6 +317,15 @@ def _symbol_identity(original: str | None, candidate: str | None) -> bool | None
     """``True``/``False`` when both sides expose a symbol, ``None`` when unknown."""
     if original is not None and candidate is not None:
         return original == candidate
+    return None
+
+
+def _pair_symbol_identity(hi: RelocationSite, lo: RelocationSite) -> bool | None:
+    """Use an ELF symbol-table index when a local/section symbol has no name."""
+    if hi.symbol is not None and lo.symbol is not None:
+        return hi.symbol == lo.symbol
+    if hi.symbol_index and lo.symbol_index:
+        return hi.symbol_index == lo.symbol_index
     return None
 
 
@@ -333,7 +352,7 @@ def pair_hi16_lo16(sites: dict[int, RelocationSite]) -> Hi16Lo16Pairing:
         closed: list[int] = []
         unproven = False
         for hi_index in pending:
-            verdict = _symbol_identity(sites[hi_index].symbol, site.symbol)
+            verdict = _pair_symbol_identity(sites[hi_index], site)
             if verdict is False:
                 continue
             closed.append(hi_index)
@@ -380,6 +399,8 @@ def compare(
     limitations: tuple[str, ...] | list[str] = (),
     evidence: str = EVIDENCE_BINARY_RANGE,
     call_resolver: CallResolver | None = None,
+    original_data_resolver: DataTargetResolver | None = None,
+    candidate_data_resolver: DataTargetResolver | None = None,
 ) -> MatchResult:
     """Compare two instruction streams with relocation-aware semantics.
 
@@ -392,6 +413,12 @@ def compare(
     is never allowed to turn a divergence into a match on its own: it either
     proves that both sides name the same destination, proves that they name
     different ones, or leaves the outcome inconclusive.
+
+    Data-target resolvers are optional. When supplied, ``R_MIPS_32`` and paired
+    ``R_MIPS_HI16``/``LO16`` references are compared by canonical section/offset
+    identity. If either side cannot prove a target, the result is
+    ``INCONCLUSIVE``; symbol-like spelling or equal numeric addends alone never
+    establishes data identity.
     """
     original_words = decode_words(original, f"{name}: original")
     candidate_words = decode_words(candidate, f"{name}: candidate")
@@ -410,6 +437,7 @@ def compare(
     issues: list[str] = []
     differences: list[WordDifference] = []
     resolved_calls: list[str] = []
+    resolved_data: list[str] = []
     matching = 0
 
     total = max(len(original_words), len(candidate_words))
@@ -441,6 +469,16 @@ def compare(
         )
         if relocation_issue:
             issues.append(f"word {index} ({address + index * 4:#x}): {reason}")
+
+    pair_limitations = list(original_pairs.limitations) + list(candidate_pairs.limitations)
+
+    def pair_identity_is_inconclusive(hi_index: int, low_index: int) -> bool:
+        # ``pair_hi16_lo16`` records the order-only note at the LO16's word index.
+        return any(
+            item.startswith(f"word {index}: HI16/LO16 association relies on relocation order")
+            for index in (hi_index, low_index)
+            for item in pair_limitations
+        )
 
     # A HI16 only acquires its value together with the LO16 that resolves it, so
     # pairs are compared as units - before the word-by-word pass - and only when
@@ -489,6 +527,46 @@ def compare(
 
         original_value = combine_hi16_lo16(site_a_hi.addend, site_a_lo.addend)
         candidate_value = combine_hi16_lo16(site_b_hi.addend, site_b_lo.addend)
+        if original_data_resolver is not None or candidate_data_resolver is not None:
+            target_a = (
+                None
+                if original_data_resolver is None
+                else original_data_resolver(site_a_hi, original_value)
+            )
+            target_b = (
+                None
+                if candidate_data_resolver is None
+                else candidate_data_resolver(site_b_hi, candidate_value)
+            )
+            if target_a is None or target_b is None:
+                limitations.append(
+                    f"word {hi_index}: HI16/LO16 data target identity cannot be proven "
+                    f"(original: {target_a!r}; candidate: {target_b!r})"
+                )
+                continue
+            if target_a != target_b:
+                if pair_identity_is_inconclusive(hi_index, low):
+                    limitations.append(
+                        f"word {hi_index}: HI16/LO16 data targets differ, but at least one "
+                        "pair lacks symbol identity; the differing destination is inconclusive"
+                    )
+                    continue
+                record_difference(
+                    hi_index,
+                    "HI16/LO16 data target differs "
+                    f"({target_a.section}+0x{target_a.offset:x} vs "
+                    f"{target_b.section}+0x{target_b.offset:x})",
+                )
+                continue
+            resolved_data.append(
+                f"words {hi_index}/{low}: "
+                f"{target_a.section}+0x{target_a.offset:x} <=> "
+                f"{target_b.section}+0x{target_b.offset:x}"
+            )
+            count_matching(hi_index)
+            count_matching(low)
+            continue
+
         if original_value != candidate_value:
             record_difference(
                 hi_index,
@@ -549,6 +627,41 @@ def compare(
             record_difference(index, "relocated word differs outside the relocation field")
             continue
 
+        if site_a.type == R_MIPS_32 and (
+            original_data_resolver is not None or candidate_data_resolver is not None
+        ):
+            target_a = (
+                None
+                if original_data_resolver is None
+                else original_data_resolver(site_a, site_a.addend)
+            )
+            target_b = (
+                None
+                if candidate_data_resolver is None
+                else candidate_data_resolver(site_b, site_b.addend)
+            )
+            if target_a is None or target_b is None:
+                limitations.append(
+                    f"word {index}: R_MIPS_32 data target identity cannot be proven "
+                    f"(original: {target_a!r}; candidate: {target_b!r})"
+                )
+                continue
+            if target_a != target_b:
+                record_difference(
+                    index,
+                    "R_MIPS_32 data target differs "
+                    f"({target_a.section}+0x{target_a.offset:x} vs "
+                    f"{target_b.section}+0x{target_b.offset:x})",
+                )
+                continue
+            resolved_data.append(
+                f"word {index} ({address + index * 4:#x}): "
+                f"{target_a.section}+0x{target_a.offset:x} <=> "
+                f"{target_b.section}+0x{target_b.offset:x}"
+            )
+            count_matching(index)
+            continue
+
         if site_a.addend != site_b.addend:
             if site_a.type in CALL_RELOCATION_TYPES and call_resolver is not None:
                 # The two encodings of the same reference: a linked module stores
@@ -607,6 +720,7 @@ def compare(
         limitations=tuple(dict.fromkeys(limitations)),
         evidence=evidence,
         resolved_calls=tuple(resolved_calls),
+        resolved_data=tuple(resolved_data),
     )
 
 
@@ -643,6 +757,8 @@ def compare_region(
     candidate_section_offset: int = 0,
     candidate_relocations: tuple[Relocation, ...] | list[Relocation] = (),
     call_resolver: CallResolver | None = None,
+    original_data_resolver: DataTargetResolver | None = None,
+    candidate_data_resolver: DataTargetResolver | None = None,
 ) -> MatchResult:
     """Compare a slice of the original binary against a candidate slice.
 
@@ -662,12 +778,16 @@ def compare_region(
         original_section_offset=original_section_offset,
         candidate_section_offset=candidate_section_offset,
         call_resolver=call_resolver,
+        original_data_resolver=original_data_resolver,
+        candidate_data_resolver=candidate_data_resolver,
     )
 
 
 __all__ = [
     "BLOCKED",
     "CALL_RELOCATION_TYPES",
+    "DataTarget",
+    "DataTargetResolver",
     "EVIDENCE_BINARY_RANGE",
     "EVIDENCE_COMPILED_OBJECT",
     "EQUIVALENCE_BINARY",
