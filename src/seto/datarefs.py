@@ -682,6 +682,103 @@ def build_reference_report(
     }
 
 
+#: A grouping key names one *location in the module* - never an object identity.
+ReferenceKey = tuple[str, str, int] | tuple[str, int, int]
+
+
+def reference_key(reference: Mapping[str, object]) -> ReferenceKey | None:
+    """Grouping key for one reference summary, or ``None`` when it is not stated.
+
+    A key is produced only when the pairing is demonstrated (or does not apply)
+    *and* the combined addend is fully recoverable, so a location shown as shared
+    really is shared by the module's own evidence. The pair's own confidence is
+    kept, so an order-only HI16/LO16 pair never joins a proven one.
+    """
+    if not reference.get("combined_addend_valid", False):
+        return None
+    if reference.get("pairing") not in (PROVEN, NOT_APPLICABLE):
+        return None
+
+    target = reference.get("target")
+    if isinstance(target, Mapping):
+        section = target.get("section")
+        offset = target.get("offset")
+        if isinstance(section, str) and isinstance(offset, str):
+            return ("section", section, int(offset, 16))
+
+    if reference.get("location") == INFERRED:
+        segment = reference.get("load_segment")
+        offset = reference.get("load_offset")
+        if isinstance(segment, int) and isinstance(offset, str):
+            return ("segment", segment, int(offset, 16))
+    return None
+
+
+def build_global_usage(report: Mapping[str, object]) -> dict[str, object]:
+    """Group a reference report's entries by demonstrated module location.
+
+    A shared group states that several sites reference one location *in this
+    module*; it never states that two artifacts name the same object, and it does
+    not merge a named section with a load segment. References whose location is
+    not confidently known are returned in ``unresolved`` rather than dropped.
+
+    Both the grouped references and the unresolved ones are sorted by function,
+    then by the *numeric* instruction address, so two semantically identical
+    reports serialise to the same bytes whatever order they were discovered in.
+    Duplicate accesses are kept: the sort only reorders, never merges.
+    """
+
+    def sort_key(item: dict[str, object]) -> tuple[str, int, str, str, str, str, str]:
+        return (
+            str(item["function"]),
+            int(str(item.get("instruction") or "0x0"), 0),
+            str(item.get("kind") or ""),
+            str(item.get("pairing") or ""),
+            str(item.get("location") or ""),
+            str(item.get("status") or ""),
+            str(item.get("unresolved") or ""),
+        )
+
+    groups: dict[ReferenceKey, list[dict[str, object]]] = {}
+    unresolved: list[dict[str, object]] = []
+    for entry in report.get("functions") or []:
+        function = str(entry.get("function"))
+        for reference in entry.get("references") or []:
+            accounting: dict[str, object] = {
+                "function": function,
+                "instruction": reference.get("instruction"),
+                "kind": reference.get("kind"),
+                "pairing": reference.get("pairing"),
+                "location": reference.get("location"),
+                "status": reference.get("status"),
+                "unresolved": reference.get("unresolved"),
+            }
+            key = reference_key(reference)
+            if key is None:
+                unresolved.append(accounting)
+            else:
+                groups.setdefault(key, []).append(accounting)
+
+    locations: list[dict[str, object]] = []
+    for key in sorted(groups):
+        kind, container, offset = key
+        location: dict[str, object] = {"kind": kind, "offset": f"0x{offset:x}"}
+        if kind == "section":
+            location["section"] = container
+        else:
+            location["segment"] = container
+        accounting = sorted(groups[key], key=sort_key)
+        location["functions"] = sorted({str(item["function"]) for item in accounting})
+        location["references"] = accounting
+        locations.append(location)
+
+    return {
+        "section": report.get("section"),
+        "locations": locations,
+        "unresolved": sorted(unresolved, key=sort_key),
+    }
+
+
 __all__ = [
     "INFERRED",
     "NOT_APPLICABLE",
@@ -692,14 +789,17 @@ __all__ = [
     "DataReference",
     "DataTarget",
     "LoadLocation",
+    "ReferenceKey",
     "RelocationEvidence",
     "RelocationLike",
     "SymbolLink",
+    "build_global_usage",
     "build_reference_report",
     "data_target_details",
     "load_location",
     "module_resolver",
     "recover_references",
+    "reference_key",
     "relocation_evidence",
     "resolve_data_target",
 ]

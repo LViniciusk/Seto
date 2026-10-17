@@ -92,6 +92,25 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
         "SetoAnalyzeFunction.java",
         "0x278",
         "0x358",
+        # SETO-DECOMP-010 reconstructions, with their data destinations.
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x0",
+        "0x34",
+        "0x4850",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x39c",
+        "0x414",
+        "0x4770",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x414",
+        "0x4b8",
+        "0x4788",
+        "0x47a4",
+        "0x47d0",
+        "0x4800",
     )
     result = run(
         argv,
@@ -100,24 +119,34 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
     assert result.ok, result.combined()
     assert (project / "seto_real_prx.gpr").is_file()
     output = result.combined()
-    assert output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}") == 9
+    assert output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}") == 12
+
+    def insn_count(block: str) -> int:
+        return sum(1 for line in block.splitlines() if "SETO_INSN=" in line)
+
+    # The nine established boundaries (SETO-DECOMP-005..009).
     starts = ("0x244", "0x6e4", "0x4b8", "0x34", "0x134", "0x358", "0x8c", "0x178", "0x278")
     ends = ("0x278", "0x704", "0x508", "0x84", "0x178", "0x39c", "0x134", "0x244", "0x358")
     counts = (13, 8, 20, 20, 17, 17, 42, 51, 56)
     sizes = (0x34, 0x20, 0x50, 0x50, 0x44, 0x44, 0xA8, 0xCC, 0xE0)
+    # The three SETO-DECOMP-010 reconstructions, requested last.
+    new_starts = ("0x0", "0x39c", "0x414")
+    ordered = starts + new_starts
+
     blocks = {}
-    for index, start in enumerate(starts):
+    for index, start in enumerate(ordered):
         marker = f"SETO_FUNCTION_START={start}"
         assert marker in output
         block_start = output.index(marker)
         next_markers = [
             output.find(f"SETO_FUNCTION_START={other}", block_start + len(marker))
-            for other in starts[index + 1:]
+            for other in ordered[index + 1:]
         ]
         next_markers = [position for position in next_markers if position >= 0]
-        next_marker = min(next_markers, default=len(output))
-        block = output[block_start:next_marker]
-        blocks[start] = block
+        blocks[start] = output[block_start:min(next_markers, default=len(output))]
+
+    for index, start in enumerate(starts):
+        block = blocks[start]
         assert f"SETO_FUNCTION_END={ends[index]}" in block
         assert f"SETO_FUNCTION_BODY_START={int(start, 16):08x}" in block
         assert f"SETO_FUNCTION_BODY_END={int(ends[index], 16):08x}" in block
@@ -125,8 +154,52 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
         assert "SETO_FUNCTION_BODY_RANGES=1" in block
         assert "SETO_BOUNDARY_STATUS=EXACT" in block
         assert "SETO_DECOMP_STATUS=OK" in block
-        instructions = [line for line in block.splitlines() if "SETO_INSN=" in line]
-        assert len(instructions) == counts[index]
+        assert insn_count(block) == counts[index]
+
+    # func_00000414 (0x414-0x4B8): an exact single-range body, 41 instructions.
+    block = blocks["0x414"]
+    assert "SETO_FUNCTION_END=0x4b8" in block
+    assert "SETO_FUNCTION_BODY_START=00000414" in block
+    assert "SETO_FUNCTION_BODY_END=000004b8" in block
+    assert "SETO_FUNCTION_BODY_ADDRESSES=164" in block
+    assert "SETO_FUNCTION_BODY_RANGES=1" in block
+    assert "SETO_BOUNDARY_STATUS=EXACT" in block
+    assert "SETO_DECOMP_STATUS=OK" in block
+    assert insn_count(block) == 41
+    for address in ("0x4788", "0x47a4", "0x47d0", "0x4800"):
+        assert f"SETO_ADDRESS_MAP={address} " in block
+
+    # func_0000039C (0x39C-0x414): the exclusive end is the next function's start,
+    # but Ghidra's flow excludes the unreachable `default:` word pair at 0x404, so
+    # its body is two ranges of 116 addresses. That hole is independent evidence
+    # that the reconstructed `default:` arm is dead code, not a boundary dispute.
+    block = blocks["0x39c"]
+    assert "SETO_FUNCTION_END=0x414" in block
+    assert "SETO_FUNCTION_BODY_START=0000039c" in block
+    assert "SETO_FUNCTION_BODY_END=00000414" in block
+    assert "SETO_FUNCTION_BODY_ADDRESSES=116" in block
+    assert "SETO_FUNCTION_BODY_RANGES=2" in block
+    assert "SETO_BOUNDARY_STATUS=MISMATCH" in block
+    assert "SETO_DECOMP_STATUS=NOT_RUN" in block
+    # Ghidra never defines the unreachable word at 0x404, so its listing is 29 of
+    # the 30 instructions. Both case bodies around the hole are present.
+    assert insn_count(block) == 29
+    assert "SETO_INSN=00000400 " in block
+    assert "SETO_INSN=00000404 " not in block
+    assert "SETO_INSN=00000408 " in block
+    assert "SETO_ADDRESS_MAP=0x4770 " in block
+
+    # func_00000000 (0x0-0x34): 0x0 is the image entry point, which Ghidra's
+    # auto-analysis does not model as a function, but the 13 instructions and the
+    # new zero-fill destination in the requested range are exact.
+    block = blocks["0x0"]
+    assert "SETO_FUNCTION_END=0x34" in block
+    assert "SETO_BOUNDARY_STATUS=NOT_FOUND" in block
+    assert "SETO_DECOMP_STATUS=NOT_RUN" in block
+    assert insn_count(block) == 13
+    # 0x4850 is the first byte past the file-backed image, so Ghidra reports it
+    # UNMAPPED - the same boundary p_filesz records.
+    assert "SETO_ADDRESS_MAP=0x4850 UNMAPPED" in block
 
     function_244 = blocks["0x244"]
     target_calls = [
