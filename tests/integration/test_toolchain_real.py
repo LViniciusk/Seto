@@ -111,15 +111,43 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
         "0x47a4",
         "0x47d0",
         "0x4800",
+        # SETO-DECOMP-011 reconstructions, with their data destinations.
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x634",
+        "0x6e4",
+        "0x604864",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x508",
+        "0x634",
+        "0x604864",
+        "0x604918",
+        "0x604b18",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x704",
+        "0x7f4",
+        "0x604860",
+        "0x604b9c",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x84",
+        "0x8c",
     )
     result = run(
         argv,
         timeout=smoke.GHIDRA_TIMEOUT,
+        # Sixteen ranges now include three full listings (44, 75 and 60
+        # instructions) plus their decompiled C, so the 64 KiB default capture
+        # would drop the tail of the log this test asserts on.
+        max_output=256 * 1024,
     )
     assert result.ok, result.combined()
+    assert not result.truncated, "the Ghidra log must be captured whole"
     assert (project / "seto_real_prx.gpr").is_file()
     output = result.combined()
-    assert output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}") == 12
+    assert output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}") == 16
 
     def insn_count(block: str) -> int:
         return sum(1 for line in block.splitlines() if "SETO_INSN=" in line)
@@ -129,9 +157,11 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
     ends = ("0x278", "0x704", "0x508", "0x84", "0x178", "0x39c", "0x134", "0x244", "0x358")
     counts = (13, 8, 20, 20, 17, 17, 42, 51, 56)
     sizes = (0x34, 0x20, 0x50, 0x50, 0x44, 0x44, 0xA8, 0xCC, 0xE0)
-    # The three SETO-DECOMP-010 reconstructions, requested last.
+    # The three SETO-DECOMP-010 reconstructions.
     new_starts = ("0x0", "0x39c", "0x414")
-    ordered = starts + new_starts
+    # The four SETO-DECOMP-011 ranges, requested last.
+    round_011_starts = ("0x634", "0x508", "0x704", "0x84")
+    ordered = starts + new_starts + round_011_starts
 
     blocks = {}
     for index, start in enumerate(ordered):
@@ -200,6 +230,36 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
     # 0x4850 is the first byte past the file-backed image, so Ghidra reports it
     # UNMAPPED - the same boundary p_filesz records.
     assert "SETO_ADDRESS_MAP=0x4850 UNMAPPED" in block
+
+    # The three SETO-DECOMP-011 reconstructions. Ghidra's own flow agrees with the
+    # instruction ranges used for them: 44, 75 and 60 instructions, each one exact
+    # single range, and every destination the reconstructions name is UNMAPPED
+    # (all of them lie past p_filesz, in the zero-filled tail of the segment).
+    for start, end, addresses, count, maps in (
+        ("0x634", "0x6e4", 176, 44, ("0x604864",)),
+        ("0x508", "0x634", 300, 75, ("0x604864", "0x604918", "0x604b18")),
+        ("0x704", "0x7f4", 240, 60, ("0x604860", "0x604b9c")),
+    ):
+        block = blocks[start]
+        assert f"SETO_FUNCTION_END={end}" in block
+        assert f"SETO_FUNCTION_BODY_START={int(start, 16):08x}" in block
+        assert f"SETO_FUNCTION_BODY_END={int(end, 16):08x}" in block
+        assert f"SETO_FUNCTION_BODY_ADDRESSES={addresses}" in block
+        assert "SETO_FUNCTION_BODY_RANGES=1" in block
+        assert "SETO_BOUNDARY_STATUS=EXACT" in block
+        assert "SETO_DECOMP_STATUS=OK" in block
+        assert insn_count(block) == count
+        for address in maps:
+            assert f"SETO_ADDRESS_MAP={address} UNMAPPED" in block
+
+    # func_00000084 (0x84-0x8C) is eight bytes: `jr $ra` and its delay slot, with
+    # no caller, no callee, no data reference and no import. Ghidra's
+    # auto-analysis does not model it as a function, so it is reported NOT_FOUND;
+    # the range stays a classification, not a reconstruction target of the round.
+    block = blocks["0x84"]
+    assert "SETO_FUNCTION_END=0x8c" in block
+    assert "SETO_BOUNDARY_STATUS=NOT_FOUND" in block
+    assert "SETO_DECOMP_STATUS=NOT_RUN" in block
 
     function_244 = blocks["0x244"]
     target_calls = [

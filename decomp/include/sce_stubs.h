@@ -64,4 +64,16 @@ extern void func_000008A4(void *arg0, void *arg1);              /* libehsys NID 
 extern void func_00001F04(void (*arg0)(void), void (*arg1)(void), void *arg2);
                                                                 /* libehsys NID 0xB4471B5E */
 
+/* Additional imports used by the SETO-DECOMP-011 candidates. Names remain
+ * address-derived until the exporting library tables are recovered; the
+ * parameter lists record only the observed call usage, not an SDK prototype. */
+extern void func_00000B1C(int arg0, int arg1);                  /* libehsys   NID 0xE8D57DC6 */
+extern void func_00000854(void *buffer, int value, unsigned int size);
+                                                                /* libehsys   NID 0x10F3BB61 */
+extern int func_0000235C(int arg0);                             /* libehsys   NID 0x8171F765 */
+extern int func_00002F7C(void);                                 /* sceUtility NID 0xBDA7D894 */
+extern void func_00002F64(int value);                           /* sceUtility NID 0x05AFB9E4 */
+extern void func_00002F8C(void);                                /* sceUtility NID 0xF5CE1134 */
+extern int func_00002F84(void *arg0);                           /* sceUtility NID 0xCDC3AA41 */
+
 #endif /* SETO_DECOMP_SCE_STUBS_H */
