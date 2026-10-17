@@ -75,6 +75,116 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _checked_artifact(
+    provenance: dict[str, object],
+    kind: str,
+    function: str,
+    *,
+    expected_path: Path,
+) -> Path:
+    """Check the report's local artifact path and SHA-256 before consuming it."""
+    raw_path = provenance.get(kind)
+    expected_hash = provenance.get(f"{kind}_sha256")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ParseError(f"{function}: missing {kind} path")
+    if not isinstance(expected_hash, str) or re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash) is None:
+        raise ParseError(f"{function}: invalid {kind} SHA-256")
+
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    if not path.is_file():
+        raise ParseError(f"{function}: {kind} file is missing or is not a regular file: {path}")
+    expected_resolved = expected_path.resolve()
+    actual_resolved = path.resolve()
+    if actual_resolved != expected_resolved:
+        raise ParseError(
+            f"{function}: {kind} path does not match the expected baseline artifact "
+            f"(expected {expected_resolved}, report names {actual_resolved})"
+        )
+
+    actual_hash = _hash_file(path)
+    if actual_hash.lower() != expected_hash.lower():
+        raise ParseError(
+            f"{function}: {kind} SHA-256 mismatch "
+            f"(expected {expected_hash}, actual {actual_hash})"
+        )
+    return path
+
+
+def _checked_baseline(
+    report: dict[str, object],
+    *,
+    tag: str,
+    function: str,
+    address: int,
+    expected_pending_words: int,
+    expected_total_words: int,
+    build_dir: Path,
+) -> tuple[Path, Path, elf.ElfFile]:
+    """Validate report identity, baseline shape, and files before parsing ELF."""
+    if report.get("function") != function or report.get("symbol") != function:
+        raise ParseError(f"{function}: match report belongs to another function")
+    if _json_int(report.get("address"), f"{function} report address") != address:
+        raise ParseError(f"{function}: match report has the wrong address")
+    if (
+        report.get("section") != ".text"
+        or report.get("status") != INCONCLUSIVE
+        or report.get("evidence") != "compiled-object"
+        or report.get("exit_code") != 5
+        or report.get("verified_decompilation") is not False
+    ):
+        raise ParseError(f"{function}: match report does not have the expected compiled INCONCLUSIVE baseline")
+
+    match = report.get("match")
+    if not isinstance(match, dict):
+        raise ParseError(f"{function}: match report is missing its match object")
+    expected_matching_words = expected_total_words - expected_pending_words
+    if (
+        match.get("name") != function
+        or _json_int(match.get("address"), f"{function} comparison address") != address
+        or match.get("status") != INCONCLUSIVE
+        or match.get("evidence") != "binary-range"
+        or match.get("total_words") != expected_total_words
+        or match.get("matching_words") != expected_matching_words
+        or match.get("difference_count") != 0
+        or match.get("differences") != []
+        or match.get("relocation_issues") != []
+        or not isinstance(match.get("limitations"), list)
+        or not match["limitations"]
+    ):
+        raise ParseError(f"{function}: match report does not match the expected baseline properties")
+
+    candidate = match.get("candidate")
+    if not isinstance(candidate, dict):
+        raise ParseError(f"{function}: match report is missing candidate details")
+    if _json_int(candidate.get("section_offset"), f"{function} candidate section offset") != 0:
+        raise ParseError(f"{function}: candidate function is not at the expected section offset 0")
+    provenance = report.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ParseError(f"{function}: match report is missing provenance")
+    expected_source = REPO_ROOT / "decomp" / "src" / f"{function}.c"
+    expected_object = build_dir / "matches" / tag / f"{function}.o"
+    source_path = _checked_artifact(
+        provenance, "source", function, expected_path=expected_source
+    )
+    object_path = _checked_artifact(
+        provenance, "object", function, expected_path=expected_object
+    )
+
+    candidate_path = candidate.get("path")
+    if not isinstance(candidate_path, str) or not candidate_path:
+        raise ParseError(f"{function}: match report is missing the candidate object path")
+    candidate_path_obj = Path(candidate_path)
+    if not candidate_path_obj.is_absolute():
+        candidate_path_obj = REPO_ROOT / candidate_path_obj
+    if candidate_path_obj.resolve() != object_path.resolve():
+        raise ParseError(f"{function}: comparison candidate path differs from provenance object")
+
+    # Hash checks above must finish before this parser consumes the candidate.
+    return source_path, object_path, elf.parse(object_path)
+
+
 def _json_int(value: object, label: str) -> int:
     if isinstance(value, bool):
         raise ParseError(f"{label}: boolean is not an integer")
@@ -373,6 +483,27 @@ def _bounded_local_artifact_review(
             }
         )
 
+    candidates = sorted(
+        (
+            {
+                "directory": item["path"],
+                "filename": filename,
+                "classification": "unverified candidate; filename extension is not authenticity evidence",
+            }
+            for item in directory_inventory
+            for filename in item["link_metadata_candidates"]
+        ),
+        key=lambda item: (str(item["directory"]), str(item["filename"])),
+    )
+    evidence_search_status = "CANDIDATES_UNVERIFIED" if candidates else "NO_CANDIDATES"
+    if candidates:
+        finding = (
+            "Candidate linker or symbol artifacts were found, but none has been independently "
+            "validated. No cross-artifact identity is established."
+        )
+    else:
+        finding = "No candidate linker or symbol artifacts were found in the bounded search paths."
+
     generated_context: list[dict[str, object]] = []
     for path, reason in (
         (
@@ -421,30 +552,28 @@ def _bounded_local_artifact_review(
         "scope": "Only the supplied PSP_GAME root, USRDIR, gmodule, module, and SYSDIR immediate entries; no system-wide search or binary execution.",
         "inspected_artifacts": inspected,
         "directory_inventory": directory_inventory,
+        "evidence_search_status": evidence_search_status,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "independent_identity_verified": False,
         "generated_context_rejected_as_independent_evidence": generated_context,
         "related_module_import_review": sibling_imports,
         "independent_original_link_artifact_found": False,
-        "finding": (
-            "No original linker map, original object, debug symbol file, or candidate-to-original "
-            "symbol map was present in the inspected local distribution paths. The available PRXs "
-            "are modules, not link metadata; EBOOT.BIN was identified by signature/hash only and "
-            "was not executed or decrypted."
-        ),
+        "finding": finding,
     }
 
 
 def _candidate_content_observations(
-    original: elf.ElfFile, build_dir: Path
+    original: elf.ElfFile, candidates: dict[str, elf.ElfFile]
 ) -> list[dict[str, object]]:
     """Record observed table/string correlations without elevating them to identity."""
     data = original.section_data(original.require_section(".data"))
     observations: list[dict[str, object]] = []
-    for tag, function, start, data_offset, candidate_symbol in (
-        ("f39c", "func_0000039C", 0x39C, 0x08, "func_0000039C"),
-        ("f414", "func_00000414", 0x414, 0x20, "func_00000414"),
+    for function, start, data_offset, candidate_symbol in (
+        ("func_0000039C", 0x39C, 0x08, "func_0000039C"),
+        ("func_00000414", 0x414, 0x20, "func_00000414"),
     ):
-        report = json.loads((build_dir / "matches" / tag / "report.json").read_text(encoding="utf-8"))
-        candidate = elf.parse(Path(report["provenance"]["object"]))
+        candidate = candidates[function]
         rodata = candidate.section(".rodata")
         if rodata is None:
             continue
@@ -586,12 +715,25 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
     original_resolver = datarefs.module_resolver(original, f"original:{_hash_file(prx_path)}")
     baseline_rows: list[dict[str, object]] = []
     pending_pairs: list[dict[str, object]] = []
+    verified_candidates: dict[str, elf.ElfFile] = {}
     total_words = 0
     matching_words = 0
 
     for tag, function, expected_start, expected_pending_words, expected_total_words in FUNCTIONS:
         report_path = build_dir / "matches" / tag / "report.json"
         report = json.loads(report_path.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            raise ParseError(f"{function}: match report must be a JSON object")
+        _source_path, _object_path, candidate = _checked_baseline(
+            report,
+            tag=tag,
+            function=function,
+            address=expected_start,
+            expected_pending_words=expected_pending_words,
+            expected_total_words=expected_total_words,
+            build_dir=build_dir,
+        )
+        verified_candidates[function] = candidate
         match = report["match"]
         start, end = function_bounds[function]
         if start != expected_start:
@@ -602,10 +744,6 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
         if report["status"] != INCONCLUSIVE or match["difference_count"] != 0 or match["relocation_issues"]:
             raise ParseError(f"{function}: baseline is no longer the expected inconclusive/no-difference result")
 
-        object_path = Path(report["provenance"]["object"])
-        if not object_path.is_absolute():
-            object_path = REPO_ROOT / object_path
-        candidate = elf.parse(object_path)
         candidate_text = candidate.require_section(".text")
         candidate_region_offset = _json_int(match["candidate"]["section_offset"], "candidate section offset")
         byte_count = expected_total_words * 4
@@ -733,6 +871,19 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
     ):
         raise ParseError("the available compiler/loader versions differ from the recorded baseline")
 
+    evidence_review = _bounded_local_artifact_review(prx_path, original, build_dir)
+    if evidence_review["evidence_search_status"] == "CANDIDATES_UNVERIFIED":
+        evidence_reason = (
+            f"The bounded search found {evidence_review['candidate_count']} candidate file(s), "
+            "but filename/extension presence does not authenticate their origin or version and "
+            "does not prove a candidate-symbol link. No cross-artifact identity is established."
+        )
+    else:
+        evidence_reason = (
+            "No candidate linker or symbol artifacts were found in the bounded search paths. "
+            "Generated Seto/Splat outputs are recorded separately and are not independent evidence."
+        )
+
     return {
         "schema_version": 1,
         "purpose": "Auditable projection of the eight current INCONCLUSIVE compiled-object baselines; not a new matcher or a symbol-link verifier.",
@@ -767,10 +918,10 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
             "unresolved_references": len(usage["unresolved"]),
             "report_path": "build/seto012/global-usage.json",
         },
-        "candidate_content_observations": _candidate_content_observations(original, build_dir),
-        "independent_evidence_search": _bounded_local_artifact_review(
-            prx_path, original, build_dir
+        "candidate_content_observations": _candidate_content_observations(
+            original, verified_candidates
         ),
+        "independent_evidence_search": evidence_review,
         "target_evidence_review": [
             {
                 "original_target": {"section": ".text", "offset": "0x34"},
@@ -804,7 +955,9 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
         "identity_conclusion": {
             "independent_cross_artifact_link_found": False,
             "verified_symbol_links_created": 0,
-            "reason": "The PRX is stripped and the bounded local distribution paths contain no original linker map, original object, debug-symbol artifact, or validated candidate-symbol map. Matching table contents/relative destinations and address-derived D_ names are correlations, not independent object-identity evidence. Candidate references to data symbols remain undefined in the compiled ET_REL files.",
+            "evidence_search_status": evidence_review["evidence_search_status"],
+            "candidate_count": evidence_review["candidate_count"],
+            "reason": evidence_reason,
             "classification_change": "none; all eight baselines remain INCONCLUSIVE",
         },
     }
