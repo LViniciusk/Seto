@@ -14,9 +14,11 @@ a unit.
 
 A call or data reference may be encoded differently on the two sides. A caller
 may supply a :data:`CallResolver` for the module's proven call identities or
-separate data-target resolvers for proven section/offset identities. They are
-only consulted when their respective relocation kinds require them; unresolved
-targets become ``INCONCLUSIVE``.
+separate data resolvers for proven section/offset identities. They are only
+consulted when their respective relocation kinds require them; unresolved
+targets become ``INCONCLUSIVE``. A data resolver answers with a
+:class:`~seto.datarefs.DataIdentity`, which carries the artifact the location
+belongs to: two answers in different artifacts are inconclusive, never equal.
 
 The result is deliberately conservative.  Byte equality alone is **not** treated
 as proof of a matching decompilation: whenever the available evidence cannot
@@ -49,7 +51,7 @@ from seto.elf import (
     relocation_mask,
     relocation_type_name,
 )
-from seto.datarefs import DataTarget
+from seto.datarefs import DataIdentity, DataIdentityResolver, DataTarget
 from seto.mips import decode_words
 
 MATCHED = "MATCHED"
@@ -151,7 +153,8 @@ class RelocationSite:
         return relocation_mask(self.type)
 
 
-DataTargetResolver = Callable[[RelocationSite, int], DataTarget | None]
+DataTargetResolver = DataIdentityResolver
+"""Backwards-compatible alias; a resolver answers with a :class:`DataIdentity`."""
 
 
 @dataclass(frozen=True)
@@ -385,6 +388,13 @@ def _describe_pair(low: int | None, sites: dict[int, RelocationSite], index: int
     return f"{site.type_name} alone"
 
 
+def _describe_identity(identity: DataIdentity | None) -> str:
+    """Describe a resolver answer without ever printing a bare location."""
+    if identity is None:
+        return "unresolved"
+    return f"{identity.artifact}:{identity.target.section}+0x{identity.target.offset:x}"
+
+
 def compare(
     original: bytes,
     candidate: bytes,
@@ -414,9 +424,11 @@ def compare(
     proves that both sides name the same destination, proves that they name
     different ones, or leaves the outcome inconclusive.
 
-    Data-target resolvers are optional. When supplied, ``R_MIPS_32`` and paired
-    ``R_MIPS_HI16``/``LO16`` references are compared by canonical section/offset
-    identity. If either side cannot prove a target, the result is
+    Data resolvers are optional. When supplied, ``R_MIPS_32`` and paired
+    ``R_MIPS_HI16``/``LO16`` references are compared by artifact-qualified
+    identity: the two answers must name the *same* artifact before their
+    locations may be compared at all. If either side cannot prove an identity, or
+    the two answers come from different artifacts, the result is
     ``INCONCLUSIVE``; symbol-like spelling or equal numeric addends alone never
     establishes data identity.
     """
@@ -480,6 +492,55 @@ def compare(
             for item in pair_limitations
         )
 
+    def compare_data_identity(
+        index: int,
+        low_index: int | None,
+        identity_a: DataIdentity | None,
+        identity_b: DataIdentity | None,
+        label: str,
+    ) -> None:
+        """Decide one resolved data reference from its artifact-qualified identities.
+
+        A ``DataTarget`` is a location; only a :class:`DataIdentity` carries the
+        artifact it belongs to. Two answers in different artifacts are therefore
+        never treated as one object - they are inconclusive, not a mismatch.
+        """
+        if identity_a is None or identity_b is None:
+            limitations.append(
+                f"word {index}: {label} identity cannot be proven "
+                f"(original: {_describe_identity(identity_a)}; "
+                f"candidate: {_describe_identity(identity_b)})"
+            )
+            return
+        if identity_a.artifact != identity_b.artifact:
+            limitations.append(
+                f"word {index}: {label} resolvers answer in different artifacts "
+                f"({identity_a.artifact!r} vs {identity_b.artifact!r}); a location in one "
+                "file does not name an object in another"
+            )
+            return
+        if identity_a.target != identity_b.target:
+            if low_index is not None and pair_identity_is_inconclusive(index, low_index):
+                limitations.append(
+                    f"word {index}: {label} targets differ, but at least one pair lacks "
+                    "symbol identity; the differing destination is inconclusive"
+                )
+                return
+            record_difference(
+                index,
+                f"{label} target differs "
+                f"({identity_a.target.section}+0x{identity_a.target.offset:x} vs "
+                f"{identity_b.target.section}+0x{identity_b.target.offset:x})",
+            )
+            return
+        resolved_data.append(
+            f"word {index}: {identity_a.target.section}+0x{identity_a.target.offset:x} "
+            f"<=> {identity_b.target.section}+0x{identity_b.target.offset:x}"
+        )
+        count_matching(index)
+        if low_index is not None:
+            count_matching(low_index)
+
     # A HI16 only acquires its value together with the LO16 that resolves it, so
     # pairs are compared as units - before the word-by-word pass - and only when
     # both sides agree on how the pair is formed.
@@ -528,43 +589,17 @@ def compare(
         original_value = combine_hi16_lo16(site_a_hi.addend, site_a_lo.addend)
         candidate_value = combine_hi16_lo16(site_b_hi.addend, site_b_lo.addend)
         if original_data_resolver is not None or candidate_data_resolver is not None:
-            target_a = (
+            identity_a = (
                 None
                 if original_data_resolver is None
                 else original_data_resolver(site_a_hi, original_value)
             )
-            target_b = (
+            identity_b = (
                 None
                 if candidate_data_resolver is None
                 else candidate_data_resolver(site_b_hi, candidate_value)
             )
-            if target_a is None or target_b is None:
-                limitations.append(
-                    f"word {hi_index}: HI16/LO16 data target identity cannot be proven "
-                    f"(original: {target_a!r}; candidate: {target_b!r})"
-                )
-                continue
-            if target_a != target_b:
-                if pair_identity_is_inconclusive(hi_index, low):
-                    limitations.append(
-                        f"word {hi_index}: HI16/LO16 data targets differ, but at least one "
-                        "pair lacks symbol identity; the differing destination is inconclusive"
-                    )
-                    continue
-                record_difference(
-                    hi_index,
-                    "HI16/LO16 data target differs "
-                    f"({target_a.section}+0x{target_a.offset:x} vs "
-                    f"{target_b.section}+0x{target_b.offset:x})",
-                )
-                continue
-            resolved_data.append(
-                f"words {hi_index}/{low}: "
-                f"{target_a.section}+0x{target_a.offset:x} <=> "
-                f"{target_b.section}+0x{target_b.offset:x}"
-            )
-            count_matching(hi_index)
-            count_matching(low)
+            compare_data_identity(hi_index, low, identity_a, identity_b, "HI16/LO16 data")
             continue
 
         if original_value != candidate_value:
@@ -630,36 +665,17 @@ def compare(
         if site_a.type == R_MIPS_32 and (
             original_data_resolver is not None or candidate_data_resolver is not None
         ):
-            target_a = (
+            identity_a = (
                 None
                 if original_data_resolver is None
                 else original_data_resolver(site_a, site_a.addend)
             )
-            target_b = (
+            identity_b = (
                 None
                 if candidate_data_resolver is None
                 else candidate_data_resolver(site_b, site_b.addend)
             )
-            if target_a is None or target_b is None:
-                limitations.append(
-                    f"word {index}: R_MIPS_32 data target identity cannot be proven "
-                    f"(original: {target_a!r}; candidate: {target_b!r})"
-                )
-                continue
-            if target_a != target_b:
-                record_difference(
-                    index,
-                    "R_MIPS_32 data target differs "
-                    f"({target_a.section}+0x{target_a.offset:x} vs "
-                    f"{target_b.section}+0x{target_b.offset:x})",
-                )
-                continue
-            resolved_data.append(
-                f"word {index} ({address + index * 4:#x}): "
-                f"{target_a.section}+0x{target_a.offset:x} <=> "
-                f"{target_b.section}+0x{target_b.offset:x}"
-            )
-            count_matching(index)
+            compare_data_identity(index, None, identity_a, identity_b, "R_MIPS_32 data")
             continue
 
         if site_a.addend != site_b.addend:
@@ -786,6 +802,8 @@ def compare_region(
 __all__ = [
     "BLOCKED",
     "CALL_RELOCATION_TYPES",
+    "DataIdentity",
+    "DataIdentityResolver",
     "DataTarget",
     "DataTargetResolver",
     "EVIDENCE_BINARY_RANGE",

@@ -25,10 +25,15 @@
  *   00000500:  jr    $ra
  *   00000504:  addiu $sp, $sp, 0x30
  *
- * The string the HI16/LO16 pair builds is PROVEN: combined addend 0x00004830
+ * The *location* the HI16/LO16 pair builds is PROVEN: combined addend 0x00004830
  * lands inside `.data` (address 0x4768, size 0xe8) at offset 0xc8, and the
  * fourteen bytes at that file offset (0x4890) really are "/PSP/SAVEDATA/".
- * `seto datarefs` reports exactly that target.
+ * `seto datarefs` reports exactly that target. The reference *itself* is only
+ * INFERRED, though: the stripped module exposes no symbol identity for the
+ * HI16/LO16 pair, so the association rests on relocation order alone and cannot
+ * be presented as proven. The positive location is kept, the limitation is
+ * recorded (`seto datarefs` reports `location: PROVEN`, `pairing: INFERRED`,
+ * `status: INFERRED`).
  *
  * m2c's preliminary output omits the first argument to func_00000894. Ghidra's
  * disassembly shows `$a0` still contains the entry argument at 0x4CC and `$a1`

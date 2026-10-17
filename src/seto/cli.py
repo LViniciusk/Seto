@@ -161,6 +161,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--candidate-symbol-fallback", action="store_true",
         help="allow automatic detection when --candidate-symbol is not found (default: INCONCLUSIVE)",
     )
+    match_parser.add_argument(
+        "--data-map", type=Path, default=None,
+        help=(
+            "JSON file that states, with evidence, which original location each "
+            "candidate data symbol names; without it, data references stay INCONCLUSIVE"
+        ),
+    )
     match_parser.add_argument("--json", action="store_true")
 
     imports_parser = subparsers.add_parser(
@@ -557,6 +564,24 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
     # authority that decides whether both name the same imported function.
     resolver = _call_resolver(original_elf, region.symbol_addresses)
 
+    # Data references are resolved in the *original* module's coordinates.  The
+    # candidate side may only answer through a proven link (``--data-map``); with
+    # no link its references stay unresolved, which keeps the comparison
+    # INCONCLUSIVE instead of trusting an equal section name and offset.
+    try:
+        data_link = _load_data_map(arguments.data_map) if arguments.data_map else None
+    except (ParseError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    artifact = "original"
+    data_resolvers: dict[str, object] = {
+        "original_data_resolver": datarefs.module_resolver(
+            original_elf, artifact, symbols=original_elf.symbols
+        )
+    }
+    if data_link is not None:
+        data_resolvers["candidate_data_resolver"] = data_link.resolver(original_elf, artifact)
+
     # ``seto match`` compares instructions and relocations; it cannot know where
     # the candidate came from, so its evidence is always "binary-range" and a
     # MATCHED result here is never by itself a verified decompilation.  Only
@@ -572,6 +597,7 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
         candidate_section_offset=region.section_offset,
         limitations=region.limitations,
         call_resolver=resolver,
+        **data_resolvers,
     )
 
     if arguments.json:
@@ -712,9 +738,10 @@ def _print_datarefs(report: dict[str, object]) -> None:
                 state = "initialized" if reference["initialized"] else "uninitialized"
                 destination = f"segment {reference['load_segment']} +{reference['load_offset']} ({state})"
             else:
-                destination = "outside the module's load image"
+                destination = "unresolved"
             print(
                 f"  {reference['instruction']} {reference['kind']:<10} "
+                f"pair={reference['pairing']:<14} loc={reference['location']:<8} "
                 f"{reference['status']:<8} {destination}"
             )
 
@@ -869,6 +896,56 @@ def _call_resolver(
         imports.resolve_call_target,
         module_imports=table,
         candidate_symbols=candidate_symbols or None,
+    )
+
+
+def _as_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ParseError(f"{label}: expected an integer or a 0x-prefixed string")
+    try:
+        return int(value, 0) if isinstance(value, str) else value
+    except ValueError as exc:
+        raise ParseError(f"{label}: {value!r} is not an integer") from exc
+
+
+def _load_data_map(path: Path) -> datarefs.SymbolLink:
+    """Read the explicit candidate-symbol -> original-location link.
+
+    The file *is* the evidence: Seto cannot verify that a candidate symbol names a
+    given original object, so the mapping has to be stated deliberately. Each
+    entry names a candidate symbol and the original section/offset it stands for;
+    an optional top-level ``evidence`` string records where the mapping came from.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ParseError(f"{path}: not valid JSON ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise ParseError(f"{path}: the data map must be a JSON object")
+    symbols = payload.get("symbols", [])
+    if not isinstance(symbols, list):
+        raise ParseError(f"{path}: 'symbols' must be a list")
+    entries: dict[str, datarefs.DataTarget] = {}
+    for position, item in enumerate(symbols):
+        label = f"{path}: symbols[{position}]"
+        if not isinstance(item, dict):
+            raise ParseError(f"{label}: each entry must be an object")
+        name = item.get("symbol")
+        section = item.get("section")
+        if not isinstance(name, str) or not name:
+            raise ParseError(f"{label}: 'symbol' must be a non-empty string")
+        if not isinstance(section, str) or not section:
+            raise ParseError(f"{label}: 'section' must be a non-empty string")
+        if "offset" not in item:
+            raise ParseError(f"{label}: 'offset' is required")
+        offset = _as_int(item["offset"], f"{label}.offset")
+        if offset < 0:
+            raise ParseError(f"{label}: 'offset' must not be negative")
+        entries[name] = datarefs.DataTarget(section, offset)
+    evidence = payload.get("evidence")
+    return datarefs.SymbolLink(
+        entries=entries,
+        evidence=(evidence,) if isinstance(evidence, str) else (),
     )
 
 
