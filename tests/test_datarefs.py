@@ -180,6 +180,7 @@ def rel(
         target_section=target_section,
         section_offset=section_offset,
         file_offset=None,
+        raw_offset=section_offset,
     )
 
 
@@ -289,6 +290,59 @@ def test_recover_references_keeps_pairing_and_location_apart(tmp_path: Path) -> 
     assert unknown.status == UNKNOWN
 
     assert set(by_instruction) == {0x00, 0x08, 0x10, 0x18, 0x1C, 0x20}
+
+    # Every raw field of the entries behind a reference survives into the report,
+    # so the pair can be audited without re-reading the file.
+    assert [item.type for item in proven.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
+    assert [item.application for item in proven.relocations] == [".text+0x4", ".text+0x8"]
+    assert [item.raw_offset for item in proven.relocations] == [0x4, 0x8]
+    assert [item.addend for item in proven.relocations] == [0x0, 0x4860]
+    assert {item.format for item in proven.relocations} == {"REL"}
+
+
+def test_the_report_carries_the_relocation_inventory(tmp_path: Path) -> None:
+    parsed = _object(tmp_path)
+    rodata = replace(parsed.require_section(".rodata"), addr=0x4850, size=0x40)
+    sections = tuple(rodata if item.name == ".rodata" else item for item in parsed.sections)
+    relocations = (
+        rel(0x00, elf.R_MIPS_HI16, addend=0x0, symbol="value"),
+        rel(0x04, elf.R_MIPS_LO16, addend=0x1900, symbol="value"),
+    )
+    module = _module(parsed, sections=sections, relocations=relocations)
+
+    report = build_reference_report(module, ".text", [("func_a", 0, 0x8)])
+    inventory = report["relocation_inventory"]
+    assert inventory["formats"] == ["REL"]
+    assert inventory["standard_entries"] == 2
+    assert inventory["psp_entries"] == 0
+    assert inventory["types"] == {"R_MIPS_HI16": 1, "R_MIPS_LO16": 1}
+    assert inventory["unknown_types"] == []
+    assert inventory["compressed_sections"] == []
+
+    (reference,) = report["functions"][0]["references"]
+    assert reference["relocations"][0] == {
+        "type": "R_MIPS_HI16",
+        "format": "REL",
+        "site": "0x0",
+        "application": ".text+0x0",
+        "source_section": None,
+        "raw_offset": "0x0",
+        "raw_info": "0x00000000",
+        "segment_index": 0,
+        "relative_index": 0,
+        "addend": "0x00000000",
+    }
+
+
+def test_the_inventory_records_an_unknown_relocation_type(tmp_path: Path) -> None:
+    # An unrecognised type is an inventory result, not a silence: the report has
+    # to say that a relocation was not understood.
+    parsed = _object(tmp_path)
+    module = _module(parsed, relocations=(rel(0x00, 0x63),))
+    report = build_reference_report(module, ".text", [("func_a", 0, 0x8)])
+    inventory = report["relocation_inventory"]
+    assert inventory["unknown_types"] == ["R_MIPS_UNKNOWN(99)"]
+    assert inventory["types"] == {"R_MIPS_UNKNOWN(99)": 1}
 
 
 def test_reference_report_groups_by_function_deterministically(tmp_path: Path) -> None:

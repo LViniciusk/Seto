@@ -725,6 +725,18 @@ def _command_datarefs(arguments: argparse.Namespace, settings: Settings) -> int:
 
 def _print_datarefs(report: dict[str, object]) -> None:
     print(f"{report['prx']} :: {report['section']}")
+    inventory = report.get("relocation_inventory") or {}
+    formats = ", ".join(inventory.get("formats", ())) or "none"
+    print(
+        f"relocation formats: {formats} "
+        f"({inventory.get('psp_entries', 0)} PSP, {inventory.get('standard_entries', 0)} standard)"
+    )
+    types = inventory.get("types", {})
+    counts = ", ".join(f"{name} x{count}" for name, count in sorted(types.items()))
+    print(f"relocation types: {counts or 'none'}")
+    unknown = inventory.get("unknown_types", ())
+    if unknown:
+        print(f"UNKNOWN relocation types: {', '.join(unknown)}")
     for entry in report["functions"]:
         references = entry["references"]
         if not references:
@@ -739,11 +751,15 @@ def _print_datarefs(report: dict[str, object]) -> None:
                 destination = f"segment {reference['load_segment']} +{reference['load_offset']} ({state})"
             else:
                 destination = "unresolved"
+            relocations = reference["relocations"]
+            fmt = relocations[0]["format"] if relocations else "?"
             print(
-                f"  {reference['instruction']} {reference['kind']:<10} "
+                f"  {reference['instruction']} {reference['kind']:<10} fmt={fmt:<4} "
                 f"pair={reference['pairing']:<14} loc={reference['location']:<8} "
                 f"{reference['status']:<8} {destination}"
             )
+            if reference["unresolved"] is not None:
+                print(f"      unresolved: {reference['unresolved']}")
 
 
 def _print_imports(
