@@ -44,7 +44,7 @@ Status vocabulary, used strictly:
 | `func_00000634` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 42/44; buffer-object identity unproven |
 | `func_00000508` reconstruction | real compile + `scripts/match_function.py` | **NONMATCHING**, 59/75; one scheduling slot differs (words 64–67) |
 | `func_00000704` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 40/60; state/pointer object identities unproven |
-| `func_00000084` classification | `seto functions` + real Ghidra + a compiled probe | **CLASSIFIED** (8 bytes, `jr $ra; nop`; not modelled as a function, no C source) |
+| `func_00000084` classification | `seto functions` + real Ghidra + a compiled probe | **no C reconstruction**: 8 bytes, `jr $ra; nop`; not modelled as a function, no C source |
 | Global data-reference aggregation | `seto.datarefs.build_global_usage` / `scripts/global_usage.py` | **OK** (15 demonstrated locations, 6 order-only references kept visible) |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
@@ -889,6 +889,8 @@ decompilada aqui.
 
 ## SETO-DECOMP-011 — estado compartilhado e as funções restantes
 
+*(Shared State Reconstruction & Remaining Functions.)*
+
 A rodada fecha o conjunto `.text`: reconstrói as três funções que ainda tinham
 corpo a descrever (`0x634`, `0x508`, `0x704`) e **classifica** o fragmento de
 `0x84`, sem forçar uma função C para ele. Nenhuma abstração nova entrou no
@@ -985,8 +987,11 @@ tipo inferido.
   incrementa apenas se o resultado for diferente de zero; o caso 3 chama
   `func_00000358()` e incrementa; o caso 4 **retorna 1** (o `beql` salta por cima
   do bloco `move $v0, $zero`); todo o resto retorna 0. Três formas são forçadas:
-  os guardas são `... < 0` (o compilador usa `bgezl`/`beq` prováveis e inverter o
-  sinal não reproduz as palavras); cada incremento **relê** a palavra de
+  os guardas são `... < 0` (o compilador emite `bgezl` para os dois, *branch
+  likely* com *delay slot* anulado quando o desvio não é tomado; inverter o sinal
+  não reproduz as palavras — o guarda do caso 2 é um `beqz` simples); cada
+  incremento **relê** a palavra
+  de
   `0x604860` e grava a soma, logo a fonte lê o global em vez de manter uma cópia
   local viva através das chamadas; e o argumento de `func_00000508` é o **valor**
   carregado de `0x604b9c`.
@@ -1013,7 +1018,7 @@ novas: `0x634` (176 endereços, 44 instruções), `0x508` (300, 75) e `0x704` (2
 |---|---|---|---:|---|---|---|---|
 | `func_00000634` | `decomp/src/func_00000634.c` | OK | 42/44 | **INCONCLUSIVE** | `c4e59cac93bb8d97611b0e48ae6d036828077690217bc46d96fba7f29dcf9dab` | `1446722fce9fb280f73488e3056dc360ba311ff6b6a661933de5b56e2d259190` |
 | `func_00000508` | `decomp/src/func_00000508.c` | OK | 59/75 | **NONMATCHING** | `c5b7404a6a51e265980cc2bb685bf8422e3908d7ed26a99c0ec339e2b61ddb00` | `3a81b36c4fcb224fa077057b24543aff375c85f7cb2db5e765819e1ed5803f2f` |
-| `func_00000704` | `decomp/src/func_00000704.c` | OK | 40/60 | **INCONCLUSIVE** | `f3d36449bf372d194197e6b4d7f31ca8b6317fa0232d502c04fabad7984df65f` | `1b192860b34439b40c4caeeb3562869207e0e0dbcb9030b3f17dff7bbb78b1ba` |
+| `func_00000704` | `decomp/src/func_00000704.c` | OK | 40/60 | **INCONCLUSIVE** | `f3d36449bf372d194197e6b4d7f31ca8b6317fa0232d502c04fabad7984df65f` | `d541eedf6a206f96c30869697c2e089987c4c0d0580c68a6da9f9069796623d5` |
 
 Os `Source SHA-256` são a revisão atual das fontes. As três foram recompiladas
 depois do último ajuste de comentários: os `Object SHA-256` permaneceram

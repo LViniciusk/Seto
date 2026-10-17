@@ -62,9 +62,10 @@
  *    the comparison chain in the reverse of the source order. The observed
  *    chain here is 4, 3, 2, 1, so the source order is 1, 2, 3, 4.
  *  * the sense of the two guards. `func_00000278() < 0` and
- *    `func_00000508(...) < 0` compile to `bgezl`/`beql`-style "branch likely"
- *    pairs whose delay slot is nullified when the branch is not taken; writing
- *    the guards as `>= 0` inverts the branch and does not reproduce the words.
+ *    `func_00000508(...) < 0` compile to `bgezl` (branch-likely, delay slot
+ *    nullified when the branch is not taken); writing the guards as `>= 0`
+ *    inverts the branch and does not reproduce the words. The case-2 guard is a
+ *    plain `beqz`, so only the two `< 0` tests are branch-likely here.
  *  * the state is re-read from memory for every increment. Each `state++` path
  *    reloads `0x4860` and stores the sum, so the source reads the global word,
  *    not a local copy kept live across the calls:
