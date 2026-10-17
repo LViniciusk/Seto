@@ -28,22 +28,25 @@
  * The *location* the HI16/LO16 pair builds is PROVEN: combined addend 0x00004830
  * lands inside `.data` (address 0x4768, size 0xe8) at offset 0xc8, and the
  * fourteen bytes at that file offset (0x4890) really are "/PSP/SAVEDATA/".
- * `seto datarefs` reports exactly that target. The reference *itself* is only
- * INFERRED, though: the stripped module exposes no symbol identity for the
- * HI16/LO16 pair, so the association rests on relocation order alone and cannot
- * be presented as proven. The positive location is kept, the limitation is
- * recorded (`seto datarefs` reports `location: PROVEN`, `pairing: INFERRED`,
- * `status: INFERRED`).
+ * `seto datarefs` reports exactly that target. The HI16/LO16 association is now
+ * PROVEN independently of relocation order: the LUI defines `$a1`, the
+ * intervening `move` leaves it intact, and the LO16 `addiu` consumes `$a1` in the
+ * `jal` delay slot. That proves the pairing and numeric location, but not that
+ * candidate symbol `D_00004830` is the original string object.
  *
  * m2c's preliminary output omits the first argument to func_00000894. Ghidra's
  * disassembly shows `$a0` still contains the entry argument at 0x4CC and `$a1`
  * is set to the path in the delay slot, so this reconstruction follows the
  * instruction stream, not m2c's omitted argument. The helper prototypes and
  * the argument's semantic type remain provisional; the stripped PRX does not
- * supply their source declarations. No `mwccpsp` is available, so this C is
- * UNVERIFIED and must not be counted as a matching decompilation.
+ * supply their source declarations.
  *
- * Status: UNVERIFIED (compilation/matching BLOCKED: no licensed mwccpsp).
+ * REAL COMPILE + MATCH: Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`.
+ * INCONCLUSIVE, 18/20 words, 0 differences, 0 relocation issues. The register
+ * pairing is proven, but the compiled object's undefined `D_00004830` symbol is
+ * not independently linked to `.data+0xc8`. A manually declared data map is
+ * advisory only and cannot convert this into MATCHED. The PRX records compiler
+ * 2.4.1.01; no equivalence with that historical version is claimed.
  */
 
 typedef unsigned char u8;

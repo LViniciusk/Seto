@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_wibo_executes_the_psp_compiler_and_produces_an_elf32_mips_object(tmp_path) -> None:
-    settings = load_settings(REPO_ROOT / "config" / "seto.toml")
+    wsl_profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
+    config = (
+        wsl_profile
+        if os.name == "posix" and wsl_profile.is_file()
+        else REPO_ROOT / "config" / "seto.toml"
+    )
+    settings = load_settings(config)
     detected = {status.name: status for status in detect_all(settings)}
     if detected["wibo"].state == NOT_APPLICABLE:
         pytest.skip("wibo is only applicable on POSIX hosts")

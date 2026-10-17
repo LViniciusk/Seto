@@ -24,20 +24,17 @@
  * back-to-back calls with no data flow between them, so the reconstruction is
  * unambiguous: a non-leaf function with a 0x10-byte frame.
  *
- * EVIDENCE:
- *   The emitted splat `text.s` was checked against the original bytes, Ghidra
- *   12.1.3 automatically loaded the real PRX with Allegrex and independently
- *   disassembled this 13-instruction range, and m2c produced the same four-call
- *   C body below.  These checks confirm the reconstruction is a plausible,
- *   minimal representation; they do not replace a real compile-and-match.
+ * REAL COMPILE + MATCH:
+ *   Metrowerks 3.0.1 build 219, flags `-O4,p -sdatathreshold 0`:
+ *   MATCHED, 13/13 words, 0 differences, 0 relocation issues, 0 limitations.
+ *   All four calls resolve independently. On WSL2 the licensed compiler runs
+ *   through wibo. The detailed report and object remain in ignored `build/`.
  *
- * STATUS: UNVERIFIED (compilation/matching BLOCKED)
- *   The four imported identities are PROVEN (library + NID, cross-checked
- *   against the trampoline bytes), but `seto match` can only prove this file
- *   byte-for-byte once it is compiled with the original toolchain (mwccpsp,
- *   `MW MIPS C Compiler (2.4.1.01)`).  mwccpsp is proprietary and is not present
- *   in the reference environment. Run `python scripts/match_function.py ...`
- *   once a licensed copy is supplied.
+ * This is a verified decompilation for the observed compiler and flags. The PRX
+ * itself records `MW MIPS C Compiler (2.4.1.01)`, so equivalence with that
+ * historical version is not claimed. The compiler is proprietary and is not
+ * part of Seto. Its harmless `MWCIncludes` warning does not prevent compilation
+ * or matching; Seto does not create a fake environment variable to hide it.
  *
  * See docs/decomp-progress.md for the full report.
  */

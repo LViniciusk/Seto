@@ -347,8 +347,9 @@ verifiable log of a local execution, not an unforgeable attestation.
 ## Repository layout
 
 ```text
-src/seto/            stdlib-only package (sfo, elf, mips, matching, imports, split, inventory, toolchain, smoke, cli)
+src/seto/            stdlib-only package (sfo, elf, psp_reloc, mips, matching, datarefs, imports, split, inventory, toolchain, smoke, cli)
 config/seto.toml     baseline values and tool paths
+config/wsl/          WSL profile template; machine-specific copy is git-ignored
 config/toolchain.lock pinned open-tool versions, URLs and release digests
 config/splat/        generated splat configs (verified by `seto split --run-splat`)
 decomp/src/          reconstructed C

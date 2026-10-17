@@ -51,6 +51,7 @@ SECTION_HEADER_SIZE = 0x28
 PROGRAM_HEADER_SIZE = 0x20
 SYMBOL_SIZE = 0x10
 REL_ENTRY_SIZE = 0x08
+WORD_SIZE = 4
 
 STT_NOTYPE = 0
 STT_OBJECT = 1
@@ -65,6 +66,7 @@ SHN_COMMON = 0xFFF2
 SHN_XINDEX = 0xFFFF
 
 R_MIPS_NONE = 0
+R_MIPS_16 = 1
 R_MIPS_32 = 2
 R_MIPS_REL32 = 3
 R_MIPS_26 = 4
@@ -102,7 +104,7 @@ SECTION_TYPE_NAMES: dict[int, str] = {
 
 RELOCATION_TYPE_NAMES: dict[int, str] = {
     R_MIPS_NONE: "R_MIPS_NONE",
-    1: "R_MIPS_16",
+    R_MIPS_16: "R_MIPS_16",
     R_MIPS_32: "R_MIPS_32",
     R_MIPS_REL32: "R_MIPS_REL32",
     R_MIPS_26: "R_MIPS_26",
@@ -124,6 +126,23 @@ RELOCATION_SECTION_TYPES = (SHT_REL, SHT_MIPS_PSPREL, SHT_MIPS_PSPREL2)
 
 def relocation_type_name(value: int) -> str:
     return RELOCATION_TYPE_NAMES.get(value, f"R_MIPS_UNKNOWN({value})")
+
+
+def decode_psp_relocation_info(info: int) -> tuple[int, int, int, int]:
+    """Decode PSP ``r_info`` once: type, application segment, relative segment,
+    and reserved bits.
+
+    PPSSPP uses the low nibble for the relocation type and one byte each for the
+    two segment indices.  Bits outside those fields are retained as a diagnostic
+    value; they are not allowed to invent an ELF relocation type.
+    """
+    fields = 0x000F | (0xFF << 8) | (0xFF << 16)
+    return (
+        info & 0x0F,
+        (info >> 8) & 0xFF,
+        (info >> 16) & 0xFF,
+        info & (~fields & 0xFFFFFFFF),
+    )
 
 
 def _sign_extend_16(value: int) -> int:
@@ -250,7 +269,27 @@ class Symbol:
 
 @dataclass(frozen=True)
 class Relocation:
-    """A single ``Elf32_Rel`` entry, fully resolved and validated."""
+    """A single relocation entry, fully resolved and validated.
+
+    ``format`` names the layout the entry was read with, because the same raw
+    fields mean different things in each:
+
+    * ``"REL"`` - a standard ``SHT_REL`` table.  ``r_info`` is
+      ``(symbol_index << 8) | type`` and ``r_offset`` is the address the entry
+      patches.
+    * ``"PSP"`` - a PSP ``SHT_PSPREL`` (``0x700000A0``) table.  ``r_info`` is
+      ``(relative_segment << 16) | (segment << 8) | type``; there is no symbol
+      index (so ``symbol_index`` is ``0``), and ``r_offset`` is an offset
+      *inside* the named segment.  ``offset`` is then
+      ``segments[segment].vaddr + r_offset`` - the module address the loader
+      patches - while ``psp_reloc`` holds the field-level evidence.
+
+    A compressed ``SHT_PSPREL2`` stream is *not* a sequence of ``Elf32_Rel``
+    entries, so no ``Relocation`` is produced for it at all; the parser records
+    an observation instead of inventing values.
+
+    ``info`` keeps the raw ``r_info``, so no field is lost.
+    """
 
     offset: int
     type: int
@@ -260,6 +299,14 @@ class Relocation:
     target_section: str | None
     section_offset: int | None
     file_offset: int | None
+    info: int = 0
+    format: str = "REL"
+    segment_index: int = 0
+    relative_index: int = 0
+    source_section: str | None = None
+    raw_offset: int = 0
+    application_valid: bool = True
+    addend_valid: bool = True
 
     @property
     def type_name(self) -> str:
@@ -273,11 +320,19 @@ class Relocation:
         return {
             "offset": self.offset,
             "type": self.type_name,
+            "format": self.format,
+            "info": f"0x{self.info:08x}",
+            "segment_index": self.segment_index,
+            "relative_index": self.relative_index,
+            "raw_offset": f"0x{self.raw_offset:x}",
             "symbol_index": self.symbol_index,
             "symbol": self.symbol,
             "addend": self.addend,
             "target_section": self.target_section,
             "section_offset": self.section_offset,
+            "source_section": self.source_section,
+            "application_valid": self.application_valid,
+            "addend_valid": self.addend_valid,
         }
 
 
@@ -437,7 +492,7 @@ def _parse(reader: BytesReader, expected_machine: int | None) -> ElfFile:
     segments = _parse_segments(reader, header)
     sections, shstrtab = _parse_sections(reader, header)
     symbols = _parse_symbols(reader, sections)
-    relocations = _parse_relocations(reader, header, sections, symbols, observations)
+    relocations = _parse_relocations(reader, header, sections, segments, symbols, observations)
 
     by_name = {section.name: section for section in sections if section.name}
     relocations_by_target: dict[str, list[Relocation]] = {}
@@ -486,6 +541,11 @@ def _parse_segments(reader: BytesReader, header: ElfHeader) -> tuple[Segment, ..
             flags=reader.u32(base + 0x18),
             align=reader.u32(base + 0x1C),
         )
+        if segment.filesz > segment.memsz:
+            raise ParseError(
+                f"{reader.name}: program header {index} has p_filesz (0x{segment.filesz:x}) "
+                f"larger than p_memsz (0x{segment.memsz:x}); its bytes cannot be mapped"
+            )
         if segment.filesz:
             reader.span(segment.offset, segment.filesz)
         segments.append(segment)
@@ -611,6 +671,7 @@ def _parse_relocations(
     reader: BytesReader,
     header: ElfHeader,
     sections: tuple[Section, ...],
+    segments: tuple[Segment, ...],
     symbols: tuple[Symbol, ...],
     observations: list[str],
 ) -> tuple[Relocation, ...]:
@@ -618,10 +679,19 @@ def _parse_relocations(
     for section in sections:
         if section.type not in RELOCATION_SECTION_TYPES:
             continue
+        if section.type == SHT_MIPS_PSPREL2:
+            # A compressed PSPREL2 stream is not a sequence of Elf32_Rel entries.
+            # Reading it with this layout would invent values, so it is reported
+            # instead of decoded (this module has none).
+            observations.append(
+                f"relocation section {section.name!r}: compressed SHT_PSPREL2 is not decoded"
+            )
+            continue
         if section.size % REL_ENTRY_SIZE:
             raise ParseError(
                 f"{reader.name}: relocation section {section.name!r} size is not a multiple of {REL_ENTRY_SIZE}"
             )
+        psp = section.type == SHT_MIPS_PSPREL
         target = _relocation_target(header, section, sections)
         if target is None:
             observations.append(
@@ -630,13 +700,78 @@ def _parse_relocations(
         count = section.size // REL_ENTRY_SIZE
         for index in range(count):
             base = section.offset + index * REL_ENTRY_SIZE
-            offset = reader.u32(base)
+            raw_offset = reader.u32(base)
             info = reader.u32(base + 0x04)
-            rel_type = info & 0xFF
-            symbol_index = info >> 8
+            addend_valid = True
+            if psp:
+                # PSP r_info is (relative << 16) | (segment << 8) | type.  It is
+                # not a symbol index, and r_offset is an offset *inside* the named
+                # segment, so the patched address is segment.vaddr + r_offset.
+                rel_type, segment_index, relative_index, reserved = (
+                    decode_psp_relocation_info(info)
+                )
+                if reserved:
+                    observations.append(
+                        f"relocation section {section.name!r}, entry {index}: "
+                        f"PSP r_info has reserved bits set (0x{reserved:08x})"
+                    )
+                symbol_index = 0
+                offset, application_valid = _psp_address(
+                    segments, segment_index, raw_offset, section.name, observations
+                )
+            else:
+                rel_type = info & 0xFF
+                symbol_index = info >> 8
+                segment_index = 0
+                relative_index = 0
+                offset = raw_offset
+                application_valid = True
             symbol = _symbol_name_for(symbols, symbol_index)
-            section_offset = offset - target.addr if target is not None else None
-            file_offset = _resolve_file_offset(header, sections, target, offset)
+            if not application_valid:
+                section_offset = None
+                file_offset = None
+                addend_valid = False
+            elif target is not None and not _section_contains_word(target, offset):
+                # The full word must belong to the named target section. Otherwise
+                # using its file offset could read bytes from the adjacent section.
+                observations.append(
+                    f"relocation section {section.name!r}: four-byte application at "
+                    f"0x{offset:x} falls outside target section {target.name!r} "
+                    f"[0x{target.addr:x}, 0x{target.end:x})"
+                )
+                section_offset = None
+                file_offset = None
+                addend_valid = False
+            else:
+                section_offset = offset - target.addr if target is not None else None
+                if psp:
+                    segment = segments[segment_index]
+                    word_end = raw_offset + WORD_SIZE
+                    if raw_offset < segment.filesz < word_end:
+                        observations.append(
+                            f"relocation section {section.name!r}: four-byte word at "
+                            f"r_offset 0x{raw_offset:x} straddles p_filesz "
+                            f"0x{segment.filesz:x}; in-place addend is unresolved"
+                        )
+                        file_offset = None
+                        addend_valid = False
+                    elif raw_offset >= segment.filesz:
+                        # A complete word in the PT_LOAD zero-fill tail starts at
+                        # zero, but it has no file offset and must not borrow bytes
+                        # from a section's unrelated file-backed data.
+                        file_offset = None
+                        observations.append(
+                            f"relocation section {section.name!r}: four-byte word at "
+                            f"r_offset 0x{raw_offset:x} is in the zero-filled PT_LOAD tail"
+                        )
+                    else:
+                        file_offset = _resolve_file_offset(header, sections, target, offset)
+                        if file_offset is None:
+                            addend_valid = False
+                else:
+                    file_offset = _resolve_file_offset(header, sections, target, offset)
+                    if file_offset is None and (target is None or not target.is_nobits):
+                        addend_valid = False
             word = reader.u32(file_offset) if file_offset is not None else 0
             relocations.append(
                 Relocation(
@@ -648,9 +783,68 @@ def _parse_relocations(
                     target_section=target.name if target is not None else None,
                     section_offset=section_offset,
                     file_offset=file_offset,
+                    info=info,
+                    format="PSP" if psp else "REL",
+                    segment_index=segment_index,
+                    relative_index=relative_index,
+                    source_section=section.name or None,
+                    raw_offset=raw_offset,
+                    application_valid=application_valid,
+                    addend_valid=addend_valid,
                 )
             )
     return tuple(relocations)
+
+
+def _psp_address(
+    segments: tuple[Segment, ...],
+    segment_index: int,
+    raw_offset: int,
+    section_name: str,
+    observations: list[str],
+) -> tuple[int, bool]:
+    """The module address a PSP relocation patches: ``segment.vaddr + r_offset``.
+
+    The raw offset is retained for diagnosis if the segment or its range is
+    invalid, but ``False`` prevents that fallback from becoming a section/file
+    location.  Address overflow is rejected rather than wrapped into another
+    section.
+    """
+    if segment_index >= len(segments):
+        observations.append(
+            f"relocation section {section_name!r}: entry names segment {segment_index}, "
+            f"but the file declares {len(segments)}"
+        )
+        return raw_offset & 0xFFFFFFFF, False
+    segment = segments[segment_index]
+    if segment.type != PT_LOAD:
+        observations.append(
+            f"relocation section {section_name!r}: entry names segment {segment_index}, "
+            f"which is not PT_LOAD"
+        )
+        return raw_offset & 0xFFFFFFFF, False
+    word_end = raw_offset + WORD_SIZE
+    if word_end > segment.memsz:
+        observations.append(
+            f"relocation section {section_name!r}: four-byte application at "
+            f"r_offset 0x{raw_offset:x} exceeds segment {segment_index} "
+            f"p_memsz 0x{segment.memsz:x}"
+        )
+        return raw_offset & 0xFFFFFFFF, False
+    segment_end = segment.vaddr + word_end
+    if segment_end > 0x100000000:
+        observations.append(
+            f"relocation section {section_name!r}: four-byte application at "
+            f"r_offset 0x{raw_offset:x} exceeds the 32-bit address space"
+        )
+        return raw_offset & 0xFFFFFFFF, False
+    if segment.vaddr:
+        observations.append(
+            f"relocation section {section_name!r}: segment {segment_index} has vaddr "
+            f"0x{segment.vaddr:x}; r_offset is segment-relative and was rebased"
+        )
+    address = segment.vaddr + raw_offset
+    return address, True
 
 
 def _symbol_name_for(symbols: tuple[Symbol, ...], index: int) -> str | None:
@@ -689,18 +883,31 @@ def _resolve_file_offset(
     offset: int,
 ) -> int | None:
     if target is not None:
-        if target.is_nobits:
+        if target.is_nobits or not _section_contains_word(target, offset):
             return None
         return target.offset + (offset - target.addr)
-    # No declared target: fall back to the smallest allocated section that
-    # contains the address. Non-allocated sections (.shstrtab, .comment) often
-    # carry addr == 0 and must not shadow .text.
+    # No declared target: fall back only when the entire word belongs to exactly
+    # one allocated file-backed section. Non-allocated sections (.shstrtab,
+    # .comment) often carry addr == 0 and must not shadow .text.
     candidates = [
         section
         for section in sections
-        if section.is_allocated and not section.is_nobits and section.contains_address(offset)
+        if section.is_allocated
+        and not section.is_nobits
+        and _section_contains_word(section, offset)
     ]
-    if not candidates:
+    if len(candidates) != 1:
         return None
-    section = min(candidates, key=lambda item: item.size)
+    section = candidates[0]
     return section.offset + (offset - section.addr)
+
+
+def _section_contains_word(section: Section, address: int) -> bool:
+    """Whether all four bytes at ``address`` belong to ``section`` and ELF32."""
+    end = address + WORD_SIZE
+    return (
+        0 <= address <= 0xFFFFFFFF
+        and end <= 0x100000000
+        and section.addr <= address
+        and end <= section.end
+    )

@@ -16,6 +16,7 @@ from seto.toolchain import (
     READY,
     TOOL_SPECS,
     Capability,
+    RunResult,
     Settings,
     ToolStatus,
     detect_all,
@@ -271,6 +272,28 @@ def test_the_summary_keeps_the_legacy_state_and_adds_the_capability() -> None:
     ]
 
 
+def test_compiler_summary_separates_loader_version_probe_and_compile() -> None:
+    status = ToolStatus(
+        "mwccpsp",
+        "compiler",
+        True,
+        path="/tools/mwccpsp.exe",
+        version="Metrowerks 3.0.1 build 219",
+        state=READY,
+        capabilities=(Capability("compile", READY, "produced ELF32 MIPS"),),
+        loader="/tools/wibo",
+        version_probe=Capability("version-probe", READY, "via wibo"),
+    )
+    summary = status.summary()
+    assert summary["path"] == "/tools/mwccpsp.exe"
+    assert summary["loader"] == "/tools/wibo"
+    assert summary["version_probe"]["state"] == READY
+    assert summary["capabilities"] == [
+        {"name": "compile", "state": READY, "detail": "produced ELF32 MIPS"}
+    ]
+    assert "version probe via /tools/wibo" in status.line()
+
+
 def test_find_tool_uses_the_environment_variable(tmp_path) -> None:
     fake = tmp_path / "node"
     fake.write_bytes(b"")
@@ -292,6 +315,42 @@ def test_find_tool_probes_the_version() -> None:
     assert status.found
     assert status.version is not None
     assert status.version.startswith("Python")
+
+
+def test_mwcc_version_probe_runs_through_the_selected_win32_loader(tmp_path, monkeypatch) -> None:
+    compiler = tmp_path / "mwccpsp.exe"
+    loader = tmp_path / "wibo"
+    compiler.write_bytes(b"PE fixture")
+    loader.write_bytes(b"loader fixture")
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        arguments = tuple(str(item) for item in argv)
+        calls.append(arguments)
+        return RunResult(
+            arguments,
+            0,
+            "Metrowerks C/C++ Compiler for MIPS/PSP.\nVersion 3.0.1 build 219\n",
+            "",
+        )
+
+    monkeypatch.setattr("seto.toolchain.run", fake_run)
+    spec = next(spec for spec in TOOL_SPECS if spec.name == "mwccpsp")
+    status = find_tool(
+        spec,
+        str(compiler),
+        env={},
+        platform="posix",
+        version_loader=(str(loader),),
+    )
+    assert status.found
+    assert status.path == str(compiler)
+    assert status.loader == str(loader)
+    assert status.version == (
+        "Metrowerks C/C++ Compiler for MIPS/PSP. (Version 3.0.1 build 219)"
+    )
+    assert status.version_probe is not None and status.version_probe.state == READY
+    assert calls == [(str(loader), str(compiler))]
 
 
 def test_find_tool_reports_missing_when_nothing_matches() -> None:

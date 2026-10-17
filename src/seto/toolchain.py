@@ -202,6 +202,11 @@ class ToolStatus:
     state: str = MISSING
     #: What the tool was shown to do (filled in by a smoke test).
     capabilities: tuple[Capability, ...] = ()
+    #: Loader used for a non-native version probe (compiler executable path stays
+    #: in ``path`` and the actual compile capability stays in ``capabilities``).
+    loader: str | None = None
+    #: Version probing is diagnostic and separate from functional capability.
+    version_probe: Capability | None = None
 
     @property
     def detection(self) -> str:
@@ -221,6 +226,8 @@ class ToolStatus:
             "version": self.version,
             "reason": self.reason,
             "capabilities": [item.summary() for item in self.capabilities],
+            "loader": self.loader,
+            "version_probe": None if self.version_probe is None else self.version_probe.summary(),
         }
 
     def line(self) -> str:
@@ -228,6 +235,12 @@ class ToolStatus:
         if self.found:
             version = f"  ({self.version})" if self.version else ""
             detail = f"{self.path}{version}"
+            if self.reason:
+                detail += f" [{self.reason}]"
+        if self.loader:
+            detail += f" [version probe via {self.loader}]"
+        if self.version_probe is not None and self.version_probe.state != READY:
+            detail += f" [version probe {self.version_probe.state}: {self.version_probe.detail}]"
         return f"{self.name:<9} {self.state:<15}{detail}"
 
     def with_capabilities(self, capabilities: tuple[Capability, ...]) -> ToolStatus:
@@ -242,6 +255,8 @@ class ToolStatus:
             self.reason,
             state=state,
             capabilities=capabilities,
+            loader=self.loader,
+            version_probe=self.version_probe,
         )
 
 
@@ -438,6 +453,7 @@ def find_tool(
     env: Mapping[str, str] | None = None,
     probe: bool = True,
     platform: str | None = None,
+    version_loader: Sequence[str | Path] = (),
 ) -> ToolStatus:
     """Locate ``spec`` through config, then environment, then ``PATH``.
 
@@ -463,7 +479,14 @@ def find_tool(
         if resolved.is_dir():
             resolved = _resolve_in_directory(spec, resolved) or resolved
         if resolved.is_file():
-            return _status_with_version(spec, resolved, probe, applicable=applicable)
+            return _status_with_version(
+                spec,
+                resolved,
+                probe,
+                applicable=applicable,
+                version_loader=version_loader,
+                platform=platform or platform_family(),
+            )
         return ToolStatus(
             spec.name,
             spec.kind,
@@ -475,7 +498,14 @@ def find_tool(
     for name in spec.names:
         found = shutil.which(name)
         if found:
-            return _status_with_version(spec, Path(found), probe, applicable=applicable)
+            return _status_with_version(
+                spec,
+                Path(found),
+                probe,
+                applicable=applicable,
+                version_loader=version_loader,
+                platform=platform or platform_family(),
+            )
     reason = (
         f"not needed on this platform (needed on {'/'.join(spec.applies_to)})"
         if not applicable
@@ -493,7 +523,13 @@ def _resolve_in_directory(spec: ToolSpec, directory: Path) -> Path | None:
 
 
 def _status_with_version(
-    spec: ToolSpec, path: Path, probe: bool, *, applicable: bool = True
+    spec: ToolSpec,
+    path: Path,
+    probe: bool,
+    *,
+    applicable: bool = True,
+    version_loader: Sequence[str | Path] = (),
+    platform: str = "nt",
 ) -> ToolStatus:
     """Describe a located executable, probing it only when that is useful."""
     if not applicable:
@@ -507,13 +543,35 @@ def _status_with_version(
         )
     if not probe:
         return ToolStatus(spec.name, spec.kind, True, path=str(path), state=INSTALLED)
+    loader = tuple(str(item) for item in version_loader)
+    if spec.name == "mwccpsp" and platform == "posix" and not loader:
+        return ToolStatus(
+            spec.name,
+            spec.kind,
+            True,
+            path=str(path),
+            reason="version probe skipped: no Win32 loader (wibo or wine) is available",
+            state=INSTALLED,
+            version_probe=Capability(
+                "version-probe", BLOCKED, "no Win32 loader (wibo or wine) is available"
+            ),
+        )
     arguments = () if spec.version_args is None else spec.version_args
-    result = run([path, *arguments], timeout=VERSION_TIMEOUT, max_output=4096)
+    result = run([*loader, path, *arguments], timeout=VERSION_TIMEOUT, max_output=4096)
+    loader_path = loader[0] if loader else None
+    via = f" via {loader_path}" if loader_path else " natively"
     if result.returncode is None:
         # A file that cannot be executed is not a usable tool, whatever its name.
         detail = result.stderr.strip() or "the process could not be started"
         return ToolStatus(
-            spec.name, spec.kind, True, path=str(path), reason=detail, state=INCOMPATIBLE
+            spec.name,
+            spec.kind,
+            True,
+            path=str(path),
+            reason=detail,
+            state=INCOMPATIBLE,
+            loader=loader_path,
+            version_probe=Capability("version-probe", INCOMPATIBLE, detail),
         )
     if result.timed_out:
         return ToolStatus(
@@ -523,12 +581,32 @@ def _status_with_version(
             path=str(path),
             reason="version probe timed out",
             state=INCOMPATIBLE,
+            loader=loader_path,
+            version_probe=Capability("version-probe", INCOMPATIBLE, "version probe timed out"),
         )
     text = result.stdout + "\n" + result.stderr
-    version = next((line.strip() for line in text.splitlines() if line.strip()), None)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if spec.name == "mwccpsp":
+        version_line = next(
+            (line for line in lines if line.lower().startswith("version ")), None
+        )
+        version = (
+            f"{lines[0]} ({version_line})"
+            if lines and version_line
+            else (version_line or (lines[0] if lines else None))
+        )
+    else:
+        version = lines[0] if lines else None
     if version:
         return ToolStatus(
-            spec.name, spec.kind, True, path=str(path), version=version[:160], state=INSTALLED
+            spec.name,
+            spec.kind,
+            True,
+            path=str(path),
+            version=version[:160],
+            state=INSTALLED,
+            loader=loader_path,
+            version_probe=Capability("version-probe", READY, f"read version{via}"),
         )
     return ToolStatus(
         spec.name,
@@ -537,6 +615,8 @@ def _status_with_version(
         path=str(path),
         reason="no version output",
         state=INSTALLED,
+        loader=loader_path,
+        version_probe=Capability("version-probe", INCOMPATIBLE, f"no version output{via}"),
     )
 
 
@@ -620,13 +700,41 @@ def detect_all(
     ``BLOCKED`` here: an analyzer without its runtime is not an analyzer.
     """
     active = settings or Settings()
-    statuses = [
-        find_tool(spec, active.tool_path(spec.name), env=env, platform=platform)
-        for spec in TOOL_SPECS
-    ]
+    current_platform = platform or platform_family()
+    compiler_loader = _compiler_version_loader(active, env) if current_platform == "posix" else ()
+    statuses = []
+    for spec in TOOL_SPECS:
+        statuses.append(
+            find_tool(
+                spec,
+                active.tool_path(spec.name),
+                env=env,
+                platform=current_platform,
+                version_loader=compiler_loader if spec.name == "mwccpsp" else (),
+            )
+        )
     ghidra_home = active.get("tools", "ghidra", "path")
     statuses.append(find_ghidra(str(ghidra_home) if ghidra_home else None, env=env))
     return tuple(_apply_dependencies(statuses, platform=platform))
+
+
+def _compiler_version_loader(
+    settings: Settings, env: Mapping[str, str] | None
+) -> tuple[str, ...]:
+    """Find the loader used to probe a PE compiler without changing its path."""
+    for name in ("wibo", "wine"):
+        spec = spec_for(name)
+        assert spec is not None
+        status = find_tool(
+            spec,
+            settings.tool_path(name),
+            env=env,
+            probe=False,
+            platform="posix",
+        )
+        if status.found and status.path:
+            return (status.path,)
+    return ()
 
 
 def _apply_dependencies(

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from seto import cli, datarefs, elf, imports, inventory, matching, mips, split
+from seto import cli, datarefs, elf, imports, inventory, matching, mips, psp_reloc, split
 from seto.matching import MATCHED, compare
 from seto.toolchain import TOOL_SPECS, find_tool, load_settings
 
@@ -218,26 +218,130 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     assert string.combined == 0x4830
     assert string.target == datarefs.DataTarget(".data", 0xC8)
     assert string.location == datarefs.PROVEN
-    assert string.pairing == datarefs.INFERRED
-    assert string.status == datarefs.INFERRED
-    assert string.unresolved is not None
-    assert [name for name, _ in string.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
+    assert string.pairing == datarefs.PROVEN
+    assert string.status == datarefs.PROVEN
+    assert string.summary()["object_identity"] == datarefs.NOT_APPLICABLE
+    assert string.unresolved is None
+    assert [item.type for item in string.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
+    assert {item.format for item in string.relocations} == {"PSP"}
+    assert [item.application for item in string.relocations] == [".text+0x4c4", ".text+0x4d0"]
+    assert [item.raw_info for item in string.relocations] == [0x00000005, 0x00000006]
+    assert {item.segment_index for item in string.relocations} == {0}
+    assert {item.relative_index for item in string.relocations} == {0}
+    assert {item.source_section for item in string.relocations} == {".rel.text"}
 
     # func_000006E4 writes two globals and stores one of their addresses.  The
-    # combined addends are in a load-address space that no ELF section covers,
-    # so their identity is only INFERRED (their offset in the zero-filled tail).
+    # combined addends are module-relative addresses in the segment's zero-filled
+    # tail, which no named ELF section covers, so their location is only INFERRED.
     references = {item.instruction: item for item in by_function["0x6e4"]}
     assert references[0x6EC].combined == 0x604860
     assert references[0x6F4].combined == 0x4860
     assert references[0x700].combined == 0x604B9C
     for reference in references.values():
         assert reference.status == datarefs.INFERRED
+        assert reference.pairing == datarefs.PROVEN
         assert reference.target is None
         assert reference.load is not None and not reference.load.initialized
-    # The store targets and the pointer value differ by exactly 0x600000, which
-    # is not the module's ELF base: the two spaces are kept separate on purpose.
+
+    # The 0x600000 is the high half of the *other* address, not a base.  The pair
+    # that forms 0x604860 has HI16 addend 0x60, the pair that forms 0x4860 has
+    # HI16 addend 0x00, so the difference is 0x60 << 16 - and it is the only
+    # difference between them.  Three distinct module-relative addresses.
     assert references[0x6EC].combined - references[0x6F4].combined == 0x600000
     assert references[0x700].combined - 0x4B9C == 0x600000
+    assert references[0x6EC].relocations[0].addend == 0x60
+    assert references[0x6F4].relocations[0].addend == 0x00
+    assert references[0x700].relocations[0].addend == 0x60
+
+
+def test_module_relative_and_runtime_relocation_bases_are_distinct(parsed: elf.ElfFile) -> None:
+    """Zero-load-base arithmetic reproduces the file; a runtime base is explicit."""
+    (segment,) = parsed.segments
+    assert segment.vaddr == 0
+    assert psp_reloc.relative_base(parsed, parsed.relocations_for(".text")[0]) == 0
+    runtime_base = 0x08800000
+    assert (
+        psp_reloc.relative_base(
+            parsed, parsed.relocations_for(".text")[0], load_base=runtime_base
+        )
+        == runtime_base
+    )
+
+    text = parsed.section_data(parsed.require_section(".text"))
+
+    def word_at(offset: int) -> int:
+        return int.from_bytes(text[offset : offset + 4], "little")
+
+    relocated_values = {}
+    for start, end in ((0x6E4, 0x704), (0x4B8, 0x508)):
+        for reference in datarefs.recover_references(parsed, ".text", start, end):
+            if reference.kind != "hi16-lo16":
+                continue
+            hi, lo = reference.relocations
+            assert hi.application_offset is not None and lo.application_offset is not None
+            hi_word = word_at(hi.application_offset)
+            lo_word = word_at(lo.application_offset)
+            assert psp_reloc.apply_relocation(
+                elf.R_MIPS_HI16, hi_word, 0, lo16_word=lo_word
+            ) == hi_word
+            loaded_hi = psp_reloc.apply_relocation(
+                elf.R_MIPS_HI16, hi_word, runtime_base, lo16_word=lo_word
+            )
+            loaded_lo = psp_reloc.apply_relocation(elf.R_MIPS_LO16, lo_word, runtime_base)
+            assert loaded_hi is not None and loaded_lo is not None
+            low = loaded_lo & 0xFFFF
+            signed_low = low - 0x10000 if low & 0x8000 else low
+            relocated = (((loaded_hi & 0xFFFF) << 16) + signed_low) & 0xFFFFFFFF
+            assert relocated == (reference.combined + runtime_base) & 0xFFFFFFFF
+            relocated_values[reference.instruction] = relocated
+
+    assert (relocated_values[0x6EC] - relocated_values[0x6F4]) & 0xFFFFFFFF == 0x600000
+    assert (relocated_values[0x700] - (0x4B9C + runtime_base)) & 0xFFFFFFFF == 0x600000
+
+
+def test_the_relocation_inventory_matches_the_documented_baseline(parsed: elf.ElfFile) -> None:
+    """Every relocation section is the fixed-width PSP form, fully understood."""
+    inventory = psp_reloc.psp_inventory(parsed)
+    assert inventory["formats"] == ["PSP"]
+    assert inventory["standard_entries"] == 0
+    assert inventory["psp_entries"] == 181
+    assert inventory["types"] == {
+        "R_MIPS_26": 72,
+        "R_MIPS_32": 49,
+        "R_MIPS_HI16": 30,
+        "R_MIPS_LO16": 30,
+    }
+    assert inventory["unknown_types"] == []
+    assert inventory["compressed_sections"] == []
+    assert inventory["segment_relocation_payloads"] == []
+    assert inventory["segment_indices"] == {"0": 181}
+    assert inventory["relative_indices"] == {"0": 181}
+    assert inventory["relative_segments_with_nonzero_vaddr"] == []
+    assert inventory["runtime_addressing"] == "load_base + p_vaddr; load_base is not inferred from the ELF"
+    assert {section["name"] for section in inventory["sections"]} == {
+        ".rel.text",
+        ".rel.sceStub.text",
+        ".rel.data",
+        ".rel.lib.ent",
+        ".rel.lib.stub",
+        ".rel.rodata.sceModuleInfo",
+        ".rel.rodata.sceResident",
+        ".rel.rodata.sceVstub",
+    }
+
+
+def test_the_datarefs_report_carries_the_relocation_inventory(parsed: elf.ElfFile) -> None:
+    report = datarefs.build_reference_report(parsed, ".text", [("func_000006E4", 0x6E4, 0x704)])
+    assert report["relocation_inventory"]["psp_entries"] == 181
+    (entry,) = report["functions"]
+    assert entry["function"] == "func_000006E4"
+    for reference in entry["references"]:
+        for relocation in reference["relocations"]:
+            assert relocation["format"] == "PSP"
+            assert relocation["source_section"] == ".rel.text"
+            assert relocation["segment_index"] == 0
+            assert relocation["relative_index"] == 0
+            assert relocation["raw_offset"] is not None
 
 
 def test_the_savedata_string_is_in_the_data_section(parsed: elf.ElfFile) -> None:

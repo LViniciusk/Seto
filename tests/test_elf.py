@@ -6,9 +6,12 @@ import struct
 
 import pytest
 
+from seto import psp_reloc
 from seto.binio import ParseError
+from seto.matching import INCONCLUSIVE, compare
 from seto.elf import (
     ET_MIPS_PSP_PRX,
+    ET_REL,
     R_MIPS_32,
     R_MIPS_HI16,
     R_MIPS_26,
@@ -147,6 +150,99 @@ def test_parse_rejects_relocation_size_not_multiple_of_eight() -> None:
         parse(payload)
 
 
+def test_relocation_reads_require_all_four_bytes_inside_the_explicit_target() -> None:
+    code = b"abcdefgh"
+    data = b"WXYZ"
+    relocations = build_relocations(
+        [(0, R_MIPS_32, 0), (4, R_MIPS_32, 0), (6, R_MIPS_32, 0), (8, R_MIPS_32, 0)]
+    )
+    parsed = parse(
+        build_elf32(
+            e_type=ET_REL,
+            sections=[
+                _text_section(code),
+                {"name": ".data", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 8, "data": data},
+                {"name": ".rel.text", "type": SHT_REL, "data": relocations, "info": 1, "entsize": 8},
+            ],
+        )
+    )
+    entries = {item.raw_offset: item for item in parsed.relocations_for(".text")}
+    assert entries[0].file_offset == parsed.require_section(".text").offset
+    assert entries[4].file_offset == parsed.require_section(".text").offset + 4
+    assert entries[4].section_offset == 4  # final complete word is valid
+    for offset in (6, 8):
+        entry = entries[offset]
+        assert entry.file_offset is None
+        assert entry.section_offset is None
+        assert entry.addend == 0
+    # Offset 8 numerically starts at .data, but .rel.text explicitly targets
+    # .text; bytes from the neighboring section must not be read as its addend.
+    assert entries[8].target_section == ".text"
+    assert psp_reloc.psp_inventory(parsed)["complete"] is False
+    result = compare(
+        code,
+        code,
+        name="boundary",
+        original_relocations=[entries[8]],
+    )
+    assert result.status == INCONCLUSIVE
+
+
+def test_fallback_relocation_needs_one_allocated_section_containing_the_word() -> None:
+    # The table has no resolvable target name. A unique section can back a full
+    # word, but a word crossing the section end (or overlapping two sections)
+    # cannot borrow bytes from a neighbor or be selected arbitrarily.
+    payload = build_elf32(
+        e_type=ET_REL,
+        sections=[
+            _text_section(b"abcdefgh"),
+            {"name": ".data", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 0x20, "data": b"\x01\x02\x03\x04\x05\x06\x07\x08"},
+            {"name": ".overlap", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 0x22, "data": b"\x05\x06\x07\x08"},
+            {
+                "name": ".rel.unknown",
+                "type": SHT_REL,
+                "data": build_relocations([(0x20, R_MIPS_32, 0), (0x22, R_MIPS_32, 0)]),
+                "entsize": 8,
+            },
+        ],
+    )
+    parsed = parse(payload)
+    first, overlap = parsed.relocations
+    # At 0x20, .data uniquely contains four bytes; .overlap starts at 0x22.
+    # This does not invent a target section, but it may read the unique word.
+    assert first.target_section is None
+    assert first.file_offset == parsed.require_section(".data").offset
+    assert first.addend == 0x04030201
+    # 0x22 is fully contained by both overlapping sections, so the fallback
+    # cannot select an arbitrary section.
+    assert overlap.file_offset is None
+    assert overlap.addend == 0
+
+
+def test_nobits_relocation_keeps_its_memory_location_without_file_bytes() -> None:
+    parsed = parse(
+        build_elf32(
+            e_type=ET_REL,
+            sections=[
+                _text_section(b"\x00" * 4),
+                {"name": ".bss", "type": SHT_NOBITS, "flags": SHF_ALLOC, "addr": 8, "size": 4},
+                {
+                    "name": ".rel.bss",
+                    "type": SHT_REL,
+                    "data": build_relocations([(8, R_MIPS_32, 0)]),
+                    "info": 2,
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    (entry,) = parsed.relocations
+    assert entry.target_section == ".bss"
+    assert entry.section_offset == 0
+    assert entry.file_offset is None
+    assert entry.addend == 0
+
+
 def test_comment_signature_is_extracted() -> None:
     parsed = parse(
         build_elf32(
@@ -171,6 +267,7 @@ def test_prx_sections_and_relocations() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": len(code), "memsz": len(code)}],
             sections=[
                 _text_section(code),
                 {"name": ".comment", "type": SHT_PROGBITS, "data": b"MW MIPS C Compiler\x00"},
@@ -200,6 +297,7 @@ def test_prx_shstrtab_with_address_zero_does_not_shadow_text() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": len(code), "memsz": len(code)}],
             sections=[
                 _text_section(code),
                 {
@@ -213,6 +311,105 @@ def test_prx_shstrtab_with_address_zero_does_not_shadow_text() -> None:
     )
     assert parsed.relocations[0].addend == 0x34
     assert parsed.relocations[1].addend == 0
+
+
+def test_psp_r_info_is_a_segment_not_a_symbol_index() -> None:
+    """The same ``r_info`` bits are a symbol index in SHT_REL and a segment in PSP."""
+    code = struct.pack("<I", 0x00000000) * 2
+    parsed = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[
+                {"type": 1, "vaddr": 0x0000, "filesz": len(code), "memsz": len(code)},
+                {"type": 1, "vaddr": 0x1000, "filesz": len(code), "memsz": len(code)},
+            ],
+            sections=[
+                _text_section(code, addr=0x1000),
+                {
+                    "name": ".rel.text",
+                    "type": SHT_MIPS_PSPREL,
+                    # r_info = (relative 2 << 16) | (segment 1 << 8) | R_MIPS_LO16
+                    "data": build_relocations([(0x00, R_MIPS_LO16, (2 << 8) | 1)]),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    relocation = parsed.relocations_for(".text")[0]
+    assert relocation.info == (2 << 16) | (1 << 8) | R_MIPS_LO16
+    assert relocation.format == "PSP"
+    assert relocation.segment_index == 1
+    assert relocation.relative_index == 2
+    # Bits 8..15 name a segment here, so they must not be read as a symbol index.
+    assert relocation.symbol_index == 0
+    # r_offset is segment-relative, so the patched address is segment.vaddr + it.
+    assert relocation.raw_offset == 0x00
+    assert relocation.offset == 0x1000
+    assert relocation.section_offset == 0x00
+
+
+def test_psp_r_info_uses_low_nibble_for_type_and_reports_reserved_bits() -> None:
+    code = struct.pack("<I", 0x00000000) * 2
+    relocation_bytes = bytearray(build_relocations([(0x00, R_MIPS_32, 1)]))
+    # PSP loader sees type 2 in the low nibble and segment 1 in bits 8..15;
+    # bit 4 is reserved, not part of an invented type 0x12.
+    struct.pack_into("<I", relocation_bytes, 4, 0x00000112)
+    parsed = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[
+                {"type": 1, "vaddr": 0, "filesz": len(code), "memsz": len(code)},
+                {"type": 1, "vaddr": 0x1000, "filesz": len(code), "memsz": len(code)},
+            ],
+            sections=[
+                _text_section(code, addr=0x1000),
+                {
+                    "name": ".rel.text",
+                    "type": SHT_MIPS_PSPREL,
+                    "data": bytes(relocation_bytes),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    (relocation,) = parsed.relocations
+    assert relocation.type == R_MIPS_32
+    assert relocation.segment_index == 1
+    assert relocation.relative_index == 0
+    assert relocation.info == 0x112
+    assert relocation.application_valid
+    inventory = psp_reloc.psp_inventory(parsed)
+    assert inventory["reserved_field_entries"]
+    assert inventory["complete"] is False
+    assert any("reserved bits set (0x00000010)" in item for item in parsed.observations)
+
+
+def test_standard_rel_r_info_is_a_symbol_index() -> None:
+    symbol_table, string_table = build_symbol_table(["", "func_a"])
+    code = struct.pack("<I", 0x0C000000 | (0x20 >> 2)) + b"\x00" * 4
+    parsed = parse(
+        build_elf32(
+            e_type=1,
+            sections=[
+                _text_section(code),
+                {"name": ".symtab", "type": SHT_SYMTAB, "data": symbol_table, "link": 3, "entsize": 16},
+                {"name": ".strtab", "type": SHT_STRTAB, "data": string_table},
+                {
+                    "name": ".rel.text",
+                    "type": SHT_REL,
+                    "data": build_relocations([(0x00, R_MIPS_26, 1)]),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    relocation = parsed.relocations_for(".text")[0]
+    assert relocation.format == "REL"
+    assert relocation.symbol_index == 1
+    assert relocation.symbol == "func_a"
+    assert relocation.segment_index == 0
+    assert relocation.relative_index == 0
+    assert relocation.raw_offset == relocation.offset == 0x00
 
 
 def test_relocation_symbols_from_symtab() -> None:
@@ -266,6 +463,11 @@ def test_data_relocations_use_the_data_section() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
+            # The PT_LOAD covers only the file-backed .data bytes at sh_offset
+            # 0x5c, mapped to module address 0x1000.
+            program_headers=[
+                {"type": 1, "offset": 0x5C, "vaddr": 0x1000, "filesz": 8, "memsz": 0x2000}
+            ],
             sections=[
                 _text_section(b"\x00" * 8),
                 {
@@ -278,7 +480,7 @@ def test_data_relocations_use_the_data_section() -> None:
                 {
                     "name": ".rel.data",
                     "type": SHT_MIPS_PSPREL,
-                    "data": build_relocations([(0x1000, R_MIPS_32, 0)]),
+                    "data": build_relocations([(0, R_MIPS_32, 0)]),
                     "entsize": 8,
                 },
             ],
