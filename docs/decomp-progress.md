@@ -1885,3 +1885,123 @@ certificadas, 60 pendentes, 30 pares, 72 chamadas, 1268 imports, 181 relocations
 evidência `PASS` vem do Windows (`win32`) e as tentativas `BLOCKED` seguem
 registradas. Sem prova independente de identidade, os 60 índices pendentes e os 8
 `INCONCLUSIVE` permanecem inalterados.
+
+## SETO-DECOMP-014 — Link-Time Equivalence Feasibility
+
+**Resultado: `BLOCKED` por ausência de linker MIPS utilizável no ambiente
+inspecionado.** O compilador produziu um candidato novo e o matching preservou o
+baseline `INCONCLUSIVE` de `func_000004B8`; nenhuma linkedição foi executada, nenhum
+endereço foi imposto e não há resultado pós-link. Ausência de ferramenta não é
+evidência de incompatibilidade do objeto nem divergência de código.
+
+### Inventário e diagnóstico reproduzível
+
+| Ferramenta examinada | Versão/estado observado | Capacidade relevante comprovada |
+|---|---|---|
+| Metrowerks `mwccpsp` | 3.0.1 build 219, instalado | Compila o candidato MIPS/PSP; a instalação contém `mwccpsp.exe` e `LMGR8C.DLL`, sem `mwld` ou outro linker encontrado na árvore do toolchain. |
+| `wibo` | 1.2.0, configurado | Executa o compilador Win32 em WSL2; não é linker. |
+| GNU `ld` em WSL2 | Binutils 2.42 | `ld -V` lista apenas emulações x86-64/i386; `mips*-linux-gnu-ld` não está instalado. |
+| GNU `ld.exe`/`ld.bfd.exe` em MSYS2 UCRT64 e MINGW64 | Binutils 2.46 | `-V` lista somente `i386pep`/`i386pe`; nenhum alvo MIPS. |
+| LLVM em MSYS2 UCRT64 | 21.1.8 | `llvm-objdump` registra alvos MIPS/MIPSel e pode ser usado para análise; não há `ld.lld.exe`/`lld.exe` instalado. A presença de suporte MIPS no disassembler não prova capacidade de linkedição. |
+| Pacote `binutils-mips-linux-gnu` no apt do WSL2 | Candidato 2.42-2ubuntu1cross5; não instalado | Não faz parte das ferramentas presentes e verificadas nesta rodada. Não foi instalado um novo toolchain para contornar o STOP obrigatório por ausência de ferramenta essencial. |
+
+Verificações para reproduzir o diagnóstico, sem alterar o repositório:
+
+```bash
+# WSL2
+command -v ld.lld lld mipsel-linux-gnu-ld mips-linux-gnu-ld
+ld --version
+ld -V
+apt-cache policy binutils-mips-linux-gnu
+
+# Windows / MSYS2 UCRT64
+C:\msys64\ucrt64\bin\ld.exe -V
+C:\msys64\ucrt64\bin\llvm-objdump.exe --version
+```
+
+Os comandos `-V` não apresentam emulação MIPS nos linkers encontrados. Portanto,
+não existe executável elegível para o smoke test exigido (objeto MIPS sintético com
+par HI16/LO16), e esse smoke test **não foi executado**. Não se conclui que GNU
+MIPS binutils seria incompatível com o ET_REL Metrowerks: essa compatibilidade
+continua **não testada**. Também não foi gerado `build/seto014/link-equivalence.json`,
+pois não há um resultado de link a relatar.
+
+### Compilação fresca e baseline observado
+
+A compilação foi feita nesta rodada, sem reutilizar o objeto de execuções
+anteriores. Nesta máquina, `python3` no comando abaixo corresponde ao ambiente
+`/home/vinicius/.seto/venvs/seto008-test/bin/python` do WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/match_function.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --function 0x4B8 \
+  --source decomp/src/func_000004B8.c \
+  --out build/seto014/f4b8 \
+  --json
+```
+
+O comando terminou com código 5, o resultado normal para o baseline `INCONCLUSIVE`,
+não com erro de compilação. Proveniência observada:
+
+| Item | Valor |
+|---|---|
+| SHA-256 do PRX | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| SHA-256 de `func_000004B8.c` | `71b84bca92e2f2fd084e0a4a18849a6c7bc169e07faf856d9d808068bf52e9a8` |
+| SHA-256 do objeto fresco `func_000004B8.o` | `17cce92e8424bfded12b9ee4a26363ec7ac19c36f8bf795af02d05a22904425f` |
+| Compilador / loader / flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+| Matching original | `INCONCLUSIVE`, 18/20 palavras, 0 diferenças, 0 problemas de relocation, 4 chamadas resolvidas pelo comparador, 0 referências de dados resolvidas |
+
+O objeto candidato é ELF32 `ET_REL`, little-endian, máquina MIPS R3000, flags
+`0x10970001` (`noreorder`, `mips2`). Em `.rel.text` há seis entradas: `R_MIPS_HI16`
+no offset de objeto `0x0C` e `R_MIPS_LO16` em `0x18`, ambas para o símbolo undefined
+`D_00004830`; quatro `R_MIPS_26` para `func_00000894`, `func_00000854`,
+`func_00002D0C` e `func_000008A4`. `.rel.mwcats` contém ainda um `R_MIPS_32` de
+metadados para o símbolo definido `func_000004B8`. Os quatro endereços de chamada
+que o comparador resolve no baseline são, respectivamente, `0x894`, `0x854`,
+`0x2D0C` e `0x8A4`; essa resolução do matcher não é uma linkedição do objeto.
+
+### Alcance probatório e próxima etapa
+
+No PRX, as instruções originais em `0x4C4` (`lui $a1`) e `0x4D0`
+(`addiu $a1,$a1,0x4830`) formam o par HI16/LO16 já associado pelo fluxo de
+registradores. A referência original recuperada é `.data+0xC8`, VA `0x4830`; os
+bytes nesse objeto de dados, no offset de arquivo `0x4890`, são `/PSP/SAVEDATA/`.
+Isso prova o destino numérico e o conteúdo do PRX, não que o símbolo candidato
+`D_00004830` seja a identidade do objeto/string original. O relatório atual ainda
+registra zero dados resolvidos e mantém os dois words pendentes.
+
+Não há instruções “depois do link”, endereço efetivo produzido pelo linker,
+comparação pós-link, execução dos controles negativos `0x4830` versus `0x4834`,
+nem teste positivo/negativo de linker nesta rodada. Não se atribuiu endereço a
+`D_00004830` nem às chamadas e não se fabricaram stubs. Se uma futura rodada
+obtiver um linker validado e impor essas definições, tal igualdade será
+`ASSUMPTION_DEPENDENT`; atribuir `D_00004830 -> 0x4830` não estabelece identidade
+independente. A diferença entre o endereço virtual escolhido para linkedição e a
+base após carregamento do PRX, incluindo relocations de runtime, também terá de ser
+tratada antes de comparar codificações como se ambas usassem a mesma base.
+
+Assim, a conclusão desta investigação é **viabilidade não determinada** (não
+`UNSUPPORTED`): não foi possível testar a compatibilidade do formato/ABI/relocations
+Metrowerks com GNU MIPS binutils ou LLD porque nenhum linker MIPS estava disponível.
+Não há evidência nova que altere os baselines 013: 7 `MATCHED`, 8 `INCONCLUSIVE`,
+0 `NONMATCHING` e 60 words pendentes. Próxima ação técnica: disponibilizar e
+autorizar uma instalação isolada de um linker MIPS real; primeiro executar o smoke
+test HI16/LO16 com saída ELF e relocation efetivamente aplicada, e só então decidir
+se o objeto Metrowerks pode ser linkado para este experimento. Mesmo se esse teste
+passar, a identidade original de `D_00004830` continuará sem prova independente.
+
+### Gates de repositório desta rodada
+
+Estes gates verificam o estado do repositório; eles **não** substituem o smoke test
+de linker, que permanece não executado pelo bloqueio acima.
+
+| Gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 566 passaram, 19 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 17 ignorados |
+| WSL2 / `pytest -m integration -q` | 37 passaram, 3 ignorados |
+| `compileall -q src scripts tests` | clean |
+| `seto verify` | ISO OK (`FB22D0F0…C906`) |
+| Linker smoke HI16/LO16 e controles `0x4830`/`0x4834` | Não executados: linker MIPS ausente; nenhum resultado afirmado |
