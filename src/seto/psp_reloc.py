@@ -33,7 +33,6 @@ from dataclasses import dataclass
 
 from seto.elf import (
     PT_LOAD,
-    R_MIPS_16,
     R_MIPS_26,
     R_MIPS_32,
     R_MIPS_HI16,
@@ -42,8 +41,11 @@ from seto.elf import (
     RELOCATION_TYPE_NAMES,
     SHT_MIPS_PSPREL,
     SHT_MIPS_PSPREL2,
+    SHT_REL,
     ElfFile,
     Relocation,
+    Segment,
+    decode_psp_relocation_info,
     relocation_type_name,
 )
 
@@ -56,13 +58,10 @@ SHT_PSPREL2 = SHT_MIPS_PSPREL2
 PT_PSPREL1 = 0x700000A0
 PT_PSPREL2 = 0x700000A1
 
-#: PPSSPP masks the type with 4 bits and the two segment fields with 8.
-TYPE_MASK = 0xF
-SEGMENT_MASK = 0xFF
-SEGMENT_SHIFT = 8
-RELATIVE_SHIFT = 16
-
 R_MIPS_GPREL16 = 7
+_SUPPORTED_TYPES = frozenset(
+    (R_MIPS_NONE, R_MIPS_32, R_MIPS_26, R_MIPS_HI16, R_MIPS_LO16, R_MIPS_GPREL16)
+)
 
 
 @dataclass(frozen=True)
@@ -72,12 +71,14 @@ class PspInfo:
     type: int
     segment_index: int
     relative_index: int
+    reserved: int = 0
 
     def summary(self) -> dict[str, object]:
         return {
             "type": relocation_type_name(self.type),
             "segment_index": self.segment_index,
             "relative_index": self.relative_index,
+            "reserved": f"0x{self.reserved:08x}",
         }
 
 
@@ -87,11 +88,8 @@ def decode_info(info: int) -> PspInfo:
     The type is masked with 4 bits (as the loader does), so a type that needs
     more than 4 bits cannot be silently produced by a stray high bit.
     """
-    return PspInfo(
-        type=info & TYPE_MASK,
-        segment_index=(info >> SEGMENT_SHIFT) & SEGMENT_MASK,
-        relative_index=(info >> RELATIVE_SHIFT) & SEGMENT_MASK,
-    )
+    rel_type, segment_index, relative_index, reserved = decode_psp_relocation_info(info)
+    return PspInfo(rel_type, segment_index, relative_index, reserved)
 
 
 def _sign_extend_16(value: int) -> int:
@@ -99,20 +97,40 @@ def _sign_extend_16(value: int) -> int:
     return value - 0x10000 if value & 0x8000 else value
 
 
-def relative_base(module: ElfFile, relocation: Relocation) -> int:
-    """The base the loader adds for ``relocation`` (``segmentVAddr[relative]``).
+def segment_runtime_address(segment: Segment, load_base: int) -> int:
+    """Map a segment's ELF virtual address into runtime coordinates.
 
-    The segment's ``p_vaddr`` is the module-relative base; a missing or
-    non-``PT_LOAD`` relative segment contributes ``0``, exactly as the loader
-    treats a segment it did not load.
+    ``p_vaddr`` is module-relative; ``load_base`` is an explicit runtime base.
+    The result is not inferred from the file and is checked instead of silently
+    wrapping on overflow.
+    """
+    if segment.type != PT_LOAD:
+        raise ValueError(f"segment {segment.index} is not PT_LOAD")
+    if not 0 <= load_base <= 0xFFFFFFFF:
+        raise ValueError("load_base must be an unsigned 32-bit address")
+    address = load_base + segment.vaddr
+    if address > 0xFFFFFFFF:
+        raise ValueError("runtime segment address overflows 32 bits")
+    return address
+
+
+def relative_base(
+    module: ElfFile, relocation: Relocation, *, load_base: int = 0
+) -> int | None:
+    """Return the explicit runtime address used by a relocation's relative segment.
+
+    ``None`` means the segment index is absent or not loadable; callers must not
+    reinterpret the raw ``r_offset`` as a resolved destination. ``load_base=0``
+    models module-relative arithmetic only; it does not claim a real PSP runtime
+    load address.
     """
     index = relocation.relative_index
     if index >= len(module.segments):
-        return 0
+        return None
     segment = module.segments[index]
     if segment.type != PT_LOAD:
-        return 0
-    return segment.vaddr & 0xFFFFFFFF
+        return None
+    return segment_runtime_address(segment, load_base)
 
 
 def apply_relocation(
@@ -122,10 +140,11 @@ def apply_relocation(
     *,
     lo16_word: int | None = None,
 ) -> int | None:
-    """The word the PSP loader writes for one relocation, or ``None`` if unknown.
+    """The word the PSP loader writes for a modeled relocation, or ``None`` otherwise.
 
     ``word`` is the in-file value at the relocated address and ``base`` the
-    module base the loader adds (see :func:`relative_base`).  ``R_MIPS_HI16``
+    runtime address of the loader's relative segment (see :func:`relative_base`).
+    ``R_MIPS_HI16``
     needs the paired ``R_MIPS_LO16`` word, because the low half carries the sign
     that the high half must absorb; without it the answer is ``None`` rather than
     a guess.  An unrecognised type is also ``None``: this function never invents
@@ -140,8 +159,6 @@ def apply_relocation(
         return (word + base) & 0xFFFFFFFF
     if rel_type == R_MIPS_26:
         return (word & 0xFC000000) | (((word & 0x03FFFFFF) + (base >> 2)) & 0x03FFFFFF)
-    if rel_type == R_MIPS_16:
-        return (word & 0xFFFF0000) | (((word & 0xFFFF) + base) & 0xFFFF)
     if rel_type == R_MIPS_LO16:
         return (word & 0xFFFF0000) | (((word & 0xFFFF) + base) & 0xFFFF)
     if rel_type == R_MIPS_HI16:
@@ -150,7 +167,9 @@ def apply_relocation(
         combined = (
             ((word & 0xFFFF) << 16) + _sign_extend_16(lo16_word) + base
         ) & 0xFFFFFFFF
-        return (word & 0xFFFF0000) | ((combined >> 16) & 0xFFFF)
+        # MIPS HI16/LO16 pairs encode a signed low half.  Round before taking
+        # the high half so the LUI absorbs the carry when LO16 has bit 15 set.
+        return (word & 0xFFFF0000) | (((combined + 0x8000) >> 16) & 0xFFFF)
     return None
 
 
@@ -171,7 +190,11 @@ def psp_inventory(module: ElfFile) -> dict[str, object]:
     psp = [item for item in module.relocations if item.format == "PSP"]
     other = [item for item in module.relocations if item.format != "PSP"]
 
-    by_section: dict[str, list[Relocation]] = {}
+    by_section: dict[str, list[Relocation]] = {
+        section.name: []
+        for section in module.sections
+        if section.type == SHT_PSPREL
+    }
     for item in psp:
         by_section.setdefault(item.source_section or "?", []).append(item)
 
@@ -198,8 +221,23 @@ def psp_inventory(module: ElfFile) -> dict[str, object]:
             if item.type not in RELOCATION_TYPE_NAMES
         }
     )
+    unsupported = sorted(
+        {
+            relocation_type_name(item.type)
+            for item in module.relocations
+            if item.type not in _SUPPORTED_TYPES
+        }
+    )
 
     formats = sorted({item.format for item in module.relocations})
+    section_formats = {
+        "PSP" for section in module.sections if section.type == SHT_PSPREL
+    } | {
+        "PSP2" for section in module.sections if section.type == SHT_PSPREL2
+    } | {
+        "REL" for section in module.sections if section.type == SHT_REL
+    }
+    formats = sorted(set(formats) | section_formats)
     compressed = sorted(
         section.name for section in module.sections if section.type == SHT_PSPREL2
     )
@@ -209,14 +247,63 @@ def psp_inventory(module: ElfFile) -> dict[str, object]:
         if segment.type in (PT_PSPREL1, PT_PSPREL2)
     )
 
-    # The addend is only a module address when the relative segment is based at 0.
-    rebased = [
+    # A nonzero relative p_vaddr must be added in module coordinates. The actual
+    # runtime load_base is a separate caller input and is never inferred here.
+    relative_vaddrs = [
         item.relative_index
         for item in psp
         if item.relative_index < len(module.segments)
         and module.segments[item.relative_index].type == PT_LOAD
         and module.segments[item.relative_index].vaddr != 0
     ]
+
+    invalid_entries = [
+        {
+            "source_section": item.source_section,
+            "type": item.type_name,
+            "raw_offset": f"0x{item.raw_offset:x}",
+            "raw_info": f"0x{item.info:08x}",
+            "segment_index": item.segment_index,
+        }
+        for item in psp
+        if not item.application_valid
+    ]
+    reserved_entries = [
+        {
+            "source_section": item.source_section,
+            "raw_offset": f"0x{item.raw_offset:x}",
+            "raw_info": f"0x{item.info:08x}",
+            "reserved": f"0x{decode_info(item.info).reserved:08x}",
+        }
+        for item in psp
+        if decode_info(item.info).reserved
+    ]
+    incomplete_entries = [
+        {
+            "source_section": item.source_section,
+            "type": item.type_name,
+            "raw_offset": f"0x{item.raw_offset:x}",
+            "raw_info": f"0x{item.info:08x}",
+            "reason": (
+                "application segment is invalid"
+                if not item.application_valid
+                else "target section or section-relative application location is unresolved"
+            ),
+        }
+        for item in module.relocations
+        if not item.application_valid
+        or item.target_section is None
+        or item.section_offset is None
+    ]
+    complete = not (
+        unknown
+        or unsupported
+        or invalid_entries
+        or reserved_entries
+        or incomplete_entries
+        or compressed
+        or payloads
+    )
 
     return {
         "formats": formats,
@@ -225,9 +312,15 @@ def psp_inventory(module: ElfFile) -> dict[str, object]:
         "sections": sections,
         "types": _type_counts(list(module.relocations)),
         "unknown_types": unknown,
+        "unsupported_types": unsupported,
         "segment_indices": {str(key): segment_counts[key] for key in sorted(segment_counts)},
         "relative_indices": {str(key): relative_counts[key] for key in sorted(relative_counts)},
         "compressed_sections": compressed,
         "segment_relocation_payloads": payloads,
-        "entries_needing_a_rebase": sorted(set(rebased)),
+        "relative_segments_with_nonzero_vaddr": sorted(set(relative_vaddrs)),
+        "runtime_addressing": "load_base + p_vaddr; load_base is not inferred from the ELF",
+        "invalid_entries": invalid_entries,
+        "reserved_field_entries": reserved_entries,
+        "incomplete_entries": incomplete_entries,
+        "complete": complete,
     }

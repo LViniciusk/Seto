@@ -127,6 +127,23 @@ def relocation_type_name(value: int) -> str:
     return RELOCATION_TYPE_NAMES.get(value, f"R_MIPS_UNKNOWN({value})")
 
 
+def decode_psp_relocation_info(info: int) -> tuple[int, int, int, int]:
+    """Decode PSP ``r_info`` once: type, application segment, relative segment,
+    and reserved bits.
+
+    PPSSPP uses the low nibble for the relocation type and one byte each for the
+    two segment indices.  Bits outside those fields are retained as a diagnostic
+    value; they are not allowed to invent an ELF relocation type.
+    """
+    fields = 0x000F | (0xFF << 8) | (0xFF << 16)
+    return (
+        info & 0x0F,
+        (info >> 8) & 0xFF,
+        (info >> 16) & 0xFF,
+        info & (~fields & 0xFFFFFFFF),
+    )
+
+
 def _sign_extend_16(value: int) -> int:
     return value - 0x10000 if value & 0x8000 else value
 
@@ -287,6 +304,7 @@ class Relocation:
     relative_index: int = 0
     source_section: str | None = None
     raw_offset: int = 0
+    application_valid: bool = True
 
     @property
     def type_name(self) -> str:
@@ -311,6 +329,7 @@ class Relocation:
             "target_section": self.target_section,
             "section_offset": self.section_offset,
             "source_section": self.source_section,
+            "application_valid": self.application_valid,
         }
 
 
@@ -680,24 +699,34 @@ def _parse_relocations(
             base = section.offset + index * REL_ENTRY_SIZE
             raw_offset = reader.u32(base)
             info = reader.u32(base + 0x04)
-            rel_type = info & 0xFF
             if psp:
                 # PSP r_info is (relative << 16) | (segment << 8) | type.  It is
                 # not a symbol index, and r_offset is an offset *inside* the named
                 # segment, so the patched address is segment.vaddr + r_offset.
+                rel_type, segment_index, relative_index, reserved = (
+                    decode_psp_relocation_info(info)
+                )
+                if reserved:
+                    observations.append(
+                        f"relocation section {section.name!r}, entry {index}: "
+                        f"PSP r_info has reserved bits set (0x{reserved:08x})"
+                    )
                 symbol_index = 0
-                segment_index = (info >> 8) & 0xFF
-                relative_index = (info >> 16) & 0xFF
-                offset = _psp_address(
+                offset, application_valid = _psp_address(
                     segments, segment_index, raw_offset, section.name, observations
                 )
             else:
+                rel_type = info & 0xFF
                 symbol_index = info >> 8
                 segment_index = 0
                 relative_index = 0
                 offset = raw_offset
+                application_valid = True
             symbol = _symbol_name_for(symbols, symbol_index)
-            if target is not None and offset < target.addr:
+            if not application_valid:
+                section_offset = None
+                file_offset = None
+            elif target is not None and offset < target.addr:
                 # The address sits below the section the table names, so there is
                 # no byte to read there.  The entry is reported instead of being
                 # patched at a negative offset.
@@ -727,6 +756,7 @@ def _parse_relocations(
                     relative_index=relative_index,
                     source_section=section.name or None,
                     raw_offset=raw_offset,
+                    application_valid=application_valid,
                 )
             )
     return tuple(relocations)
@@ -738,32 +768,46 @@ def _psp_address(
     raw_offset: int,
     section_name: str,
     observations: list[str],
-) -> int:
+) -> tuple[int, bool]:
     """The module address a PSP relocation patches: ``segment.vaddr + r_offset``.
 
-    The address is kept inside 32 bits, and a segment index the file cannot back
-    is reported rather than silently patched: the raw ``r_offset`` is returned and
-    the caller records the limitation.
+    The raw offset is retained for diagnosis if the segment or its range is
+    invalid, but ``False`` prevents that fallback from becoming a section/file
+    location.  Address overflow is rejected rather than wrapped into another
+    section.
     """
     if segment_index >= len(segments):
         observations.append(
             f"relocation section {section_name!r}: entry names segment {segment_index}, "
             f"but the file declares {len(segments)}"
         )
-        return raw_offset & 0xFFFFFFFF
+        return raw_offset & 0xFFFFFFFF, False
     segment = segments[segment_index]
     if segment.type != PT_LOAD:
         observations.append(
             f"relocation section {section_name!r}: entry names segment {segment_index}, "
             f"which is not PT_LOAD"
         )
-        return raw_offset & 0xFFFFFFFF
+        return raw_offset & 0xFFFFFFFF, False
+    if raw_offset >= segment.memsz:
+        observations.append(
+            f"relocation section {section_name!r}: r_offset 0x{raw_offset:x} "
+            f"is outside segment {segment_index} p_memsz 0x{segment.memsz:x}"
+        )
+        return raw_offset & 0xFFFFFFFF, False
     if segment.vaddr:
         observations.append(
             f"relocation section {section_name!r}: segment {segment_index} has vaddr "
             f"0x{segment.vaddr:x}; r_offset is segment-relative and was rebased"
         )
-    return (segment.vaddr + raw_offset) & 0xFFFFFFFF
+    address = segment.vaddr + raw_offset
+    if address > 0xFFFFFFFF:
+        observations.append(
+            f"relocation section {section_name!r}: segment {segment_index} address "
+            f"0x{segment.vaddr:x} + r_offset 0x{raw_offset:x} overflows 32 bits"
+        )
+        return raw_offset & 0xFFFFFFFF, False
+    return address, True
 
 
 def _symbol_name_for(symbols: tuple[Symbol, ...], index: int) -> str | None:

@@ -18,11 +18,13 @@ from seto.elf import (
     R_MIPS_HI16,
     R_MIPS_LO16,
     R_MIPS_NONE,
+    SHT_REL,
     SHT_MIPS_PSPREL,
     SHT_MIPS_PSPREL2,
     SHT_PROGBITS,
     parse,
 )
+from seto.matching import INCONCLUSIVE, compare, relocation_sites
 
 from conftest import (
     SHF_ALLOC,
@@ -72,13 +74,17 @@ def test_decode_info_splits_the_three_psp_fields() -> None:
         "type": "R_MIPS_HI16",
         "segment_index": 3,
         "relative_index": 7,
+        "reserved": "0x00000000",
     }
 
 
 def test_the_type_field_is_only_four_bits() -> None:
-    # A high bit that spills past bit 3 is a segment field, not a new type.
-    assert psp_reloc.decode_info(0x0000_0112).type == R_MIPS_32
-    assert psp_reloc.decode_info(0x0000_0112).segment_index == 0x01
+    # PSP r_info 0x112 means type 2, segment 1, plus an unexpected reserved bit.
+    decoded = psp_reloc.decode_info(0x0000_0112)
+    assert decoded.type == R_MIPS_32
+    assert decoded.segment_index == 0x01
+    assert decoded.relative_index == 0
+    assert decoded.reserved == 0x10
 
 
 def test_a_stray_high_type_bit_never_invents_an_unknown_type() -> None:
@@ -105,6 +111,20 @@ def test_a_psp_offset_is_relative_to_its_segment() -> None:
     assert any("segment 0 has vaddr 0x4000" in item for item in module.observations)
 
 
+def test_segment_relative_address_overflow_is_not_wrapped() -> None:
+    relocations = build_relocations([(0x20, R_MIPS_32, 0)])
+    module = _psp_module(
+        program_headers=[{"type": 1, "vaddr": 0xFFFFFFF0, "filesz": len(CODE), "memsz": 0x40}],
+        relocations=relocations,
+        addr=0xFFFFFFF0,
+    )
+    (relocation,) = module.relocations
+    assert relocation.offset == 0x20  # diagnostic raw fallback only
+    assert not relocation.application_valid
+    assert relocation.section_offset is None
+    assert any("overflows 32 bits" in item for item in module.observations)
+
+
 def test_a_relocation_naming_an_absent_segment_is_reported_not_dropped() -> None:
     relocations = build_relocations([(0x00, R_MIPS_32, 2)])  # segment 2
     module = _psp_module(
@@ -113,9 +133,23 @@ def test_a_relocation_naming_an_absent_segment_is_reported_not_dropped() -> None
     )
     (relocation,) = module.relocations
     assert relocation.segment_index == 2
-    # The raw offset is kept, and the limitation is visible.
+    # The raw offset coincides with .text, but invalid segment metadata must not
+    # turn that coincidence into an application location or readable addend.
     assert relocation.offset == 0x00
+    assert relocation.raw_offset == 0x00
+    assert not relocation.application_valid
+    assert relocation.section_offset is None
+    assert relocation.file_offset is None
+    assert relocation.addend == 0
     assert any("names segment 2" in item for item in module.observations)
+    inventory = psp_reloc.psp_inventory(module)
+    assert inventory["complete"] is False
+    assert len(inventory["invalid_entries"]) == 1
+    mapped = relocation_sites(module.relocations, 0, len(CODE))
+    assert mapped.sites == {}
+    assert mapped.limitations
+    result = compare(CODE, CODE, name="invalid-segment", original_relocations=module.relocations)
+    assert result.status == INCONCLUSIVE
 
 
 def test_a_relocation_naming_a_non_load_segment_is_reported() -> None:
@@ -128,6 +162,9 @@ def test_a_relocation_naming_a_non_load_segment_is_reported() -> None:
     )
     (relocation,) = module.relocations
     assert relocation.offset == 0x00
+    assert not relocation.application_valid
+    assert relocation.section_offset is None
+    assert relocation.file_offset is None
     assert any("not PT_LOAD" in item for item in module.observations)
 
 
@@ -157,7 +194,24 @@ def test_a_relative_segment_that_is_not_loaded_contributes_nothing() -> None:
     (relocation,) = module.relocations
     assert relocation.segment_index == 0
     assert relocation.relative_index == 3
-    assert psp_reloc.relative_base(module, relocation) == 0
+    assert psp_reloc.relative_base(module, relocation) is None
+
+
+def test_runtime_segment_address_requires_an_explicit_load_base() -> None:
+    relocations = build_relocations([(0x00, R_MIPS_32, 0)])
+    module = _psp_module(
+        program_headers=[{"type": 1, "vaddr": 0x1000, "filesz": len(CODE), "memsz": len(CODE)}],
+        relocations=relocations,
+        addr=0x1000,
+    )
+    (segment,) = module.segments
+    (relocation,) = module.relocations
+    assert psp_reloc.segment_runtime_address(segment, 0) == 0x1000
+    assert psp_reloc.segment_runtime_address(segment, 0x08800000) == 0x08801000
+    assert psp_reloc.relative_base(module, relocation) == 0x1000
+    assert psp_reloc.relative_base(module, relocation, load_base=0x08800000) == 0x08801000
+    with pytest.raises(ValueError, match="overflows"):
+        psp_reloc.segment_runtime_address(segment, 0xFFFFF000)
 
 
 # --------------------------------------------------------------- compressed
@@ -186,6 +240,24 @@ def test_a_compressed_psp2_section_is_reported_not_decoded() -> None:
     )
     assert module.relocations == ()
     assert any("PSPREL2" in item for item in module.observations)
+    assert psp_reloc.psp_inventory(module)["complete"] is False
+
+
+def test_a_compressed_program_header_payload_is_incomplete_inventory() -> None:
+    module = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[
+                {"type": psp_reloc.PT_PSPREL1, "filesz": 4, "memsz": 4},
+            ],
+            sections=[
+                {"name": ".text", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "data": CODE},
+            ],
+        )
+    )
+    inventory = psp_reloc.psp_inventory(module)
+    assert inventory["segment_relocation_payloads"] == [0]
+    assert inventory["complete"] is False
 
 
 # ------------------------------------------------------------------ segments
@@ -212,6 +284,11 @@ def test_apply_relocation_models_the_loaders_arithmetic() -> None:
     assert psp_reloc.apply_relocation(R_MIPS_26, 0x0C000010, 0x08800000) == 0x0E200010
     assert psp_reloc.apply_relocation(R_MIPS_26, 0x0C000010, 0) == 0x0C000010
     assert psp_reloc.apply_relocation(R_MIPS_LO16, 0x24844860, 0x1000) == 0x24845860
+    assert psp_reloc.apply_relocation(R_MIPS_LO16, 0x24844860, 0x08800000) == 0x24844860
+    assert psp_reloc.apply_relocation(R_MIPS_LO16, 0x24844860, 0x08801000) == 0x24845860
+    assert psp_reloc.apply_relocation(R_MIPS_LO16, 0x24847FFF, 1) == 0x24848000
+    assert psp_reloc.apply_relocation(R_MIPS_LO16, 0x24848000, 1) == 0x24848001
+    assert psp_reloc.apply_relocation(R_MIPS_LO16, 0x2484FFFF, 1) == 0x24840000
     assert psp_reloc.apply_relocation(R_MIPS_NONE, 0x12345678, 0x08800000) == 0x12345678
     # A GPREL16 is a notification: the word is left alone.
     assert psp_reloc.apply_relocation(psp_reloc.R_MIPS_GPREL16, 0x12345678, 0x08800000) == 0x12345678
@@ -223,17 +300,31 @@ def test_apply_relocation_returns_none_for_what_it_does_not_model() -> None:
     assert psp_reloc.apply_relocation(R_MIPS_HI16, 0x3C030060, 0) is None
 
 
-def test_hi16_absorbs_the_sign_of_its_lo16_partner() -> None:
-    # hi 0x0060 + lo 0x4860 = 0x00604860, so a zero base changes nothing.
-    assert (
-        psp_reloc.apply_relocation(R_MIPS_HI16, 0x3C030060, 0, lo16_word=0x24634860)
-        == 0x3C030060
-    )
-    # A low half with bit 15 set is negative, so the high half loses one.
+def test_hi16_rounds_the_sign_extended_lo16_before_taking_the_high_half() -> None:
+    # HI 1 plus signed LO -0x8000 reconstructs 0x00008000; the rounded high
+    # immediate must remain 1 (the old truncating calculation incorrectly gave 0).
     assert (
         psp_reloc.apply_relocation(R_MIPS_HI16, 0x3C030001, 0, lo16_word=0x24638000)
+        == 0x3C030001
+    )
+    # Carry caused by a nonzero runtime base is included before the rounding.
+    assert (
+        psp_reloc.apply_relocation(
+            R_MIPS_HI16, 0x3C030001, 0x08800000, lo16_word=0x24638000
+        )
+        == 0x3C030881
+    )
+    # Overflow wraps at 32 bits before the high-half rounding.
+    assert (
+        psp_reloc.apply_relocation(
+            R_MIPS_HI16, 0x3C03FFFF, 0x00010000, lo16_word=0x24637FFF
+        )
         == 0x3C030000
     )
+    # Non-relocation bits (opcode/register fields) remain unchanged.
+    assert psp_reloc.apply_relocation(
+        R_MIPS_HI16, 0x3C03FFFF, 0x00010000, lo16_word=0x24637FFF
+    ) & 0xFFFF0000 == 0x3C030000
 
 
 # ------------------------------------------------------------------ inventory
@@ -261,7 +352,8 @@ def test_the_inventory_records_formats_types_and_segments() -> None:
     assert inventory["relative_indices"] == {"0": 3}
     assert inventory["compressed_sections"] == []
     assert inventory["segment_relocation_payloads"] == []
-    assert inventory["entries_needing_a_rebase"] == []
+    assert inventory["relative_segments_with_nonzero_vaddr"] == []
+    assert inventory["runtime_addressing"] == "load_base + p_vaddr; load_base is not inferred from the ELF"
     (section,) = inventory["sections"]
     assert section["name"] == ".rel.text"
     assert section["entries"] == 3
@@ -279,17 +371,38 @@ def test_the_inventory_flags_entries_that_need_a_rebase() -> None:
         addr=0x1000,
     )
     inventory = psp_reloc.psp_inventory(module)
-    assert inventory["entries_needing_a_rebase"] == [1]
+    assert inventory["relative_segments_with_nonzero_vaddr"] == [1]
     assert inventory["segment_indices"] == {"1": 1}
     assert inventory["relative_indices"] == {"1": 1}
 
 
 def test_the_inventory_records_an_unknown_type() -> None:
     relocations = build_relocations([(0x00, 0x63, 0)])
+    module = parse(
+        build_elf32(
+            e_type=1,
+            sections=[
+                {"name": ".text", "type": SHT_PROGBITS, "flags": SHF_ALLOC | SHF_EXECINSTR, "data": CODE},
+                {"name": ".rel.text", "type": SHT_REL, "data": relocations, "entsize": 8},
+            ],
+        )
+    )
+    inventory = psp_reloc.psp_inventory(module)
+    assert inventory["unknown_types"] == ["R_MIPS_UNKNOWN(99)"]
+    assert inventory["types"] == {"R_MIPS_UNKNOWN(99)": 1}
+    assert inventory["complete"] is False
+
+
+def test_a_known_but_unimplemented_relocation_is_reported_as_unsupported() -> None:
+    # R_MIPS_16 and R_MIPS_REL32 are known MIPS values but this evaluator
+    # deliberately does not model their arithmetic; neither may look complete.
+    relocations = build_relocations([(0x00, 1, 0), (0x04, 3, 0)])
     module = _psp_module(
         program_headers=[{"type": 1, "vaddr": 0, "filesz": len(CODE), "memsz": len(CODE)}],
         relocations=relocations,
     )
     inventory = psp_reloc.psp_inventory(module)
-    assert inventory["unknown_types"] == ["R_MIPS_UNKNOWN(99)"]
-    assert inventory["types"] == {"R_MIPS_UNKNOWN(99)": 1}
+    assert inventory["unknown_types"] == []
+    assert inventory["unsupported_types"] == ["R_MIPS_16", "R_MIPS_REL32"]
+    assert inventory["complete"] is False
+    assert psp_reloc.apply_relocation(1, 0x12345678, 0x08800000) is None

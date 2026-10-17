@@ -774,7 +774,7 @@ def test_match_data_reference_without_a_map_stays_inconclusive(tmp_path, capsys)
     assert any("cannot be proven" in note for note in payload["limitations"])
 
 
-def test_match_data_reference_with_a_proven_map_matches(tmp_path, capsys) -> None:
+def test_match_data_reference_with_an_unverified_map_stays_inconclusive(tmp_path, capsys) -> None:
     original = _data32_prx(tmp_path)
     candidate = tmp_path / "func.o"
     candidate.write_bytes(_data_object_bytes("D_string"))
@@ -785,10 +785,11 @@ def test_match_data_reference_with_a_proven_map_matches(tmp_path, capsys) -> Non
         ["match", "--prx", str(original), "--function", "0x0", "--candidate", str(candidate),
          "--candidate-section-offset", "0", "--data-map", str(data_map), "--json"]
     )
-    assert status == cli.EXIT_OK
+    assert status == cli.EXIT_INCONCLUSIVE
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "MATCHED"
-    assert payload["resolved_data"]
+    assert payload["status"] == "INCONCLUSIVE"
+    assert not payload["resolved_data"]
+    assert any("unverified assertion" in note for note in payload["limitations"])
 
 
 def test_match_rejects_a_malformed_data_map(tmp_path, capsys) -> None:
@@ -882,9 +883,9 @@ def test_datarefs_separates_pairing_from_location(tmp_path, capsys) -> None:
     module = _data_reference_prx(tmp_path)
     out = tmp_path / "report" / "datarefs.json"
     status = cli.main(["datarefs", "--prx", str(module), "--out", str(out), "--json"])
-    # The string reference lands inside .data, but its HI16/LO16 pair is
-    # associated by relocation order alone, so the reference is not fully proven
-    # and the exit code says so.
+    # Register flow proves the pair and the numeric target is in .data. Object
+    # identity is not compared by this standalone report; another unresolved
+    # reference keeps the overall command inconclusive.
     assert status == cli.EXIT_INCONCLUSIVE
     payload = json.loads(capsys.readouterr().out)
     assert payload["section"] == ".text"
@@ -893,10 +894,11 @@ def test_datarefs_separates_pairing_from_location(tmp_path, capsys) -> None:
     string = references["0xc"]
     assert string["target"] == {"section": ".data", "offset": "0xc8"}
     assert string["location"] == "PROVEN"
-    assert string["pairing"] == "INFERRED"
-    assert string["status"] == "INFERRED"
+    assert string["pairing"] == "PROVEN"
+    assert string["status"] == "PROVEN"
+    assert string["object_identity"] == "NOT_APPLICABLE"
     assert string["combined_addend"] == "0x00004830"
-    assert string["unresolved"] is not None
+    assert string["unresolved"] is None
     assert string["relocations"][0]["format"] == "PSP"
     assert string["relocations"][0]["source_section"] == ".rel.text"
     assert string["relocations"][0]["raw_offset"] == "0x8"

@@ -31,10 +31,10 @@ object; when the compiler names it differently, pass ``--symbol`` (with the real
 name) or ``--no-symbol`` to fall back to automatic detection.
 
 Data references need more than the object: an ``ET_REL`` symbol names an original
-object only once a link says so.  Pass ``--data-map`` with a JSON file that states,
-with evidence, which original location each candidate data symbol names; without
-it every data reference stays ``INCONCLUSIVE`` (the object's own section and
-offset prove nothing about the module).
+object only once an independent artifact proves the link. ``--data-map`` may
+record an advisory assertion, but a JSON evidence string is not validation and
+cannot promote a data reference to ``MATCHED``. The object's own section/offset
+and equal numeric addends prove nothing about the original module.
 
 Example
 -------
@@ -52,6 +52,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +86,7 @@ from seto.toolchain import (  # noqa: E402
     load_settings,
     mwcc_argv,
     run,
+    spec_for,
 )
 
 # The proprietary PSP compiler, as declared in seto.toolchain.TOOL_SPECS.
@@ -108,6 +111,7 @@ class MatchRecord:
     object: str
     object_sha256: str
     compiler: str
+    loader: tuple[str, ...]
     flags: tuple[str, ...]
     includes: tuple[str, ...]
     defines: tuple[str, ...]
@@ -130,6 +134,7 @@ class MatchRecord:
                 "object": self.object,
                 "object_sha256": self.object_sha256,
                 "compiler": self.compiler,
+                "loader": list(self.loader),
                 "flags": list(self.flags),
                 "includes": list(self.includes),
                 "defines": list(self.defines),
@@ -202,6 +207,73 @@ def resolve_includes(includes: Sequence[str], settings: Settings) -> list[str]:
     return ["decomp/include"]
 
 
+def _resolve_loader_command(value: str) -> str | None:
+    """Resolve an explicit loader path/name without invoking a shell."""
+    candidate = Path(value)
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which(value)
+
+
+def _configured_loader(name: str, settings: Settings) -> str | None:
+    """Resolve one known Win32 loader using config, env, then PATH."""
+    spec = spec_for(name)
+    if spec is None:
+        return None
+    candidates: list[str] = []
+    configured = settings.tool_path(name)
+    if configured:
+        path = Path(configured)
+        if path.is_dir():
+            candidates.extend(str(path / candidate) for candidate in spec.names)
+        else:
+            candidates.append(configured)
+    env_value = os.environ.get(spec.env_var)
+    if env_value:
+        candidates.append(env_value)
+    candidates.extend(item for item in (shutil.which(candidate) for candidate in spec.names) if item)
+    for candidate in candidates:
+        resolved = _resolve_loader_command(candidate)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def resolve_loaders(
+    requested: Sequence[str], settings: Settings, *, platform: str | None = None
+) -> tuple[str, ...] | None:
+    """Choose the configured/discovered Win32 loader on POSIX, or native Windows.
+
+    An explicit ``--loader`` remains an override. ``None`` means a POSIX compiler
+    was selected but no usable loader could be located.
+    """
+    if requested:
+        resolved_items: list[str | None] = []
+        for item in requested:
+            resolved = _resolve_loader_command(item)
+            if resolved is None:
+                spec = next(
+                    (known for known in (spec_for("wibo"), spec_for("wine"))
+                     if known is not None and item in known.names),
+                    None,
+                )
+                if spec is not None:
+                    resolved = _configured_loader(spec.name, settings)
+            resolved_items.append(resolved)
+        resolved = tuple(resolved_items)
+        if any(item is None for item in resolved):
+            return None
+        return tuple(item for item in resolved if item is not None)
+    current = platform or ("nt" if os.name == "nt" else "posix")
+    if current == "nt":
+        return ()
+    for name in ("wibo", "wine"):
+        resolved = _configured_loader(name, settings)
+        if resolved is not None:
+            return (resolved,)
+    return None
+
+
 def build_match_argv(
     *,
     python: str,
@@ -262,6 +334,12 @@ def main(argv: list[str] | None = None) -> int:
         return _blocked(status)
     assert status.path is not None
 
+    loaders = resolve_loaders(arguments.loader, settings)
+    if loaders is None:
+        print("BLOCKED: no usable Win32 loader (wibo or wine) is available", file=sys.stderr)
+        print("  hint: configure [tools.wibo] or [tools.wine], or pass --loader", file=sys.stderr)
+        return EXIT_BLOCKED
+
     if not arguments.source.is_file():
         print(f"error: source not found: {arguments.source}", file=sys.stderr)
         return EXIT_ERROR
@@ -288,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
         flags=flags,
         includes=includes,
         defines=arguments.define,
-        loader=arguments.loader,
+        loader=loaders,
     )
     print("compiling:", file=sys.stderr)
     print("  " + " ".join(argv_compile), file=sys.stderr)
@@ -355,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         object=str(object_path),
         object_sha256=object_sha256,
         compiler=str(status.path),
+        loader=loaders,
         flags=tuple(flags),
         includes=tuple(includes),
         defines=tuple(arguments.define),

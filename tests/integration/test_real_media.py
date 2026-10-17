@@ -218,9 +218,10 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     assert string.combined == 0x4830
     assert string.target == datarefs.DataTarget(".data", 0xC8)
     assert string.location == datarefs.PROVEN
-    assert string.pairing == datarefs.INFERRED
-    assert string.status == datarefs.INFERRED
-    assert string.unresolved is not None
+    assert string.pairing == datarefs.PROVEN
+    assert string.status == datarefs.PROVEN
+    assert string.summary()["object_identity"] == datarefs.NOT_APPLICABLE
+    assert string.unresolved is None
     assert [item.type for item in string.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
     assert {item.format for item in string.relocations} == {"PSP"}
     assert [item.application for item in string.relocations] == [".text+0x4c4", ".text+0x4d0"]
@@ -238,6 +239,7 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     assert references[0x700].combined == 0x604B9C
     for reference in references.values():
         assert reference.status == datarefs.INFERRED
+        assert reference.pairing == datarefs.PROVEN
         assert reference.target is None
         assert reference.load is not None and not reference.load.initialized
 
@@ -252,23 +254,25 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     assert references[0x700].relocations[0].addend == 0x60
 
 
-def test_the_module_relocates_every_entry_by_one_zero_base(parsed: elf.ElfFile) -> None:
-    """The loader's base is one value for the whole module, and here it is 0.
-
-    A single ``PT_LOAD`` based at 0 means ``segmentVAddr[0] == p_vaddr[0] == 0``,
-    so the in-file addends are already module-relative and no relocation can turn
-    one address into another: applying the real HI16/LO16 entries to the real
-    instruction words is an identity.
-    """
+def test_module_relative_and_runtime_relocation_bases_are_distinct(parsed: elf.ElfFile) -> None:
+    """Zero-load-base arithmetic reproduces the file; a runtime base is explicit."""
     (segment,) = parsed.segments
     assert segment.vaddr == 0
     assert psp_reloc.relative_base(parsed, parsed.relocations_for(".text")[0]) == 0
+    runtime_base = 0x08800000
+    assert (
+        psp_reloc.relative_base(
+            parsed, parsed.relocations_for(".text")[0], load_base=runtime_base
+        )
+        == runtime_base
+    )
 
     text = parsed.section_data(parsed.require_section(".text"))
 
     def word_at(offset: int) -> int:
         return int.from_bytes(text[offset : offset + 4], "little")
 
+    relocated_values = {}
     for start, end in ((0x6E4, 0x704), (0x4B8, 0x508)):
         for reference in datarefs.recover_references(parsed, ".text", start, end):
             if reference.kind != "hi16-lo16":
@@ -276,12 +280,23 @@ def test_the_module_relocates_every_entry_by_one_zero_base(parsed: elf.ElfFile) 
             hi, lo = reference.relocations
             assert hi.application_offset is not None and lo.application_offset is not None
             hi_word = word_at(hi.application_offset)
-            assert (
-                psp_reloc.apply_relocation(
-                    elf.R_MIPS_HI16, hi_word, 0, lo16_word=word_at(lo.application_offset)
-                )
-                == hi_word
+            lo_word = word_at(lo.application_offset)
+            assert psp_reloc.apply_relocation(
+                elf.R_MIPS_HI16, hi_word, 0, lo16_word=lo_word
+            ) == hi_word
+            loaded_hi = psp_reloc.apply_relocation(
+                elf.R_MIPS_HI16, hi_word, runtime_base, lo16_word=lo_word
             )
+            loaded_lo = psp_reloc.apply_relocation(elf.R_MIPS_LO16, lo_word, runtime_base)
+            assert loaded_hi is not None and loaded_lo is not None
+            low = loaded_lo & 0xFFFF
+            signed_low = low - 0x10000 if low & 0x8000 else low
+            relocated = (((loaded_hi & 0xFFFF) << 16) + signed_low) & 0xFFFFFFFF
+            assert relocated == (reference.combined + runtime_base) & 0xFFFFFFFF
+            relocated_values[reference.instruction] = relocated
+
+    assert (relocated_values[0x6EC] - relocated_values[0x6F4]) & 0xFFFFFFFF == 0x600000
+    assert (relocated_values[0x700] - (0x4B9C + runtime_base)) & 0xFFFFFFFF == 0x600000
 
 
 def test_the_relocation_inventory_matches_the_documented_baseline(parsed: elf.ElfFile) -> None:
@@ -301,9 +316,11 @@ def test_the_relocation_inventory_matches_the_documented_baseline(parsed: elf.El
     assert inventory["segment_relocation_payloads"] == []
     assert inventory["segment_indices"] == {"0": 181}
     assert inventory["relative_indices"] == {"0": 181}
-    assert inventory["entries_needing_a_rebase"] == []
+    assert inventory["relative_segments_with_nonzero_vaddr"] == []
+    assert inventory["runtime_addressing"] == "load_base + p_vaddr; load_base is not inferred from the ELF"
     assert {section["name"] for section in inventory["sections"]} == {
         ".rel.text",
+        ".rel.sceStub.text",
         ".rel.data",
         ".rel.lib.ent",
         ".rel.lib.stub",
