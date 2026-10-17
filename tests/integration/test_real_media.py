@@ -12,6 +12,9 @@ read-only with respect to ``private/``.
 from __future__ import annotations
 
 import json
+import os
+import re
+import sys
 from functools import partial
 from pathlib import Path
 
@@ -19,6 +22,7 @@ import pytest
 
 from seto import cli, datarefs, elf, imports, inventory, matching, mips, psp_reloc, split
 from seto.matching import MATCHED, compare
+from seto.hashing import sha256_file
 from seto.toolchain import TOOL_SPECS, find_tool, load_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -185,6 +189,37 @@ def test_split_run_splat_verifies_the_real_listing(tmp_path, capsys) -> None:
         "listing: sceStub_text.s 2536 words (verified against the original bytes)"
         in printed
     )
+    evidence_dir = os.environ.get("SETO013_EVIDENCE_DIR")
+    if evidence_dir:
+        text_listing = re.search(r"listing: text\.s (\d+) words \(verified against the original bytes\)", printed)
+        stub_listing = re.search(
+            r"listing: sceStub_text\.s (\d+) words \(verified against the original bytes\)",
+            printed,
+        )
+        assert text_listing is not None and stub_listing is not None
+        evidence_path = Path(evidence_dir)
+        evidence_path.mkdir(parents=True, exist_ok=True)
+        (evidence_path / "splat.json").write_text(
+            json.dumps(
+                {
+                    "module_sha256": sha256_file(MODULE),
+                    "test_source": "tests/integration/test_real_media.py",
+                    "test_source_sha256": sha256_file(Path(__file__)),
+                    "platform": sys.platform,
+                    "tool_version": splat.version,
+                    "test": "tests/integration/test_real_media.py::test_split_run_splat_verifies_the_real_listing",
+                    "status": "PASS",
+                    "listings": [
+                        {"section": ".text", "words": int(text_listing.group(1)), "verified_against_original_bytes": True},
+                        {"section": ".sceStub.text", "words": int(stub_listing.group(1)), "verified_against_original_bytes": True},
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 def test_inventory_over_the_extracted_media() -> None:

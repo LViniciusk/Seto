@@ -118,6 +118,7 @@ def _checked_baseline(
     tag: str,
     function: str,
     address: int,
+    module_sha256: str,
     expected_pending_words: int,
     expected_total_words: int,
     build_dir: Path,
@@ -125,6 +126,8 @@ def _checked_baseline(
     """Validate report identity, baseline shape, and files before parsing ELF."""
     if report.get("function") != function or report.get("symbol") != function:
         raise ParseError(f"{function}: match report belongs to another function")
+    if report.get("module_sha256") != module_sha256:
+        raise ParseError(f"{function}: match report belongs to another module version")
     if _json_int(report.get("address"), f"{function} report address") != address:
         raise ParseError(f"{function}: match report has the wrong address")
     if (
@@ -705,6 +708,7 @@ def _candidate_content_observations(
 
 def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
     original = elf.parse(prx_path)
+    module_sha256 = _hash_file(prx_path)
     text_section = original.require_section(".text")
     text = original.section_data(text_section)
     functions_report = json.loads((build_dir / "functions.json").read_text(encoding="utf-8"))
@@ -712,7 +716,7 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
         item["name"]: (_json_int(item["start"], "function start"), _json_int(item["end"], "function end"))
         for item in functions_report["functions"]
     }
-    original_resolver = datarefs.module_resolver(original, f"original:{_hash_file(prx_path)}")
+    original_resolver = datarefs.module_resolver(original, f"original:{module_sha256}")
     baseline_rows: list[dict[str, object]] = []
     pending_pairs: list[dict[str, object]] = []
     verified_candidates: dict[str, elf.ElfFile] = {}
@@ -729,6 +733,7 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
             tag=tag,
             function=function,
             address=expected_start,
+            module_sha256=module_sha256,
             expected_pending_words=expected_pending_words,
             expected_total_words=expected_total_words,
             build_dir=build_dir,
@@ -889,7 +894,7 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
         "purpose": "Auditable projection of the eight current INCONCLUSIVE compiled-object baselines; not a new matcher or a symbol-link verifier.",
         "original_prx": {
             "path": prx_path.as_posix(),
-            "sha256": _hash_file(prx_path),
+            "sha256": module_sha256,
             "elf_summary": original.summary(),
         },
         "toolchain": {
@@ -963,8 +968,14 @@ def generate(prx_path: Path, build_dir: Path) -> dict[str, object]:
     }
 
 
-def reproduce_inputs(prx_path: Path, build_dir: Path, config: Path) -> None:
-    """Run the existing CLI/compiler scripts and retain fresh, auditable inputs."""
+def reproduce_inputs(
+    prx_path: Path,
+    build_dir: Path,
+    config: Path,
+    *,
+    compile_matches: bool = True,
+) -> None:
+    """Reproduce metadata and, by default, fresh inconclusive match reports."""
     build_dir.mkdir(parents=True, exist_ok=True)
 
     def run(argv: list[str], label: str, accepted: tuple[int, ...]) -> subprocess.CompletedProcess[str]:
@@ -1088,6 +1099,9 @@ def reproduce_inputs(prx_path: Path, build_dir: Path, config: Path) -> None:
             sibling_imports.stdout, encoding="utf-8"
         )
 
+    if not compile_matches:
+        return
+
     for tag, function, start, _pending_words, _total_words in FUNCTIONS:
         out = build_dir / "matches" / tag
         out.mkdir(parents=True, exist_ok=True)
@@ -1114,7 +1128,10 @@ def reproduce_inputs(prx_path: Path, build_dir: Path, config: Path) -> None:
         record = json.loads(result.stdout)
         if record.get("status") != INCONCLUSIVE or record.get("exit_code") != 5:
             raise ParseError(f"{function}: expected the real INCONCLUSIVE baseline")
-        (out / "report.json").write_text(result.stdout, encoding="utf-8")
+        record["module_sha256"] = _hash_file(prx_path)
+        (out / "report.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         (out / "stderr.txt").write_text(result.stderr, encoding="utf-8")
 
 
