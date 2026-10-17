@@ -80,6 +80,18 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
         "SetoAnalyzeFunction.java",
         "0x358",
         "0x39c",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x8c",
+        "0x134",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x178",
+        "0x244",
+        "-postScript",
+        "SetoAnalyzeFunction.java",
+        "0x278",
+        "0x358",
     )
     result = run(
         argv,
@@ -88,11 +100,11 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
     assert result.ok, result.combined()
     assert (project / "seto_real_prx.gpr").is_file()
     output = result.combined()
-    assert output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}") == 6
-    starts = ("0x244", "0x6e4", "0x4b8", "0x34", "0x134", "0x358")
-    ends = ("0x278", "0x704", "0x508", "0x84", "0x178", "0x39c")
-    counts = (13, 8, 20, 20, 17, 17)
-    sizes = (0x34, 0x20, 0x50, 0x50, 0x44, 0x44)
+    assert output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}") == 9
+    starts = ("0x244", "0x6e4", "0x4b8", "0x34", "0x134", "0x358", "0x8c", "0x178", "0x278")
+    ends = ("0x278", "0x704", "0x508", "0x84", "0x178", "0x39c", "0x134", "0x244", "0x358")
+    counts = (13, 8, 20, 20, 17, 17, 42, 51, 56)
+    sizes = (0x34, 0x20, 0x50, 0x50, 0x44, 0x44, 0xA8, 0xCC, 0xE0)
     blocks = {}
     for index, start in enumerate(starts):
         marker = f"SETO_FUNCTION_START={start}"

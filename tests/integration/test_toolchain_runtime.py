@@ -32,6 +32,9 @@ REAL_MATCH_CASES = (
     (0x34, "func_00000034.c", "MATCHED", 20, 20),
     (0x134, "func_00000134.c", "MATCHED", 17, 17),
     (0x358, "func_00000358.c", "MATCHED", 17, 17),
+    (0x8C, "func_0000008C.c", "MATCHED", 42, 42),
+    (0x178, "func_00000178.c", "MATCHED", 51, 51),
+    (0x278, "func_00000278.c", "MATCHED", 56, 56),
 )
 
 
@@ -136,5 +139,15 @@ def test_real_mwccpsp_function_baselines(
     assert match["total_words"] == total_words
     assert match["difference_count"] == 0
     assert match["relocation_issues"] == []
-    assert report["provenance"]["object_sha256"]
-    assert report["provenance"]["source_sha256"]
+    if expected_status == "MATCHED":
+        assert match["limitations"] == []
+        assert match["matching_words"] == match["total_words"]
+    else:
+        assert match["limitations"], "an inconclusive result must state its limitation"
+    provenance = report["provenance"]
+    assert provenance["object_sha256"]
+    assert provenance["source_sha256"]
+    assert Path(provenance["source"]).name == source
+    assert Path(provenance["object"]).is_file()
+    assert provenance["flags"] == ["-O4,p", "-sdatathreshold", "0"]
+    assert provenance["compiler"]
