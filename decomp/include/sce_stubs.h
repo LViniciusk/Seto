@@ -41,4 +41,18 @@ extern void func_00002F34(void);                         /* sceNetResolver NID 0
 extern void func_00002F2C(void);                         /* sceNetInet NID 0xA9ED66B9 */
 extern void func_00002F44(void);                         /* sceNet NID 0x281928A9 */
 
+/* Additional imports used by the SETO-DECOMP-009 candidates. Names remain
+ * address-derived until the exporting library tables are recovered; the
+ * parameter lists record only the observed call usage, not an SDK prototype. */
+extern int func_00002F6C(int value);                            /* sceUtility     NID 0x1579A159 */
+extern int func_00002F5C(int value);                            /* sceSsl         NID 0x957ECBE2 */
+extern int func_00002EEC(int value);                            /* sceHttp        NID 0xAB1ABE07 */
+extern int func_00002EFC(int, int, int, int);                   /* sceHttp        NID 0xE4D21302 */
+extern int func_00002EE4(int, int);                             /* sceHttp        NID 0x87797BDD */
+extern int func_00002F04(void);                                 /* sceHttp        NID 0xF1657B22 */
+extern int func_00002F4C(int, int, int, int, int);              /* sceNet         NID 0x39AF39A6 */
+extern int func_00002F24(void);                                 /* sceNetInet     NID 0x17943399 */
+extern int func_00002F3C(void);                                 /* sceNetResolver NID 0xF3370E61 */
+extern int func_00002F1C(int, int);                             /* sceNetApctl    NID 0xE2F91F9B */
+
 #endif /* SETO_DECOMP_SCE_STUBS_H */
