@@ -18,6 +18,7 @@ from conftest import (
     build_call_object,
     build_elf32,
     build_import_module,
+    build_relocations,
     build_symbols,
     jal,
     jr,
@@ -667,6 +668,253 @@ def test_imports_unknown_function_is_an_error(tmp_path, capsys) -> None:
     code_status = cli.main(["imports", "--prx", str(module), "--function", "0x999"])
     assert code_status == cli.EXIT_ERROR
     assert "no function starts" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------- data map
+
+
+def _data32_prx(tmp_path):
+    """A PRX whose function materializes one 32-bit global address in place."""
+    code = word(0x00004830) + word(jr(31)) + word(0)
+    relocations = build_relocations([(0, 2, 0)])  # R_MIPS_32
+    module = build_elf32(
+        e_type=0xFFA0,
+        sections=[
+            {
+                "name": ".text",
+                "type": 1,
+                "flags": SHF_ALLOC | SHF_EXECINSTR,
+                "addr": 0,
+                "size": len(code),
+                "data": code,
+            },
+            {
+                "name": ".data",
+                "type": 1,
+                "flags": SHF_ALLOC,
+                "addr": 0x4768,
+                "size": 0xE8,
+                "data": b"\x00" * 0xE8,
+            },
+            {
+                "name": ".rel.text",
+                "type": 9,
+                "flags": 0,
+                "addr": 0,
+                "size": len(relocations),
+                "data": relocations,
+                "entsize": 8,
+            },
+        ],
+    )
+    path = tmp_path / "libdata.prx"
+    path.write_bytes(module)
+    return path
+
+
+def _data_object_bytes(symbol_name: str) -> bytes:
+    """An ``ET_REL`` object whose first word is fixed by one ``R_MIPS_32`` symbol."""
+    code = word(0) + word(jr(31)) + word(0)
+    sections: list[dict] = [
+        {
+            "name": ".text",
+            "type": 1,
+            "flags": SHF_ALLOC | SHF_EXECINSTR,
+            "addr": 0,
+            "size": len(code),
+            "data": code,
+        }
+    ]
+    symtab, strtab = build_symbols(
+        [
+            {"name": "", "value": 0, "size": 0, "info": 0, "other": 0, "shndx": 0},
+            {"name": symbol_name, "value": 0, "size": 0, "info": 0x10, "other": 0, "shndx": 0},
+        ]
+    )
+    sections.append(
+        {"name": ".symtab", "type": 2, "flags": 0, "addr": 0, "size": len(symtab),
+         "data": symtab, "link": 3, "info": 1, "align": 4, "entsize": 0x10}
+    )
+    sections.append(
+        {"name": ".strtab", "type": 3, "flags": 0, "addr": 0, "size": len(strtab),
+         "data": strtab, "align": 1}
+    )
+    relocations = build_relocations([(0, 2, 1)])  # R_MIPS_32 -> symbol 1
+    sections.append(
+        {"name": ".rel.text", "type": 9, "flags": 0, "addr": 0, "size": len(relocations),
+         "data": relocations, "link": 3, "info": 1, "align": 4, "entsize": 8}
+    )
+    return build_elf32(sections=sections)
+
+
+def _write_data_map(tmp_path, symbols) -> object:
+    path = tmp_path / "data-map.json"
+    path.write_text(
+        json.dumps({"evidence": "unit test mapping", "symbols": symbols}), encoding="utf-8"
+    )
+    return path
+
+
+def test_match_data_reference_without_a_map_stays_inconclusive(tmp_path, capsys) -> None:
+    # An R_MIPS_32 reference is a data *identity*, not a number: the two sides
+    # encode it differently and nothing here proves they name the same object, so
+    # the comparison must stay INCONCLUSIVE instead of trusting the bytes.
+    original = _data32_prx(tmp_path)
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(_data_object_bytes("D_string"))
+    status = cli.main(
+        ["match", "--prx", str(original), "--function", "0x0", "--candidate", str(candidate),
+         "--candidate-section-offset", "0", "--json"]
+    )
+    assert status == cli.EXIT_INCONCLUSIVE
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "INCONCLUSIVE"
+    assert not payload["resolved_data"]
+    assert any("cannot be proven" in note for note in payload["limitations"])
+
+
+def test_match_data_reference_with_a_proven_map_matches(tmp_path, capsys) -> None:
+    original = _data32_prx(tmp_path)
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(_data_object_bytes("D_string"))
+    data_map = _write_data_map(
+        tmp_path, [{"symbol": "D_string", "section": ".data", "offset": "0xc8"}]
+    )
+    status = cli.main(
+        ["match", "--prx", str(original), "--function", "0x0", "--candidate", str(candidate),
+         "--candidate-section-offset", "0", "--data-map", str(data_map), "--json"]
+    )
+    assert status == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "MATCHED"
+    assert payload["resolved_data"]
+
+
+def test_match_rejects_a_malformed_data_map(tmp_path, capsys) -> None:
+    original = _data32_prx(tmp_path)
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(_data_object_bytes("D_string"))
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert (
+        cli.main(
+            ["match", "--prx", str(original), "--function", "0x0", "--candidate", str(candidate),
+             "--candidate-section-offset", "0", "--data-map", str(broken)]
+        )
+        == cli.EXIT_ERROR
+    )
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_match_rejects_a_data_map_entry_without_an_offset(tmp_path, capsys) -> None:
+    original = _data32_prx(tmp_path)
+    candidate = tmp_path / "func.o"
+    candidate.write_bytes(_data_object_bytes("D_string"))
+    data_map = _write_data_map(tmp_path, [{"symbol": "D_string", "section": ".data"}])
+    assert (
+        cli.main(
+            ["match", "--prx", str(original), "--function", "0x0", "--candidate", str(candidate),
+             "--candidate-section-offset", "0", "--data-map", str(data_map)]
+        )
+        == cli.EXIT_ERROR
+    )
+    assert "'offset' is required" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------- datarefs
+
+
+def _data_reference_prx(tmp_path):
+    """A PRX whose function builds one global address and one string address."""
+    code = b"".join(
+        (
+            word(0x3C040060),  # lui   $a0, 0x60
+            word(0x24844860),  # addiu $a0, $a0, 0x4860  -> 0x604860
+            word(0x3C050000),  # lui   $a1, 0
+            word(0x24A54830),  # addiu $a1, $a1, 0x4830  -> .data + 0xc8
+            word(jr(31)),
+            word(0),
+        )
+    )
+    relocations = build_relocations(
+        [(0x00, 5, 0), (0x04, 6, 0), (0x08, 5, 0), (0x0C, 6, 0)]
+    )
+    module = build_elf32(
+        e_type=0xFFA0,
+        sections=[
+            {
+                "name": ".text",
+                "type": 1,
+                "flags": SHF_ALLOC | SHF_EXECINSTR,
+                "addr": 0,
+                "size": len(code),
+                "data": code,
+            },
+            {
+                "name": ".data",
+                "type": 1,
+                "flags": SHF_ALLOC,
+                "addr": 0x4768,
+                "size": 0xE8,
+                "data": b"\x00" * 0xE8,
+            },
+            {
+                "name": ".rel.text",
+                "type": 9,
+                "flags": 0,
+                "addr": 0,
+                "size": len(relocations),
+                "data": relocations,
+                "entsize": 8,
+            },
+        ],
+    )
+    path = tmp_path / "libtest.prx"
+    path.write_bytes(module)
+    return path
+
+
+def test_datarefs_separates_pairing_from_location(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    out = tmp_path / "report" / "datarefs.json"
+    status = cli.main(["datarefs", "--prx", str(module), "--out", str(out), "--json"])
+    # The string reference lands inside .data, but its HI16/LO16 pair is
+    # associated by relocation order alone, so the reference is not fully proven
+    # and the exit code says so.
+    assert status == cli.EXIT_INCONCLUSIVE
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["section"] == ".text"
+    assert payload["functions"][0]["function"] == "func_00000000"
+    references = {item["instruction"]: item for item in payload["functions"][0]["references"]}
+    string = references["0xc"]
+    assert string["target"] == {"section": ".data", "offset": "0xc8"}
+    assert string["location"] == "PROVEN"
+    assert string["pairing"] == "INFERRED"
+    assert string["status"] == "INFERRED"
+    assert string["combined_addend"] == "0x00004830"
+    assert string["unresolved"] is not None
+    outside = references["0x4"]
+    assert outside["status"] == "UNKNOWN"
+    assert outside["target"] is None
+    assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+
+def test_datarefs_unknown_function_is_an_error(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    assert (
+        cli.main(["datarefs", "--prx", str(module), "--function", "0x999"])
+        == cli.EXIT_ERROR
+    )
+    assert "no function starts" in capsys.readouterr().err
+
+
+def test_datarefs_writes_a_deterministic_report(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    first = tmp_path / "one.json"
+    second = tmp_path / "two.json"
+    cli.main(["datarefs", "--prx", str(module), "--out", str(first)])
+    cli.main(["datarefs", "--prx", str(module), "--out", str(second)])
+    assert first.read_bytes() == second.read_bytes()
 
 
 # ----------------------------------------------------------------------- disasm

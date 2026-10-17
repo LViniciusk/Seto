@@ -30,6 +30,12 @@ The candidate function is located by its ``func_XXXXXXXX`` symbol inside the
 object; when the compiler names it differently, pass ``--symbol`` (with the real
 name) or ``--no-symbol`` to fall back to automatic detection.
 
+Data references need more than the object: an ``ET_REL`` symbol names an original
+object only once a link says so.  Pass ``--data-map`` with a JSON file that states,
+with evidence, which original location each candidate data symbol names; without
+it every data reference stays ``INCONCLUSIVE`` (the object's own section and
+offset prove nothing about the module).
+
 Example
 -------
     python scripts/match_function.py \
@@ -105,6 +111,7 @@ class MatchRecord:
     flags: tuple[str, ...]
     includes: tuple[str, ...]
     defines: tuple[str, ...]
+    data_map: str | None = None
 
     def summary(self) -> dict:
         return {
@@ -126,6 +133,7 @@ class MatchRecord:
                 "flags": list(self.flags),
                 "includes": list(self.includes),
                 "defines": list(self.defines),
+                "data_map": self.data_map,
             },
         }
 
@@ -142,7 +150,7 @@ def equivalence_of(status: str, payload: Mapping) -> str:
     """
     if status != MATCHED:
         return ""
-    if payload.get("resolved_calls"):
+    if payload.get("resolved_calls") or payload.get("resolved_data"):
         return EQUIVALENCE_RESOLVED_RELOCATIONS
     return EQUIVALENCE_BINARY
 
@@ -161,6 +169,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--define", action="append", default=[], help="macro definition, repeatable")
     parser.add_argument("--symbol", default=None, help="candidate symbol name (default: func_XXXXXXXX)")
     parser.add_argument("--no-symbol", action="store_true", help="let seto detect the candidate function")
+    parser.add_argument(
+        "--data-map",
+        type=Path,
+        default=None,
+        help="JSON file linking candidate data symbols to original locations",
+    )
     parser.add_argument("--out", type=Path, default=Path("build/match"))
     parser.add_argument(
         "--report", type=Path, default=None, help="where to write the JSON provenance record"
@@ -197,6 +211,7 @@ def build_match_argv(
     candidate: Path,
     symbol: str | None,
     config: Path | None,
+    data_map: Path | None = None,
 ) -> list[str]:
     """Build the ``python -m seto match ... --json`` command line.
 
@@ -220,6 +235,8 @@ def build_match_argv(
     ]
     if symbol:
         argv += ["--candidate-symbol", symbol]
+    if data_map is not None:
+        argv += ["--data-map", str(data_map)]
     argv.append("--json")
     return argv
 
@@ -296,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         candidate=object_path,
         symbol=symbol,
         config=arguments.config,
+        data_map=arguments.data_map,
     )
 
     print("comparing:", file=sys.stderr)
@@ -340,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         flags=tuple(flags),
         includes=tuple(includes),
         defines=tuple(arguments.define),
+        data_map=None if arguments.data_map is None else str(arguments.data_map),
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
