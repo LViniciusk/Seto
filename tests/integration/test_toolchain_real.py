@@ -252,8 +252,10 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
         for address in maps:
             assert f"SETO_ADDRESS_MAP={address} UNMAPPED" in block
 
-    # func_00000084 (0x84-0x8C) is eight bytes: `jr $ra` and its delay slot, with
-    # no caller, no callee, no data reference and no import. Ghidra's
+    # func_00000084 (0x84-0x8C) is eight bytes: `jr $ra` and its delay slot. No
+    # call in the module reaches it and it calls nothing, but its address is not
+    # untouched: func_00000000 computes `.text+0x84` and passes it as an argument
+    # (the datarefs test in test_real_media.py registers that reference). Ghidra's
     # auto-analysis does not model it as a function, so it is reported NOT_FOUND;
     # the range stays a classification, not a reconstruction target of the round.
     block = blocks["0x84"]

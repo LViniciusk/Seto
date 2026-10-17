@@ -254,6 +254,40 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     assert references[0x700].relocations[0].addend == 0x60
 
 
+def test_func_00000084_is_referenced_as_an_argument_by_func_00000000(
+    parsed: elf.ElfFile,
+) -> None:
+    """0x84 is not called, but its address is taken and passed as an argument.
+
+    ``func_00000000`` builds three relocatable addresses and passes them to an
+    imported ``libehsys`` entry point.  The second is ``.text+0x84``: the address
+    just past ``func_00000034``.  So the module does reach 0x84 as a *value*, even
+    though no call or branch targets it - the claim that nothing references it is
+    wrong, and this test pins the reference instead of leaving it to prose.
+    """
+    references = datarefs.recover_references(parsed, ".text", 0x0, 0x34)
+    assert [reference.instruction for reference in references] == [0x14, 0x18, 0x20]
+
+    start_of_34, start_of_84, tail = references
+    assert start_of_34.combined == 0x34
+    assert start_of_84.combined == 0x84
+    assert start_of_84.target == datarefs.DataTarget(".text", 0x84)
+    assert start_of_84.location == datarefs.PROVEN
+    assert start_of_84.pairing == datarefs.PROVEN
+    assert start_of_84.status == datarefs.PROVEN
+    assert start_of_84.unresolved is None
+
+    # The third is the zero-filled tail, which no named section covers.
+    assert tail.combined == 0x4850
+    assert tail.target is None
+    assert tail.location == datarefs.INFERRED
+    assert tail.unresolved == "destination is only in a load segment, not a named section"
+
+    # 0x84 as a destination is distinct from 0x34: both are code addresses in the
+    # same section, and the plain section offsets keep them apart.
+    assert start_of_84.target.offset - start_of_34.target.offset == 0x50
+
+
 def test_module_relative_and_runtime_relocation_bases_are_distinct(parsed: elf.ElfFile) -> None:
     """Zero-load-base arithmetic reproduces the file; a runtime base is explicit."""
     (segment,) = parsed.segments
