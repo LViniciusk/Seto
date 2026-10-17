@@ -11,11 +11,15 @@ from seto.datarefs import (
     NOT_APPLICABLE,
     PROVEN,
     UNKNOWN,
+    DataIdentity,
     DataTarget,
+    SymbolLink,
+    build_global_usage,
     build_reference_report,
     data_target_details,
     load_location,
     recover_references,
+    reference_key,
     resolve_data_target,
 )
 
@@ -388,3 +392,193 @@ def test_reference_summary_is_json_serialisable(tmp_path: Path) -> None:
     payload = json.dumps(report, sort_keys=True)
     assert "load_offset" in payload
     assert "0x1900" in payload
+
+
+def _summary(
+    *,
+    instruction: str,
+    pairing: str = PROVEN,
+    location: str = PROVEN,
+    addend_valid: bool = True,
+    target: dict[str, object] | None = None,
+    segment: int | None = None,
+    load_offset: str | None = None,
+) -> dict[str, object]:
+    """Build the report shape ``build_global_usage`` consumes, without an ELF."""
+    payload: dict[str, object] = {
+        "instruction": instruction,
+        "kind": "hi16-lo16",
+        "pairing": pairing,
+        "location": location,
+        "status": location,
+        "combined_addend_valid": addend_valid,
+        "target": target,
+        "unresolved": None if location == PROVEN else "unresolved",
+    }
+    if segment is not None:
+        payload["load_segment"] = segment
+    if load_offset is not None:
+        payload["load_offset"] = load_offset
+    return payload
+
+
+def test_reference_key_names_a_proven_section_location() -> None:
+    summary = _summary(instruction="0x10", target={"section": ".data", "offset": "0x20"})
+    assert reference_key(summary) == ("section", ".data", 0x20)
+
+
+def test_reference_key_names_a_segment_only_location() -> None:
+    # A zero-filled address with no named section stays a segment-relative key,
+    # never a section one.
+    summary = _summary(instruction="0x20", location=INFERRED, segment=0, load_offset="0x4850")
+    assert reference_key(summary) == ("segment", 0, 0x4850)
+
+
+def test_reference_key_refuses_an_order_only_pair() -> None:
+    # A destination inside a named section is not enough when the HI16/LO16
+    # association rests on relocation order alone.
+    summary = _summary(
+        instruction="0x10", pairing=INFERRED, target={"section": ".data", "offset": "0x8"}
+    )
+    assert reference_key(summary) is None
+
+
+def test_reference_key_requires_a_recoverable_addend() -> None:
+    summary = _summary(
+        instruction="0x10", addend_valid=False, target={"section": ".data", "offset": "0x8"}
+    )
+    assert reference_key(summary) is None
+
+
+def test_global_usage_groups_shared_locations_across_functions() -> None:
+    report = {
+        "section": ".text",
+        "functions": [
+            {
+                "function": "func_a",
+                "references": [
+                    _summary(instruction="0x10", target={"section": ".data", "offset": "0x68"})
+                ],
+            },
+            {
+                "function": "func_b",
+                "references": [
+                    _summary(instruction="0x20", target={"section": ".data", "offset": "0x68"}),
+                    _summary(
+                        instruction="0x30", location=INFERRED, segment=0, load_offset="0x4850"
+                    ),
+                ],
+            },
+        ],
+    }
+    usage = build_global_usage(report)
+    assert usage["section"] == ".text"
+    assert usage["unresolved"] == []
+    assert [location["offset"] for location in usage["locations"]] == ["0x68", "0x4850"]
+    shared = usage["locations"][0]
+    assert shared["section"] == ".data"
+    assert shared["functions"] == ["func_a", "func_b"]
+    assert [item["instruction"] for item in shared["references"]] == ["0x10", "0x20"]
+    only_segment = usage["locations"][1]
+    assert only_segment["kind"] == "segment"
+    assert only_segment["segment"] == 0
+
+
+def test_global_usage_keeps_the_same_offset_in_different_segments_apart() -> None:
+    report = {
+        "section": ".text",
+        "functions": [
+            {
+                "function": "func_a",
+                "references": [
+                    _summary(instruction="0x10", location=INFERRED, segment=0, load_offset="0x4850"),
+                    _summary(instruction="0x20", location=INFERRED, segment=1, load_offset="0x4850"),
+                ],
+            }
+        ],
+    }
+    usage = build_global_usage(report)
+    assert [(item["kind"], item["segment"], item["offset"]) for item in usage["locations"]] == [
+        ("segment", 0, "0x4850"),
+        ("segment", 1, "0x4850"),
+    ]
+
+
+def test_global_usage_preserves_each_access_without_inventing_a_type() -> None:
+    wide = _summary(instruction="0x10", target={"section": ".data", "offset": "0x68"})
+    narrow = _summary(instruction="0x20", target={"section": ".data", "offset": "0x68"})
+    narrow["kind"] = "r_mips_32"
+    report = {
+        "section": ".text",
+        "functions": [{"function": "func_a", "references": [wide, narrow]}],
+    }
+    usage = build_global_usage(report)
+    (location,) = usage["locations"]
+    assert [item["kind"] for item in location["references"]] == ["hi16-lo16", "r_mips_32"]
+    assert "type" not in location
+    assert "size" not in location
+
+
+def test_global_usage_keeps_unkeyable_references_visible() -> None:
+    report = {
+        "section": ".text",
+        "functions": [
+            {
+                "function": "func_a",
+                "references": [
+                    _summary(
+                        instruction="0x10",
+                        pairing=INFERRED,
+                        target={"section": ".data", "offset": "0x8"},
+                    )
+                ],
+            }
+        ],
+    }
+    usage = build_global_usage(report)
+    assert usage["locations"] == []
+    assert [item["instruction"] for item in usage["unresolved"]] == ["0x10"]
+
+
+def test_global_usage_is_deterministic_regardless_of_input_order() -> None:
+    def entry(name: str, instruction: str, offset: str) -> dict[str, object]:
+        return {
+            "function": name,
+            "references": [_summary(instruction=instruction, target={"section": ".data", "offset": offset})],
+        }
+
+    first = entry("func_a", "0x10", "0x68")
+    second = entry("func_b", "0x20", "0x20")
+    forward = build_global_usage({"section": ".text", "functions": [first, second]})
+    backward = build_global_usage({"section": ".text", "functions": [second, first]})
+    assert forward == backward
+    assert [location["offset"] for location in forward["locations"]] == ["0x20", "0x68"]
+
+
+def test_global_usage_sorts_the_functions_of_a_shared_location() -> None:
+    def entry(name: str, instruction: str) -> dict[str, object]:
+        return {
+            "function": name,
+            "references": [
+                _summary(instruction=instruction, target={"section": ".data", "offset": "0x68"})
+            ],
+        }
+
+    usage = build_global_usage(
+        {"section": ".text", "functions": [entry("func_b", "0x20"), entry("func_a", "0x10")]}
+    )
+    assert usage["locations"][0]["functions"] == ["func_a", "func_b"]
+
+
+def test_an_unverified_symbol_link_is_an_assertion_not_a_proof(tmp_path: Path) -> None:
+    parsed = _object(tmp_path)
+    site = rel(0x04, elf.R_MIPS_HI16, symbol="D_candidate", addend=0)
+    link = SymbolLink(entries={"D_candidate": DataTarget(".text", 0x8)})
+
+    # Parsing JSON never sets `verified`, so the link cannot answer at all.
+    assert link.resolver(parsed, "original")(site, 0) is None
+
+    verified = replace(link, verified=True)
+    assert verified.resolver(parsed, "original")(site, 0) == DataIdentity(
+        "original", DataTarget(".text", 0x8)
+    )
