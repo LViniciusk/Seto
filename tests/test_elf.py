@@ -215,6 +215,69 @@ def test_prx_shstrtab_with_address_zero_does_not_shadow_text() -> None:
     assert parsed.relocations[1].addend == 0
 
 
+def test_psp_r_info_is_a_segment_not_a_symbol_index() -> None:
+    """The same ``r_info`` bits are a symbol index in SHT_REL and a segment in PSP."""
+    code = struct.pack("<I", 0x00000000) * 2
+    parsed = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[
+                {"type": 1, "vaddr": 0x0000, "filesz": len(code), "memsz": len(code)},
+                {"type": 1, "vaddr": 0x1000, "filesz": len(code), "memsz": len(code)},
+            ],
+            sections=[
+                _text_section(code, addr=0x1000),
+                {
+                    "name": ".rel.text",
+                    "type": SHT_MIPS_PSPREL,
+                    # r_info = (relative 2 << 16) | (segment 1 << 8) | R_MIPS_LO16
+                    "data": build_relocations([(0x00, R_MIPS_LO16, (2 << 8) | 1)]),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    relocation = parsed.relocations_for(".text")[0]
+    assert relocation.info == (2 << 16) | (1 << 8) | R_MIPS_LO16
+    assert relocation.format == "PSP"
+    assert relocation.segment_index == 1
+    assert relocation.relative_index == 2
+    # Bits 8..15 name a segment here, so they must not be read as a symbol index.
+    assert relocation.symbol_index == 0
+    # r_offset is segment-relative, so the patched address is segment.vaddr + it.
+    assert relocation.raw_offset == 0x00
+    assert relocation.offset == 0x1000
+    assert relocation.section_offset == 0x00
+
+
+def test_standard_rel_r_info_is_a_symbol_index() -> None:
+    symbol_table, string_table = build_symbol_table(["", "func_a"])
+    code = struct.pack("<I", 0x0C000000 | (0x20 >> 2)) + b"\x00" * 4
+    parsed = parse(
+        build_elf32(
+            e_type=1,
+            sections=[
+                _text_section(code),
+                {"name": ".symtab", "type": SHT_SYMTAB, "data": symbol_table, "link": 3, "entsize": 16},
+                {"name": ".strtab", "type": SHT_STRTAB, "data": string_table},
+                {
+                    "name": ".rel.text",
+                    "type": SHT_REL,
+                    "data": build_relocations([(0x00, R_MIPS_26, 1)]),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    relocation = parsed.relocations_for(".text")[0]
+    assert relocation.format == "REL"
+    assert relocation.symbol_index == 1
+    assert relocation.symbol == "func_a"
+    assert relocation.segment_index == 0
+    assert relocation.relative_index == 0
+    assert relocation.raw_offset == relocation.offset == 0x00
+
+
 def test_relocation_symbols_from_symtab() -> None:
     symbol_table, string_table = build_symbol_table(["", "func_a", "func_b"])
     code = struct.pack("<I", 0x0C000000 | (0x20 >> 2)) + b"\x00" * 4

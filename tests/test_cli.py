@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from seto import cli
+from seto.elf import SHT_MIPS_PSPREL
 from seto.hashing import fingerprint_file
 from seto.toolchain import NOT_APPLICABLE, RunResult, ToolStatus
 
@@ -841,6 +842,9 @@ def _data_reference_prx(tmp_path):
     )
     module = build_elf32(
         e_type=0xFFA0,
+        program_headers=[
+            {"type": 1, "vaddr": 0, "filesz": len(code), "memsz": 0x8000},
+        ],
         sections=[
             {
                 "name": ".text",
@@ -860,7 +864,7 @@ def _data_reference_prx(tmp_path):
             },
             {
                 "name": ".rel.text",
-                "type": 9,
+                "type": SHT_MIPS_PSPREL,
                 "flags": 0,
                 "addr": 0,
                 "size": len(relocations),
@@ -893,10 +897,67 @@ def test_datarefs_separates_pairing_from_location(tmp_path, capsys) -> None:
     assert string["status"] == "INFERRED"
     assert string["combined_addend"] == "0x00004830"
     assert string["unresolved"] is not None
+    assert string["relocations"][0]["format"] == "PSP"
+    assert string["relocations"][0]["source_section"] == ".rel.text"
+    assert string["relocations"][0]["raw_offset"] == "0x8"
+    assert string["relocations"][1]["raw_offset"] == "0xc"
     outside = references["0x4"]
     assert outside["status"] == "UNKNOWN"
     assert outside["target"] is None
+    inventory = payload["relocation_inventory"]
+    assert inventory["formats"] == ["PSP"]
+    assert inventory["psp_entries"] == 4
+    assert inventory["standard_entries"] == 0
+    assert inventory["unknown_types"] == []
+    assert inventory["segment_indices"] == {"0": 4}
     assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+
+def test_datarefs_prints_the_relocation_inventory(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    cli.main(["datarefs", "--prx", str(module)])
+    out = capsys.readouterr().out
+    assert "relocation formats: PSP (4 PSP, 0 standard)" in out
+    assert "relocation types: R_MIPS_HI16 x2, R_MIPS_LO16 x2" in out
+    assert "unresolved:" in out
+
+
+def test_datarefs_reports_a_standard_rel_format(tmp_path, capsys) -> None:
+    # A relocatable object keeps the standard SHT_REL layout, and the inventory
+    # must name that format rather than assume the PSP one.
+    code = word(0x3C040000) + word(0x24844830) + word(jr(31)) + word(0)
+    relocations = build_relocations([(0x00, 5, 1), (0x04, 6, 1)])
+    module = build_elf32(
+        e_type=1,
+        sections=[
+            {
+                "name": ".text",
+                "type": 1,
+                "flags": SHF_ALLOC | SHF_EXECINSTR,
+                "addr": 0,
+                "size": len(code),
+                "data": code,
+            },
+            {
+                "name": ".rel.text",
+                "type": 9,
+                "flags": 0,
+                "addr": 0,
+                "size": len(relocations),
+                "data": relocations,
+                "entsize": 8,
+            },
+        ],
+    )
+    path = tmp_path / "func.o"
+    path.write_bytes(module)
+    assert cli.main(["datarefs", "--prx", str(path), "--json"]) == cli.EXIT_INCONCLUSIVE
+    payload = json.loads(capsys.readouterr().out)
+    inventory = payload["relocation_inventory"]
+    assert inventory["formats"] == ["REL"]
+    assert inventory["standard_entries"] == 2
+    assert inventory["psp_entries"] == 0
+    assert inventory["segment_indices"] == {}
 
 
 def test_datarefs_unknown_function_is_an_error(tmp_path, capsys) -> None:

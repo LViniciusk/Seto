@@ -105,6 +105,14 @@ Status vocabulary, used strictly:
     claim that the reconstruction in `decomp/src/` matches — that still requires a
     compile, and it does not increase the count of decompiled functions.
 
+5. **The relocation format is understood, not assumed.** Every relocation table in
+   `libhtml_view.prx` is the fixed-width PSP form (`SHT_PSPREL`, `0x700000A0`):
+   181 entries, four known types, no unknown type, no compressed `SHT_PSPREL2`
+   stream and no `PT_PSPREL*` payload segment. `r_info` packs type/segment/relative
+   fields (never a symbol index) and `r_offset` is segment-relative, both
+   reproduced from PPSSPP's loader and covered by synthetic fixtures. See
+   [SETO-DECOMP-007](#seto-decomp-007--psp-relocation-semantics-and-runtime-memory-mapping).
+
 ## SETO-DECOMP-005 — first function analysis and two new reconstructions
 
 The real PRX was split with `splat64[mips]` and the emitted `.text` listing was
@@ -227,10 +235,12 @@ rests on relocation order.
 module's ELF base — every section is based at `0` and `.data` ends at `0x4850`.
 The ELF `.bss` section is empty (size `0`), so `0x604860`, `0x604B9C` and `0x4860`
 all fall in the zero-filled tail of the single `PT_LOAD` segment and in no named
-section. The transformation between the two address spaces is therefore **not
-proven**: the report keeps them distinct and marks all three `INFERRED`. It never
+section. The report keeps them distinct and marks all three `INFERRED`: it never
 assumes `0x604860` and `0x4860` name the same object, and never promotes an
 address-like name or a plausible-looking offset to an identity.
+
+SETO-DECOMP-007 later shows that `0x600000` is not a transformation at all — see
+[The `0x600000` difference is the high half of a different address](#the-0x600000-difference-is-the-high-half-of-a-different-address).
 
 ### How the comparator uses data identity
 
@@ -297,6 +307,112 @@ not `PROVEN`, which is the case here.
 | References with an order-only HI16/LO16 pairing | 4 |
 | Compiled with `mwccpsp` | 0 |
 | Proven `MATCHED` | 0 |
+
+## SETO-DECOMP-007 — PSP relocation semantics and runtime memory mapping
+
+This round reads the module's relocations *as the PSP loader does*, so the
+addresses of the three reconstructions are explained instead of assumed. The
+parser is unchanged in what it means by "a byte": `seto.elf` keeps the raw fields
+of every entry, and `seto.psp_reloc` gives the PSP relocation section its own
+meaning. No system is emulated and nothing is written into an image.
+
+### What the module's relocation tables actually are
+
+`seto datarefs` reports the inventory next to the references, and
+`seto.psp_reloc.psp_inventory` produces it. For `libhtml_view.prx`:
+
+| Fact | Value |
+| --- | --- |
+| Relocation section type | `SHT_PSPREL` (`0x700000A0`) for all 8 tables |
+| Entry layout | fixed 8-byte `Elf32_Rel` (`r_offset`, `r_info`) |
+| Entries | 181 (132 in `.rel.text`, 49 in the six data tables) |
+| Types | `R_MIPS_26` x72, `R_MIPS_32` x49, `R_MIPS_HI16` x30, `R_MIPS_LO16` x30 |
+| Unknown types | none |
+| Compressed `SHT_PSPREL2` tables | none |
+| `PT_PSPREL1`/`PT_PSPREL2` payload segments | none |
+
+`r_info` is **not** a symbol index in this format. It packs three fields, which
+PPSSPP's `ElfReader::LoadRelocations` masks exactly this way:
+
+```
+bits  0..3    relocation type (R_MIPS_*)
+bits  8..15   the segment the relocated word lives in
+bits 16..23   the segment whose load base is added ("relative" segment)
+```
+
+Every entry in this module has both segment fields `0`, so nothing is rebased
+locally. `r_offset` is an offset *inside* the segment named by bits 8..15, so the
+byte the loader patches is `segments[segment].vaddr + r_offset`; the standard
+`SHT_REL` layout, where the same bits are a symbol index and `r_offset` is an
+absolute address, would misread both fields. `seto.elf` therefore records
+`format`, the raw `info`, `segment_index` and `relative_index` on every
+`Relocation`, and `seto.psp_reloc` decodes them. A relocation naming a segment the
+file cannot back, or a non-`PT_LOAD` one, is reported as an observation instead of
+being patched at an invented address.
+
+### The `0x600000` difference is the high half of a different address
+
+`func_000006E4` has three HI16/LO16 pairs. Their addends are:
+
+| Pair | HI16 | LO16 | Combined |
+| --- | ---: | ---: | ---: |
+| store target | `0x0060` | `0x4860` | `0x00604860` |
+| value formed | `0x0000` | `0x4860` | `0x00004860` |
+| store target | `0x0060` | `0x4b9c` | `0x00604b9c` |
+
+Four hypotheses were tested against the format:
+
+* **A — a relocation field was misread.** *Rejected.* `r_info`'s segment and
+  relative fields are `0` for all 181 entries, so no segment base was introduced
+  or omitted; the HI16/LO16 decode matches the loader's arithmetic.
+* **B — the loaded image layout explains it.** *Rejected as an explanation.* The
+  single `PT_LOAD` has `p_vaddr 0`, `p_filesz 0x4850`, `p_memsz 0x604c10`, and the
+  `.bss` header is size `0`, so `0x4850`-`0x604c10` is a zero-filled tail. All
+  three addresses are in it, at *distinct* segment offsets (`0x4860`, `0x604860`
+  and `0x604b9c`, the last two being `0x600010` and `0x60034c` bytes past the end
+  of the initialized data); the layout does not identify any of them with another.
+* **C — the code genuinely forms different addresses.** *Proven.* The `0x600000`
+  is `0x60 << 16`, the high half of `0x604860`; the other pair has HI16 `0x0000`.
+  It is the difference between two addresses, not a base.
+* **D — the two spaces differ by a base.** *Rejected.* The loader adds the same
+  `segmentVAddr[relative]` to every relocation, and for this module that value is
+  `p_vaddr[0] == 0`, so applying the real HI16/LO16 entries to the real
+  instruction words is an identity. A difference between two addends therefore
+  survives relocation: the three addresses cannot collapse onto each other.
+
+So `0x604860`, `0x4860` and `0x604B9C` are **three distinct module-relative
+addresses**. What is *not* proven is their section identity — no named section
+covers them — so `seto datarefs` still reports all three as `INFERRED`, with their
+offset in the zero-filled segment, and never as a `.bss` variable (the `.bss`
+section really is empty).
+
+### The address spaces are kept apart
+
+A report never conflates:
+
+* the **file offset** of a byte (`section.offset + section_offset`);
+* the **section offset** (`section_offset`, what `seto` compares);
+* the **ELF virtual address** (`section.addr + section_offset`);
+* the **PT_LOAD offset** (`address - segment.vaddr`, plus whether it is past
+  `p_filesz` — the zero-filled tail);
+* the **relocation destination** (the symbol/addend or the combined HI16/LO16
+  addend, resolved only when exactly one allocated section contains it).
+
+A segment whose `p_filesz` exceeds its `p_memsz` is rejected at parse time: its
+bytes cannot be mapped, so no address derived from it would mean anything.
+
+### Reproducing the inventory
+
+```
+py -3.12 -m seto datarefs --prx <libhtml_view.prx> --function 0x6e4 --out build/datarefs.json
+```
+
+The JSON now carries `relocation_inventory` (formats, per-section counts, types,
+unknown types, segment indices, compressed/segment payloads) and, for every
+reference, the raw `r_offset`/`r_info`, the segment fields, the application
+location, the combined addend, the destination, the pairing evidence, the three
+confidences and the unresolved reason. The command still exits `5` while any
+reference is not `PROVEN`.
 
 ## Matching semantics
 
@@ -484,7 +600,7 @@ Neither is recorded as proven.
 | Compile/match for the 3 current C reconstructions | `mwccpsp` is proprietary and absent | supply a licensed compiler; compile and compare each candidate |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
-| Identity of the two `func_000006E4` globals | their combined addends (`0x604860`, `0x604B9C`) sit in a load-address space offset by `0x600000`, which no ELF section explains | find another reference to the same offsets, or an original object/symbol table that shows the base; until then they stay `INFERRED` |
+| Identity of the two `func_000006E4` globals | SETO-DECOMP-007 proved the `0x600000` is the high half of a different address, so the three are distinct module-relative addresses; their *section* identity is still unproven because no named section covers them | find another reference to the same offsets, or an original object/symbol table that shows a section; until then they stay `INFERRED` |
 | Python 3.11 run of the suite | no 3.11 interpreter in the development environment (`py -3.11` is unavailable); the suite was run on 3.12 | run `python -m pytest` on 3.11 (CI does, on Ubuntu and Windows) |
 | REA native analysis / PSP PRX | MCP transport is connected, but no native provider or PRX analysis is demonstrated | configure/test a native provider separately; do not infer PRX support from MCP connectivity |
 
@@ -500,6 +616,8 @@ re-derived rather than trusted.
 3. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
    in `decomp/include/`.
-4. Resolve the `0x600000` address-space offset of `func_000006E4`'s globals so
-   their destination can move from `INFERRED` to `PROVEN`; the `seto datarefs`
-   report is the regression check for that change.
+4. Move `func_000006E4`'s three globals from `INFERRED` to `PROVEN` by finding a
+   named section (or an original symbol table) that covers `0x4860`, `0x604860`
+   and `0x604B9C`; SETO-DECOMP-007 showed they are distinct module-relative
+   addresses, so the open question is their section, not their relationship. The
+   `seto datarefs` report is the regression check for that change.

@@ -18,17 +18,24 @@
  * 0x00604b9c (store target).  Ghidra 12.1.3 independently reports the same two
  * stores as `_DAT_00604860 = 1` and `_DAT_00604b9c = 0x4860`.
  *
- * ADDRESS SPACES.  The store targets and the value differ by exactly 0x600000
- * (= the HI16 addend 0x60 << 16), and that constant is NOT the module's ELF base
- * (every section is based at 0).  The ELF section headers cover neither
- * 0x604860/0x604b9c nor 0x4860: `.data` ends at 0x4850 and the `.bss` section is
- * empty (size 0), so these bytes live only in the zero-filled tail of the single
- * PT_LOAD segment.  The transformation between the two spaces is therefore NOT
- * proven, and the two identifiers below stay distinct on purpose - the task is
- * not allowed to assume they name the same object.  `seto datarefs` records
- * both as INFERRED (their offset inside that segment), never as a section, and
- * marks the HI16/LO16 pairing as order-only too (the stripped module exposes no
- * symbol identity), so the reference as a whole is never `PROVEN`.
+ * ADDRESS SPACES.  The three combined addends are 0x00604860, 0x00004860 and
+ * 0x00604b9c.  They differ by exactly 0x600000, which is the HI16 addend 0x60
+ * shifted by 16 - the high half of a *different* address, not a base.  The
+ * module has a single PT_LOAD with p_vaddr 0, so the loader adds the same base to
+ * every relocation (PPSSPP's `ElfReader::LoadRelocations`; `seto psp_reloc`
+ * models it): applying the real HI16/LO16 entries to the real instruction words
+ * with that base is an identity, so the difference survives relocation and the
+ * three addresses cannot collapse onto each other.  They are three distinct
+ * module-relative addresses.
+ *
+ * Their *identity* still stays weak: the ELF section headers cover neither
+ * 0x604860/0x604b9c nor 0x4860 - `.data` ends at 0x4850 and the `.bss` section is
+ * empty (size 0) - so these bytes live only in the zero-filled tail of that
+ * segment.  `seto datarefs` records all three as INFERRED (their offset inside
+ * the segment), never as a section, and marks the HI16/LO16 pairing as order-only
+ * too (the stripped module exposes no symbol identity), so a reference as a whole
+ * is never `PROVEN`.  The identifiers below stay distinct on purpose: nothing
+ * here may assume two different addresses name the same object.
  *
  * The original PRX is stripped. `D_...` names and the inferred global types are
  * provisional address-based labels, not recovered source names. No `mwccpsp` is
