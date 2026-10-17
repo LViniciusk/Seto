@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from seto import elf, mips
+from seto import datarefs, elf, mips, synthetic
 from seto.binio import ParseError
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "audit_module_coverage.py"
@@ -294,3 +296,180 @@ def test_unaccounted_relocation_fails_the_reconciliation_check() -> None:
     assert by_claim["relocation_groups_reconcile"]["status"] == "FAIL"
 
 
+def _checks(*statuses: str) -> list[dict[str, object]]:
+    return [{"claim": f"check-{index}", "status": status} for index, status in enumerate(statuses)]
+
+
+def _external(*statuses: str) -> dict[str, dict[str, object]]:
+    return {f"tool-{index}": {"status": status} for index, status in enumerate(statuses)}
+
+
+@pytest.mark.parametrize(
+    "baseline,external,expected",
+    [
+        (("PASS",), ("PASS",), "PASS"),
+        (("PASS",), ("BLOCKED",), "BLOCKED"),
+        (("FAIL",), ("PASS",), "FAIL"),
+        # The original defect: an unavailable external tool must not hide a
+        # proven internal failure behind BLOCKED.
+        (("FAIL",), ("BLOCKED",), "FAIL"),
+        (("PASS",), ("FAIL",), "FAIL"),
+        (("FAIL", "BLOCKED"), ("PASS",), "FAIL"),
+        (("PASS",), ("FAIL", "BLOCKED"), "FAIL"),
+    ],
+)
+def test_overall_audit_status_precedence(baseline, external, expected) -> None:
+    assert audit.overall_audit_status(_checks(*baseline), _external(*external)) == expected
+
+
+def test_overall_audit_status_rejects_empty_or_invalid_statuses() -> None:
+    with pytest.raises(ParseError, match="invalid or missing audit status"):
+        audit.overall_audit_status((), {})
+    with pytest.raises(ParseError, match="invalid or missing audit status"):
+        audit.overall_audit_status(_checks("MAYBE"), _external("PASS"))
+    with pytest.raises(ParseError, match="invalid or missing audit status"):
+        audit.overall_audit_status(_checks("PASS", None), _external("PASS"))
+    with pytest.raises(ParseError, match="invalid or missing audit status"):
+        audit.overall_audit_status(_checks("PASS"), {"tool": {"status": "MAYBE"}})
+
+
+def _synthetic_expected(tmp_path, ranges=None):
+    """Build a real datarefs report from Seto's synthetic MIPS object."""
+    path = tmp_path / "seto_smoke.o"
+    path.write_bytes(synthetic.build_mips_object())
+    module = elf.parse(path)
+    section = module.require_section(".text")
+    functions = mips.find_functions(module.section_data(section), section.addr, f"{path}:.text")
+    selected = [(fn.name(), fn.start, fn.end) for fn in functions] if ranges is None else list(ranges)
+    return module, functions, datarefs.build_reference_report(module, ".text", selected)
+
+
+def _first_reference(report):
+    return report["functions"][0]["references"][0]
+
+
+def _tamper_instruction(report) -> None:
+    _first_reference(report)["instruction"] = "0x4"
+
+
+def _tamper_pairing(report) -> None:
+    _first_reference(report)["pairing"] = "INFERRED"
+
+
+def _tamper_combined_addend(report) -> None:
+    _first_reference(report)["combined_addend"] = "0xdeadbeef"
+
+
+def _tamper_target(report) -> None:
+    _first_reference(report)["target"] = {"section": ".rodata", "offset": "0x0"}
+
+
+def _tamper_location(report) -> None:
+    reference = _first_reference(report)
+    reference["location"] = "PROVEN"
+    reference["status"] = "PROVEN"
+
+
+def _tamper_relocation(report) -> None:
+    _first_reference(report)["relocations"][0]["addend"] = "0x1"
+
+
+def _tamper_drop_reference(report) -> None:
+    report["functions"][0]["references"] = []
+
+
+def _tamper_duplicate_reference(report) -> None:
+    reference = _first_reference(report)
+    report["functions"][0]["references"] = [reference, deepcopy(reference)]
+
+
+def _tamper_relocation_inventory(report) -> None:
+    report["relocation_inventory"]["types"] = {}
+
+
+def _tamper_section(report) -> None:
+    report["section"] = ".data"
+
+
+def test_validate_datarefs_report_accepts_the_intact_report(tmp_path) -> None:
+    _module, _functions, expected = _synthetic_expected(tmp_path)
+    assert audit.validate_datarefs_report(deepcopy(expected), expected) is None
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        _tamper_instruction,
+        _tamper_pairing,
+        _tamper_combined_addend,
+        _tamper_target,
+        _tamper_location,
+        _tamper_relocation,
+        _tamper_drop_reference,
+        _tamper_duplicate_reference,
+        _tamper_relocation_inventory,
+        _tamper_section,
+    ],
+)
+def test_validate_datarefs_report_rejects_each_tampering_category(tmp_path, tamper) -> None:
+    _module, _functions, expected = _synthetic_expected(tmp_path)
+    tampered = deepcopy(expected)
+    tamper(tampered)
+    with pytest.raises(ParseError, match="datarefs report mismatch"):
+        audit.validate_datarefs_report(tampered, expected)
+
+
+def test_validate_datarefs_report_rejects_reordered_functions(tmp_path) -> None:
+    _module, _functions, expected = _synthetic_expected(
+        tmp_path, ranges=[("func_a", 0x0, 0x4), ("func_b", 0x4, 0xC)]
+    )
+    assert [entry["function"] for entry in expected["functions"]] == ["func_a", "func_b"]
+    tampered = deepcopy(expected)
+    tampered["functions"] = list(reversed(tampered["functions"]))
+    with pytest.raises(ParseError, match="datarefs report mismatch"):
+        audit.validate_datarefs_report(tampered, expected)
+
+
+def _load_inputs_fixture(tmp_path):
+    path = tmp_path / "seto_smoke.o"
+    path.write_bytes(synthetic.build_mips_object())
+    module = elf.parse(path)
+    section = module.require_section(".text")
+    functions = mips.find_functions(module.section_data(section), section.addr, f"{path}:.text")
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    digest = audit.identity_audit._hash_file(path)
+    (build_dir / "functions.json").write_text(
+        json.dumps({"section": ".text", "functions": [fn.summary() for fn in functions]}),
+        encoding="utf-8",
+    )
+    (build_dir / "imports.json").write_text(json.dumps({"sha256": digest}), encoding="utf-8")
+    expected = datarefs.build_reference_report(
+        module, ".text", [(fn.name(), fn.start, fn.end) for fn in functions]
+    )
+    return path, build_dir, digest, expected
+
+
+def _write_datarefs_report(build_dir, digest, report) -> None:
+    (build_dir / "datarefs.json").write_text(
+        json.dumps({**report, "sha256": digest}), encoding="utf-8"
+    )
+
+
+def test_load_inputs_accepts_an_intact_datarefs_report(tmp_path) -> None:
+    path, build_dir, digest, expected = _load_inputs_fixture(tmp_path)
+    _write_datarefs_report(build_dir, digest, expected)
+    _module, _imports, datarefs_report = audit._load_inputs(path, build_dir)
+    assert datarefs_report["sha256"] == digest
+    assert datarefs_report["functions"] == expected["functions"]
+
+
+def test_load_inputs_rejects_a_tampered_datarefs_report_that_keeps_the_prx_hash(tmp_path) -> None:
+    path, build_dir, digest, expected = _load_inputs_fixture(tmp_path)
+    tampered = deepcopy(expected)
+    _first_reference(tampered)["combined_addend"] = "0xdeadbeef"
+    # The declared SHA-256 of the PRX is untouched: the content comparison, not
+    # the hash, has to reject the tampered reference.
+    _write_datarefs_report(build_dir, digest, tampered)
+    with pytest.raises(ParseError, match="datarefs report mismatch"):
+        audit._load_inputs(path, build_dir)
