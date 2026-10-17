@@ -11,12 +11,13 @@ read-only with respect to ``private/``.
 
 from __future__ import annotations
 
+import json
 from functools import partial
 from pathlib import Path
 
 import pytest
 
-from seto import cli, elf, imports, inventory, matching, mips, split
+from seto import cli, datarefs, elf, imports, inventory, matching, mips, split
 from seto.matching import MATCHED, compare
 from seto.toolchain import TOOL_SPECS, find_tool, load_settings
 
@@ -198,6 +199,80 @@ def test_inventory_over_the_extracted_media() -> None:
     assert manifest["summary"]["module_count"] == 2
     assert manifest["summary"]["function_count"] == 41
     assert manifest["module_errors"] == []
+
+
+def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) -> None:
+    """The three C reconstructions' data references, straight from the PRX."""
+    by_function = {}
+    for start, end in ((0x244, 0x278), (0x4B8, 0x508), (0x6E4, 0x704)):
+        by_function[f"0x{start:x}"] = datarefs.recover_references(parsed, ".text", start, end)
+
+    # func_00000244 only calls imports: no data reference at all.
+    assert by_function["0x244"] == ()
+
+    # func_000004B8 builds the address of "/PSP/SAVEDATA/" at .data + 0xc8.
+    (string,) = by_function["0x4b8"]
+    assert string.instruction == 0x4D0
+    assert string.combined == 0x4830
+    assert string.target == datarefs.DataTarget(".data", 0xC8)
+    assert string.status == datarefs.PROVEN
+    assert [name for name, _ in string.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
+
+    # func_000006E4 writes two globals and stores one of their addresses.  The
+    # combined addends are in a load-address space that no ELF section covers,
+    # so their identity is only INFERRED (their offset in the zero-filled tail).
+    references = {item.instruction: item for item in by_function["0x6e4"]}
+    assert references[0x6EC].combined == 0x604860
+    assert references[0x6F4].combined == 0x4860
+    assert references[0x700].combined == 0x604B9C
+    for reference in references.values():
+        assert reference.status == datarefs.INFERRED
+        assert reference.target is None
+        assert reference.location is not None and not reference.location.initialized
+    # The store targets and the pointer value differ by exactly 0x600000, which
+    # is not the module's ELF base: the two spaces are kept separate on purpose.
+    assert references[0x6EC].combined - references[0x6F4].combined == 0x600000
+    assert references[0x700].combined - 0x4B9C == 0x600000
+
+
+def test_the_savedata_string_is_in_the_data_section(parsed: elf.ElfFile) -> None:
+    data = parsed.section_data(parsed.require_section(".data"))
+    offset = 0x4830 - parsed.require_section(".data").addr
+    assert data[offset : offset + 14] == b"/PSP/SAVEDATA/"
+    details = datarefs.data_target_details(parsed, datarefs.DataTarget(".data", offset))
+    assert details is not None
+    assert details["elf_virtual_address"] == "0x4830"
+    assert details["file_offset"] == "0x4890"
+
+
+def test_the_global_references_are_not_section_backed(parsed: elf.ElfFile) -> None:
+    # 0x604860/0x604b9c/0x4860 lie in the module's zero-filled tail but in no
+    # named ELF section, which is exactly why they are only INFERRED.
+    for address in (0x604860, 0x604B9C, 0x4860):
+        assert not any(
+            section.is_allocated and section.contains_address(address)
+            for section in parsed.sections
+        )
+        location = datarefs.load_location(parsed, address)
+        assert location is not None and not location.initialized
+
+
+def test_datarefs_command_writes_the_report(parsed: elf.ElfFile, tmp_path, capsys) -> None:
+    out = tmp_path / "datarefs.json"
+    status = cli.main(
+        [
+            "datarefs", "--prx", str(MODULE),
+            "--function", "0x244", "--function", "0x4b8", "--function", "0x6e4",
+            "--out", str(out),
+        ]
+    )
+    assert status == cli.EXIT_INCONCLUSIVE
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["sha256"]
+    assert [entry["function"] for entry in payload["functions"]] == [
+        "func_00000244", "func_000004B8", "func_000006E4",
+    ]
+    assert "func_000006E4" in capsys.readouterr().out
 
 
 def test_iso_matches_the_documented_baseline() -> None:

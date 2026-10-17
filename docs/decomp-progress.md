@@ -175,6 +175,98 @@ Re-run the media-backed inspection with
 `UNVERIFIED` here means a C reconstruction exists but no real compile/match has
 been performed. The earlier self-comparison of original bytes does not count.
 
+## SETO-DECOMP-006 — symbol recovery, data relocations and matching readiness
+
+This round recovers the *canonical identity* of the module's global/data
+references, validates their destinations, and lets the comparator tell
+semantically equivalent data references apart from wrong or inconclusive ones.
+
+### The three reconstructions, reference by reference
+
+`seto datarefs` replays the module's own relocation table and reports every data
+reference of the three reconstructions. `R_MIPS_26` (calls) is left to the import
+resolver; only HI16/LO16 pairs and `R_MIPS_32` are recovered here.
+
+| Function | Site | Relocations | Combined addend | Destination | Status |
+| --- | --- | --- | --- | --- | --- |
+| `func_00000244` | — | — | — | — | no data reference (calls only) |
+| `func_000004B8` | `0x4D0` | `R_MIPS_HI16@0x4C4` + `R_MIPS_LO16@0x4D0` | `0x00004830` | `.data + 0xC8` | **PROVEN** |
+| `func_000006E4` | `0x6EC` | `R_MIPS_HI16@0x6E8` + `R_MIPS_LO16@0x6EC` | `0x00604860` | load segment `0 + 0x604860` (zero-filled) | INFERRED |
+| `func_000006E4` | `0x6F4` | `R_MIPS_HI16@0x6F0` + `R_MIPS_LO16@0x6F4` | `0x00004860` | load segment `0 + 0x4860` (zero-filled) | INFERRED |
+| `func_000006E4` | `0x700` | `R_MIPS_HI16@0x6F8` + `R_MIPS_LO16@0x700` | `0x00604B9C` | load segment `0 + 0x604B9C` (zero-filled) | INFERRED |
+
+`PROVEN` means the combined addend lands in exactly one allocated ELF section.
+`INFERRED` means no named section covers it, but exactly one `PT_LOAD` span does,
+so only its offset in that segment (and whether it is past `p_filesz`) can be
+stated. `UNKNOWN` means neither.
+
+### The `/PSP/SAVEDATA/` string is proven
+
+The pair at `0x4C4`/`0x4D0` combines to `0x4830`. `.data` is at address `0x4768`
+with size `0xE8`, so `0x4830` is `.data + 0xC8` (file offset `0x4890`), and the
+fourteen bytes at that file offset really are `/PSP/SAVEDATA/`. This is the one
+destination the stripped module proves outright.
+
+### The `0x600000` discrepancy is documented, not assumed away
+
+`func_000006E4` stores `1` at `0x604860`, forms `0x4860`, and stores that at
+`0x604B9C`. The two store targets and the value differ by exactly `0x600000`
+(= the HI16 addend `0x60` shifted left 16 bits), and that constant is **not** the
+module's ELF base — every section is based at `0` and `.data` ends at `0x4850`.
+The ELF `.bss` section is empty (size `0`), so `0x604860`, `0x604B9C` and `0x4860`
+all fall in the zero-filled tail of the single `PT_LOAD` segment and in no named
+section. The transformation between the two address spaces is therefore **not
+proven**: the report keeps them distinct and marks all three `INFERRED`. It never
+assumes `0x604860` and `0x4860` name the same object, and never promotes an
+address-like name or a plausible-looking offset to an identity.
+
+### How the comparator uses data identity
+
+`compare`/`compare_region` accept optional `original_data_resolver` and
+`candidate_data_resolver` callables (`seto.datarefs.resolve_data_target` is one
+implementation). They are consulted only for `R_MIPS_32` and for the HI16/LO16
+pair (with the *combined* pair addend, never one half):
+
+* both sides resolve to the same `(section, offset)` → a potential equivalence,
+  recorded in `resolved_data`;
+* both sides resolve, to different targets → a real `NONMATCHING` difference;
+* either side cannot be resolved → `INCONCLUSIVE` (equal numeric addends never
+  prove identity);
+* a destination difference on an order-only HI16/LO16 association stays
+  `INCONCLUSIVE`, because the wrong LO16 could be closing the HI16.
+
+`MATCHED` still requires zero differences, zero errors and zero limitations, so a
+byte-equal candidate whose references cannot be identified is never promoted. The
+PRX is stripped (no symbol table), so its HI16/LO16 associations rest on
+relocation order and a real comparison of `func_000006E4` remains
+`INCONCLUSIVE` — exactly as before.
+
+### Reproducing the report
+
+```powershell
+py -3.12 -m seto datarefs `
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
+  --function 0x244 --function 0x4b8 --function 0x6e4 `
+  --out build/datarefs.json
+```
+
+The JSON is deterministic (sorted keys, relocation-table order) and holds only
+metadata: addresses, relocation types, addends and destinations. No byte of the
+original module is copied. `build/` is git-ignored, so the report is regenerated
+rather than versioned. The command exits `5` (inconclusive) when any reference is
+not `PROVEN`, which is the case here.
+
+### Progress metrics
+
+| Metric | Count |
+| --- | ---: |
+| Data references recovered (three reconstructions) | 4 |
+| Destinations proven (exactly one allocated section) | 1 |
+| Destinations inferred (load segment only) | 3 |
+| Destinations unknown | 0 |
+| Compiled with `mwccpsp` | 0 |
+| Proven `MATCHED` | 0 |
+
 ## Matching semantics
 
 Four outcomes are possible: `MATCHED`, `NONMATCHING`, `INCONCLUSIVE`, `BLOCKED`.
@@ -361,6 +453,7 @@ Neither is recorded as proven.
 | Compile/match for the 3 current C reconstructions | `mwccpsp` is proprietary and absent | supply a licensed compiler; compile and compare each candidate |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
+| Identity of the two `func_000006E4` globals | their combined addends (`0x604860`, `0x604B9C`) sit in a load-address space offset by `0x600000`, which no ELF section explains | find another reference to the same offsets, or an original object/symbol table that shows the base; until then they stay `INFERRED` |
 | Python 3.11 run of the suite | no 3.11 interpreter in the development environment (`py -3.11` is unavailable); the suite was run on 3.12 | run `python -m pytest` on 3.11 (CI does, on Ubuntu and Windows) |
 | REA native analysis / PSP PRX | MCP transport is connected, but no native provider or PRX analysis is demonstrated | configure/test a native provider separately; do not infer PRX support from MCP connectivity |
 
@@ -376,3 +469,6 @@ re-derived rather than trusted.
 3. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
    in `decomp/include/`.
+4. Resolve the `0x600000` address-space offset of `func_000006E4`'s globals so
+   their destination can move from `INFERRED` to `PROVEN`; the `seto datarefs`
+   report is the regression check for that change.

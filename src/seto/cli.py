@@ -19,7 +19,7 @@ from functools import partial
 from pathlib import Path
 from typing import Sequence
 
-from seto import __version__, elf, formats, imports, inventory, mips, split
+from seto import __version__, datarefs, elf, formats, imports, inventory, mips, split
 from seto.binio import ParseError, SetoError
 from seto.hashing import sha256_file, verify_file
 from seto.matching import (
@@ -178,6 +178,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write the JSON report to this path",
     )
 
+    datarefs_parser = subparsers.add_parser(
+        "datarefs", help="recover the canonical identity of the module's data references"
+    )
+    datarefs_parser.add_argument("--prx", type=Path, required=True)
+    datarefs_parser.add_argument("--section", default=".text")
+    datarefs_parser.add_argument(
+        "--function", type=lambda value: int(value, 0), action="append", default=None,
+        help="restrict the report to the function starting at this address (repeatable)",
+    )
+    datarefs_parser.add_argument("--json", action="store_true")
+    datarefs_parser.add_argument(
+        "--out", type=Path, default=Path("build/datarefs.json"),
+        help="write the deterministic JSON report here",
+    )
+
     toolchain_parser = subparsers.add_parser(
         "toolchain", help="report external tool availability"
     )
@@ -228,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "disasm": _command_disasm,
         "match": _command_match,
         "imports": _command_imports,
+        "datarefs": _command_datarefs,
         "toolchain": _command_toolchain,
     }
     try:
@@ -634,6 +650,73 @@ def _command_imports(arguments: argparse.Namespace, settings: Settings) -> int:
         _print_imports(arguments, table, name, references, unresolved)
 
     return EXIT_INCONCLUSIVE if unresolved else EXIT_OK
+
+
+def _command_datarefs(arguments: argparse.Namespace, settings: Settings) -> int:
+    del settings
+    module = elf.parse(arguments.prx)
+    section = module.require_section(arguments.section)
+    functions = mips.find_functions(
+        module.section_data(section), section.addr, f"{arguments.prx.name}:{section.name}"
+    )
+    if arguments.function:
+        wanted = set(arguments.function)
+        selected = [item for item in functions if item.start in wanted]
+        missing = wanted - {item.start for item in selected}
+        if missing:
+            print(
+                f"error: no function starts at "
+                f"{', '.join(f'0x{address:x}' for address in sorted(missing))}",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+    else:
+        selected = list(functions)
+
+    report = datarefs.build_reference_report(
+        module,
+        section.name,
+        [(item.name(), item.start, item.end) for item in selected],
+    )
+    report["prx"] = _relative_posix(arguments.prx)
+    report["sha256"] = sha256_file(arguments.prx)
+    text = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    inventory.write_text(arguments.out, text)
+
+    if arguments.json:
+        print(text, end="")
+    else:
+        _print_datarefs(report)
+
+    unresolved = [
+        reference
+        for entry in report["functions"]
+        for reference in entry["references"]
+        if reference["status"] != datarefs.PROVEN
+    ]
+    return EXIT_INCONCLUSIVE if unresolved else EXIT_OK
+
+
+def _print_datarefs(report: dict[str, object]) -> None:
+    print(f"{report['prx']} :: {report['section']}")
+    for entry in report["functions"]:
+        references = entry["references"]
+        if not references:
+            continue
+        print(f"{entry['function']} ({entry['start']}-{entry['end']}):")
+        for reference in references:
+            target = reference["target"]
+            if target is not None:
+                destination = f"{target['section']}+{target['offset']}"
+            elif "load_offset" in reference:
+                state = "initialized" if reference["initialized"] else "uninitialized"
+                destination = f"segment {reference['load_segment']} +{reference['load_offset']} ({state})"
+            else:
+                destination = "outside the module's load image"
+            print(
+                f"  {reference['instruction']} {reference['kind']:<10} "
+                f"{reference['status']:<8} {destination}"
+            )
 
 
 def _print_imports(
