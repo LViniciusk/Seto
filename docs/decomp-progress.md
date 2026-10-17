@@ -32,6 +32,9 @@ Status vocabulary, used strictly:
 | `func_00000244` reconstructed C vs original | real compile + `scripts/match_function.py` | **MATCHED**, 13/13 words, verified decompilation |
 | `func_000004B8` reconstructed C vs original | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 18/20; data-object identity unproven |
 | `func_000006E4` reconstructed C vs original | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 2/8; data-object identities unproven |
+| `func_00000034` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 20/20 words |
+| `func_00000134` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 17/17 words |
+| `func_00000358` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 17/17 words |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
 | Ghidra native MIPS32 / Allegrex language | headless forced-language imports | **READY** (`MIPS:LE:32:default`, `Allegrex:LE:32:default`) |
@@ -123,6 +126,13 @@ Status vocabulary, used strictly:
    differences). The latter two have proved register-flow pairings, but no
    independent candidate-symbol-to-original-object link. Full hashes and
    reproduction commands are in [the real compile baseline](#real-compile-and-match-baseline).
+
+7. **SETO-DECOMP-008 adds three more proven functions.** The 13 remaining `.text`
+   functions were triaged from call/data-relocation reports and verified listings;
+   three no-data candidates were compiled and each returned `MATCHED` with zero
+   differences and limitations. There are now six real compilations, four
+   `MATCHED`, two `INCONCLUSIVE`, zero `NONMATCHING`; the detailed selection and
+   per-function hashes are in the SETO-DECOMP-008 section below.
 
 ## SETO-DECOMP-005 — first function analysis and two new reconstructions
 
@@ -316,7 +326,10 @@ original module is copied. `build/` is git-ignored, so the report is regenerated
 rather than versioned. The command exits `5` (inconclusive) when any reference is
 not `PROVEN`, which is the case here.
 
-### Progress metrics
+### Progress metrics at the SETO-DECOMP-007 baseline
+
+This snapshot is after the 007 register-flow work and the three original real
+compiles, before SETO-DECOMP-008 added three functions.
 
 | Metric | Count |
 | --- | ---: |
@@ -330,6 +343,8 @@ not `PROVEN`, which is the case here.
 | Cross-artifact data identities proven for compiled candidates | 0 |
 | Real compilations | 3 |
 | Proven `MATCHED` | 1 |
+| `INCONCLUSIVE` | 2 |
+| `NONMATCHING` | 0 |
 
 ### Real compile-and-match baseline
 
@@ -518,6 +533,76 @@ identity applicability, and the unresolved reason. Unsupported or malformed
 relocation inventory also makes the command exit `5`; the report never claims
 complete resolution merely because no reference happened to land in a selected
 function.
+
+## SETO-DECOMP-008 — três reconstruções novas e matching real
+
+### Seleção reproduzível
+
+Antes de escrever C, as 13 funções restantes foram cruzadas com os relatórios de
+`seto functions`, `seto imports`, `seto datarefs`, o disassembly MIPS e o m2c
+preliminar. A matriz completa, incluindo contagens de chamadas/relocations,
+complexidade de fluxo, limites e motivos de inclusão/exclusão, foi gerada em
+`build/seto008/selection.json` (artefato local ignorado pelo Git).
+
+Foram priorizadas três funções sem references de dados e com todos os destinos
+de call resolvidos:
+
+| Prioridade | Função | Tamanho | Chamadas | Dados/fluxo | Decisão |
+|---:|---|---:|---|---|---|
+| 1 | `func_00000134` (`0x134–0x178`) | 17 instruções | seis chamadas a sceUtility / NID `0x64D50C56` | sem dados nem branches | reconstrução direta da sequência de constantes |
+| 2 | `func_00000358` (`0x358–0x39c`) | 17 instruções | quatro imports resolvidos e duas chamadas locais | sem dados nem branches | sequência linear de chamadas |
+| 3 | `func_00000034` (`0x34–0x84`) | 20 instruções | três imports e duas chamadas locais | sem relocations de dados; um branch condicional e um back-edge | inicialização e loop de status pequenos e fundamentados pelo listing/m2c |
+
+Ghidra `SetoAnalyzeFunction` confirmou limites e corpos exatos dos três. A função
+`0x84` foi excluída: seus dois words são apenas `jr $ra; nop`, sem evidência
+independente de que sejam uma função reconstruível. `0x8c` ficou como quarta
+candidata opcional (42 instruções e cinco caminhos de erro); as funções `0x39c`,
+`0x414`, `0x508`, `0x634` e `0x704` têm referências a jump tables ou destinos
+zero-filled sem identidade provada e foram adiadas. `0x178`/`0x278` têm mais
+fluxo de erro/calls que as três prioridades.
+
+### Resultados reais das novas funções
+
+Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`, pelo perfil local WSL2 e
+wibo 1.2.0. Todas as relocations de calls abaixo foram resolvidas pelo
+comparador; zero diferenças, zero relocation issues e zero limitações por função.
+
+| Função | Fonte C | Compilação | Instruções | Status | Imports comprovados | Object SHA-256 | Source SHA-256 |
+|---|---|---|---:|---|---|---|---|
+| `func_00000034` | `decomp/src/func_00000034.c` | OK | 20/20 | **MATCHED** | `libehsys/0xEA748E31`, `libehsys/0xF1BC43DB`, `libehsys/0x08813E19`; locais `0x6e4`, `0x704` | `6e3df754182bf99bfa2c5d6b3c23a9a1e09fb8ecf29426750dc65f8fa9f09e9e` | `a48766d9ab066b1b09421c1fd2ba5d2660606abddb8dd27af9927af456c58650` |
+| `func_00000134` | `decomp/src/func_00000134.c` | OK | 17/17 | **MATCHED** | `sceUtility/0x64D50C56` (seis chamadas) | `d082bed6976e3545edc84fec194c8b509a282e128fa55d77f3a8fc394b4c4627` | `908fd7826f026ba7af3a300a86942293023cf5560fed4fdc668978048769873a` |
+| `func_00000358` | `decomp/src/func_00000358.c` | OK | 17/17 | **MATCHED** | `sceNetApctl/0xB3EDD0EC`, `sceNetResolver/0x6138194A`, `sceNetInet/0xA9ED66B9`, `sceNet/0x281928A9`; locais `0x244`, `0x134` | `56b90b3b9934fdb82bb43980721226e5060dabf4c5a0a3afba210334916b0afa` | `6d400f9440753a57cca756c9a587331b48e6c22f7d642e3c23e9d0a2eb860165` |
+
+Durante a iteração inicial de `func_00000034`, `while (func_00000704() == 0)`
+produziu sete palavras diferentes: o otimizador moveu o teste para o fim do loop
+e duplicou a chamada. A listagem original testa o retorno no topo e volta
+diretamente ao call. `for (;;)` com teste e `break` explícitos reproduziu as 20
+palavras sem assembly ou `volatile`.
+
+Assim, esta rodada adiciona **três `MATCHED` reais**; somados ao baseline, há
+quatro. Os três resultados anteriores continuam iguais: `0x244` MATCHED,
+`0x4b8` INCONCLUSIVE 18/20, `0x6e4` INCONCLUSIVE 2/8. As duas últimas não foram
+promovidas por igualdade numérica nem por mapas manuais: a identidade entre seus
+símbolos candidatos e os objetos originais continua sem evidência independente.
+Os artefatos/transcrições permanecem em `build/seto008/` e não são versionados.
+
+### Validação desta rodada
+
+| Ambiente/gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 472 passou, 9 ignorados |
+| Windows / `pytest -m integration -q` | 22 passou, 7 ignorados (WSL-only real matches não executados no host) |
+| WSL2 / `pytest -m integration -q` | 26 passou, 3 ignorados (splat, Ghidra e REA não configurados no WSL) |
+| Compilações reais 008 via wibo | 3 `MATCHED`, 54/54 palavras, 17 calls resolvidas, 0 diferenças/issues/limitações |
+| `compileall -q src scripts tests` / `seto verify` / `git diff --check` | clean / OK / clean |
+
+| Métrica acumulada | Contagem |
+|---|---:|
+| Reconstruções C com compilação real | 6 |
+| `MATCHED` comprovados | 4 |
+| `INCONCLUSIVE` (sem diferenças comprovadas) | 2 |
+| `NONMATCHING` | 0 |
+| Funções `.text` ainda sem reconstrução C | 10 |
 
 ## Matching semantics
 
