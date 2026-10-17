@@ -41,6 +41,10 @@ Status vocabulary, used strictly:
 | `func_0000039C` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 28/30; jump-table object identity unproven |
 | `func_00000414` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 31/41; string-object identities unproven |
 | `func_00000000` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 7/13; code/data address identities unproven |
+| `func_00000634` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 42/44; buffer-object identity unproven |
+| `func_00000508` reconstruction | real compile + `scripts/match_function.py` | **NONMATCHING**, 59/75; one scheduling slot differs (words 64–67) |
+| `func_00000704` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 40/60; state/pointer object identities unproven |
+| `func_00000084` classification | `seto functions` + real Ghidra + a compiled probe | **CLASSIFIED** (8 bytes, `jr $ra; nop`; not modelled as a function, no C source) |
 | Global data-reference aggregation | `seto.datarefs.build_global_usage` / `scripts/global_usage.py` | **OK** (15 demonstrated locations, 6 order-only references kept visible) |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
@@ -882,6 +886,153 @@ decompilada aqui.
   `0x0=NOT_FOUND` — permanecem explícitas e distintas.
 * O endurecimento não tocou código executável: as três fontes foram
   recompiladas e os `Object SHA-256` permaneceram idênticos (ver acima).
+
+## SETO-DECOMP-011 — estado compartilhado e as funções restantes
+
+A rodada fecha o conjunto `.text`: reconstrói as três funções que ainda tinham
+corpo a descrever (`0x634`, `0x508`, `0x704`) e **classifica** o fragmento de
+`0x84`, sem forçar uma função C para ele. Nenhuma abstração nova entrou no
+ferramental: as fontes usam o mesmo compilador, as mesmas flags, o mesmo
+comparador e o mesmo modelo de evidência das rodadas 008–010.
+
+### Inventário de estado compartilhado
+
+`seto datarefs` e a agregação pura `seto.datarefs.build_global_usage` foram
+reexecutados sobre as 16 funções (artefato local `build/seto011/global-usage.json`,
+ignorado pelo Git): **15 localizações demonstradas, 6 referências mantidas fora
+dos grupos**. As seis não resolvidas são todas de `func_00000704` e todas do tipo
+`hi16-lo16` — exatamente os pares cujo `lui` está separado do uso por uma
+ramificação. O mecanismo já tem cobertura unitária
+(`tests/test_matching.py::test_conditional_control_flow_keeps_order_pairing_inconclusive`);
+as seis referências do módulo são a ocorrência real dele e continuam visíveis em
+vez de agrupadas por engano.
+
+| Localização | Funções | Papel observado nos bytes |
+|---|---|---|
+| `segment 0 +0x604860` | `func_000006E4`, `func_00000704` | palavra de estado: `func_000006E4` inicializa; `func_00000704` despacha nela, relê a cada incremento e grava o literal `3` nas duas falhas |
+| `segment 0 +0x604864` | `func_00000508`, `func_00000634` | base do bloco de `0xa4` bytes: `func_00000508` limpa e inicializa; `func_00000634` lê o campo `+0x1c` |
+| `segment 0 +0x604918` | `func_00000508` | segundo bloco: gravado em `+0x40`/`+0x68` e passado à chamada local `0x414` |
+| `segment 0 +0x604b18` | `func_00000508` | terceiro bloco: gravado em `+0x50` e passado à chamada local `0x4B8` |
+| `segment 0 +0x604b9c` | `func_000006E4`, `func_00000704` | ponteiro de contexto: `func_00000704` o carrega em `$a0` para `0x508` |
+
+As demais dez localizações vêm das rodadas 005–010 e não mudaram. As cinco
+localizações `segment 0` acima estão além de `p_filesz = 0x4850`, então continuam
+`INFERRED`; o Ghidra real também as reporta `UNMAPPED`, o que confirma que nenhum
+nome de objeto é recuperável a partir deste módulo. Nenhum `struct` global foi
+declarado.
+
+### Reconstruções
+
+| Prioridade | Função | Tamanho | Chamadas | Resultado |
+|---:|---|---:|---|---|
+| 1 | `func_00000634` (`0x634–0x6e4`) | 44 instruções | `libehsys/0xE8D57DC6`, `sceUtility/0xBDA7D894`, `sceUtility/0x05AFB9E4`, `sceUtility/0xF5CE1134` | **INCONCLUSIVE**, 42/44 |
+| 2 | `func_00000508` (`0x508–0x634`) | 75 instruções | `libehsys/0x10F3BB61`, `libehsys/0x8171F765`, `sceUtility/0xCDC3AA41`, locais `0x39C`, `0x414`, `0x4B8` | **NONMATCHING**, 59/75 |
+| 3 | `func_00000704` (`0x704–0x7f4`) | 60 instruções | locais `0x278`, `0x358`, `0x508`, `0x634` | **INCONCLUSIVE**, 40/60 |
+| 4 | `func_00000084` (`0x84–0x8c`) | 2 instruções | nenhuma | **classificado**, sem fonte C |
+
+* **`func_00000634`** — forma o endereço `0x604864`, chama
+  `libehsys/0xE8D57DC6(0, 0)` e depois `sceUtility/0xBDA7D894()`, e sobre o
+  resultado compila um `switch` de cinco casos: o caso 2 chama
+  `sceUtility/0x05AFB9E4(2)`, o caso 3 chama `sceUtility/0xF5CE1134()`, o caso 0
+  (cujo `lw` fica no *delay slot* do `beql`) devolve
+  `*(int *)(0x604864 + 0x1c) == 0 ? 1 : 2`, e o `default` junto com os casos 1 e 4
+  cai no bloco compartilhado `move $v0, $zero`. Duas formas de fonte são forçadas
+  pelas palavras: o argumento `2` da chamada do caso 2 (a constante é
+  materializada uma única vez e compartilhada com a comparação) e a ordem das
+  labels — medida na 010 sobre as 120 ordens de um `switch` de cinco casos, este
+  build emite a cadeia na ordem **inversa** da fonte, de modo que a cadeia
+  observada `(0, 3, 2, 4, 1)` sai da fonte `1, 4, 2, 3, 0`.
+
+* **`func_00000508`** — inicializa o bloco de `0xa4` bytes em `0x604864`:
+  `func_00000854(base, 0, 0xa4)` limpa e então `+0x00 = 0xa4`,
+  `+0x04 = func_0000039C()`,
+  `+0x08 = (func_0000235C(0) & 0xffff) == 0x2000 ? 0 : 1`, os literais
+  `+0x18/+0x0c/+0x14/+0x10 = 0x10/0x11/0x12/0x13`, `+0x34 = 0x600000` (**sem
+  relocation**: é o valor literal, não um endereço), `+0x30 = arg0` (no *delay
+  slot* da chamada `0x414`), `+0x40 = &0x604918`, `+0x44/+0x48/+0x4c = 3/2/0x2ba`,
+  `+0x50 = &0x604b18`, `+0x60/+0x64 = 3/0x200`, `+0x6c/+0x70/+0x74 = 1`,
+  `+0x68 = &0x604918`, zera `+0x54/+0x5c/+0x58/+0x78` e devolve o resultado de
+  `sceUtility/0xCDC3AA41(base)` — o valor que o chamador `func_00000704` testa com
+  `< 0`. Uma forma de fonte é forçada: os dois primeiros stores exigem uma visão
+  `int *` do mesmo endereço (`words[0]`, `words[1]`); com `unsigned char *` o
+  compilador rematerializa o endereço (`lui` + `lo` em vigor) e acrescenta duas
+  instruções. **Resultado `NONMATCHING`, 59/75 palavras.** O fluxo é idêntico
+  exceto **um slot de escalonamento**: a original emite o *setup* do argumento da
+  última chamada (`move $a0, $s0`) **antes** dos três stores
+  `sw $zero, 0x54/0x5c/0x58($s0)` e este build o emite imediatamente antes do
+  `jal` (palavras 64–67; as outras 71 não divergem — 59 certificadas e 12 dos
+  pares HI16/LO16 não provados). Foram compiladas as 120 ordens das cinco últimas
+  instruções e as 120 ordens que também movem o store de `+0x68` entre elas:
+  nenhuma faz este build içar o *setup*. A diferença fica **registrada como
+  `NONMATCHING`**, não rebaixada a `INCONCLUSIVE`.
+
+* **`func_00000704`** — máquina de estados sobre a palavra em `0x604860`, com
+  `switch` de quatro casos (cadeia emitida `4, 3, 2, 1` ⇒ fonte `1, 2, 3, 4`): o
+  caso 1 guarda com `func_00000278() < 0` e depois com
+  `func_00000508(*(void **)0x604b9c) < 0`, gravando o literal `3` em qualquer
+  falha e senão incrementando o estado; o caso 2 chama `func_00000634()` e
+  incrementa apenas se o resultado for diferente de zero; o caso 3 chama
+  `func_00000358()` e incrementa; o caso 4 **retorna 1** (o `beql` salta por cima
+  do bloco `move $v0, $zero`); todo o resto retorna 0. Três formas são forçadas:
+  os guardas são `... < 0` (o compilador usa `bgezl`/`beq` prováveis e inverter o
+  sinal não reproduz as palavras); cada incremento **relê** a palavra de
+  `0x604860` e grava a soma, logo a fonte lê o global em vez de manter uma cópia
+  local viva através das chamadas; e o argumento de `func_00000508` é o **valor**
+  carregado de `0x604b9c`.
+
+* **`func_00000084`** (`0x84–0x8c`) — oito bytes: `jr $ra` e `nop`. É a única
+  função `.text` sem fonte C, mas a rodada **não** a força: nada no módulo a
+  alcança (nenhuma referência de código, nenhuma relocation de salto), ela não
+  chama nem referencia nada, e não há, portanto, comportamento a descrever. A
+  forma é consistente com uma função C vazia — um probe compilado
+  (`void func_00000084(void) {}`) produz exatamente essas duas palavras, 8 bytes
+  de `jr $ra`/`nop` —, mas isso não a promove a reconstrução: o limite vem do
+  heurístico de descoberta de funções, e o Ghidra real também **não** modela
+  `0x84` como função (`SETO_BOUNDARY_STATUS=NOT_FOUND`,
+  `SETO_DECOMP_STATUS=NOT_RUN`). Ela fica como **classificação**.
+
+### Evidência Ghidra e hashes
+
+O Ghidra real (12.1.3, `Allegrex:LE:32:default`) foi consultado nas quatro faixas
+novas: `0x634` (176 endereços, 44 instruções), `0x508` (300, 75) e `0x704` (240,
+60) são `EXACT` em uma única região, e `SETO_ADDRESS_MAP` responde `UNMAPPED` para
+`0x604864`, `0x604918`, `0x604b18`, `0x604860` e `0x604b9c`; `0x84` é `NOT_FOUND`.
+
+| Função | Fonte C | Compilação | Instruções | Status | Object SHA-256 | Source SHA-256 |
+|---|---|---|---:|---|---|---|---|
+| `func_00000634` | `decomp/src/func_00000634.c` | OK | 42/44 | **INCONCLUSIVE** | `c4e59cac93bb8d97611b0e48ae6d036828077690217bc46d96fba7f29dcf9dab` | `1446722fce9fb280f73488e3056dc360ba311ff6b6a661933de5b56e2d259190` |
+| `func_00000508` | `decomp/src/func_00000508.c` | OK | 59/75 | **NONMATCHING** | `c5b7404a6a51e265980cc2bb685bf8422e3908d7ed26a99c0ec339e2b61ddb00` | `3a81b36c4fcb224fa077057b24543aff375c85f7cb2db5e765819e1ed5803f2f` |
+| `func_00000704` | `decomp/src/func_00000704.c` | OK | 40/60 | **INCONCLUSIVE** | `f3d36449bf372d194197e6b4d7f31ca8b6317fa0232d502c04fabad7984df65f` | `1b192860b34439b40c4caeeb3562869207e0e0dbcb9030b3f17dff7bbb78b1ba` |
+
+Os `Source SHA-256` são a revisão atual das fontes. As três foram recompiladas
+depois do último ajuste de comentários: os `Object SHA-256` permaneceram
+exatamente os mesmos, o que confirma que a alteração foi inerte para o código
+gerado.
+
+A tabela de pendências da 010 fica como registro daquele ponto. Depois desta
+rodada, a única função `.text` sem fonte C é `func_00000084`, e por classificação,
+não por bloqueio.
+
+### Validação desta rodada
+
+| Ambiente/gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 495 passou, 18 ignorados (as três verificações reais novas são WSL-only) |
+| Windows / `pytest -m integration -q` | 22 passou, 16 ignorados |
+| WSL2 / `pytest -m integration -q` | 35 passou, 3 ignorados (inclui as 14 verificações reais de compilação) |
+| Ghidra real (`test_toolchain_real.py`) | 1 passou, 16 faixas, `SETO_LANGUAGE` 16×; o log só cabe inteiro com `max_output` ampliado e o teste agora exige `not result.truncated` |
+| Compilações reais 011 via wibo | 2 `INCONCLUSIVE` (0 divergências comprovadas) + 1 `NONMATCHING` (4 palavras de um único slot), 14 chamadas resolvidas, 0 `relocation_issues` |
+| Baselines reconferidos | as 12 reconstruções anteriores foram reexecutadas sem mudança de status |
+| Determinismo | uma segunda compilação independente das três fontes reproduz os mesmos `Object SHA-256` |
+| `compileall -q src scripts` / `git diff --check` | clean / clean |
+
+| Métrica acumulada | Contagem |
+|---|---:|
+| Reconstruções C com compilação real | 15 |
+| `MATCHED` comprovados | 7 |
+| `INCONCLUSIVE` (sem diferenças comprovadas) | 7 |
+| `NONMATCHING` | 1 |
+| Funções `.text` sem fonte C | 1 (`func_00000084`, classificado) |
 
 ## Matching semantics
 

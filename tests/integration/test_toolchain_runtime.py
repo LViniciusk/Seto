@@ -40,7 +40,66 @@ REAL_MATCH_CASES = (
     (0x0, "func_00000000.c", "INCONCLUSIVE", 7, 13),
     (0x39C, "func_0000039C.c", "INCONCLUSIVE", 28, 30),
     (0x414, "func_00000414.c", "INCONCLUSIVE", 31, 41),
+    # SETO-DECOMP-011: both compile byte-identically (0 differences, 0
+    # relocation issues) and stay INCONCLUSIVE only on data-object identity.
+    # func_00000634 reads the word at +0x1c of the 0xa4-byte buffer;
+    # func_00000704 is the state machine over the word at 0x604860.
+    (0x634, "func_00000634.c", "INCONCLUSIVE", 42, 44),
+    (0x704, "func_00000704.c", "INCONCLUSIVE", 40, 60),
 )
+
+
+def _real_match_report(tmp_path, function: int, source: str):
+    """Compile one decomp source and compare it against the original PRX."""
+    if os.name != "posix":
+        pytest.skip("real PE compiler integration uses WSL2+wibo, not native Windows")
+    if not MODULE.is_file():
+        pytest.skip("original PRX is absent; real matching is not run in public CI")
+
+    profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
+    if not profile.is_file():
+        pytest.skip("git-ignored config/wsl/seto.toml is not configured")
+    settings = load_settings(profile)
+    detected = {status.name: status for status in detect_all(settings)}
+    compiler = detected["mwccpsp"]
+    loader = detected["wibo"]
+    if not compiler.found:
+        pytest.skip("licensed mwccpsp is not configured in the WSL profile")
+    if not loader.found:
+        pytest.skip("wibo is not configured or discoverable in WSL")
+
+    source_path = REPO_ROOT / "decomp" / "src" / source
+    output = tmp_path / f"func_{function:08X}"
+    argv = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "match_function.py"),
+        "--config",
+        str(profile),
+        "--prx",
+        str(MODULE),
+        "--function",
+        hex(function),
+        "--source",
+        str(source_path),
+        "--out",
+        str(output),
+        "--json",
+    ]
+    result = subprocess.run(
+        argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=False
+    )
+    report = json.loads(result.stdout)
+    return result, report
+
+
+def _assert_provenance(report, source: str) -> None:
+    provenance = report["provenance"]
+    assert provenance["object_sha256"]
+    assert provenance["source_sha256"]
+    assert Path(provenance["source"]).name == source
+    assert Path(provenance["object"]).is_file()
+    assert provenance["flags"] == ["-O4,p", "-sdatathreshold", "0"]
+    assert provenance["compiler"], "the report must name the compiler it used"
 
 
 def test_wibo_executes_the_psp_compiler_and_produces_an_elf32_mips_object(tmp_path) -> None:
@@ -97,44 +156,7 @@ def test_real_mwccpsp_function_baselines(
     tmp_path, function, source, expected_status, matching_words, total_words
 ) -> None:
     """Compile+compare the real baselines only in the local WSL2/media environment."""
-    if os.name != "posix":
-        pytest.skip("real PE compiler integration uses WSL2+wibo, not native Windows")
-    if not MODULE.is_file():
-        pytest.skip("original PRX is absent; real matching is not run in public CI")
-
-    profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
-    if not profile.is_file():
-        pytest.skip("git-ignored config/wsl/seto.toml is not configured")
-    settings = load_settings(profile)
-    detected = {status.name: status for status in detect_all(settings)}
-    compiler = detected["mwccpsp"]
-    loader = detected["wibo"]
-    if not compiler.found:
-        pytest.skip("licensed mwccpsp is not configured in the WSL profile")
-    if not loader.found:
-        pytest.skip("wibo is not configured or discoverable in WSL")
-
-    source_path = REPO_ROOT / "decomp" / "src" / source
-    output = tmp_path / f"func_{function:08X}"
-    argv = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "match_function.py"),
-        "--config",
-        str(profile),
-        "--prx",
-        str(MODULE),
-        "--function",
-        hex(function),
-        "--source",
-        str(source_path),
-        "--out",
-        str(output),
-        "--json",
-    ]
-    result = subprocess.run(
-        argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=False
-    )
-    report = json.loads(result.stdout)
+    result, report = _real_match_report(tmp_path, function, source)
     match = report["match"]
     expected_exit = 0 if expected_status == "MATCHED" else 5
     assert result.returncode == expected_exit, result.stderr
@@ -149,10 +171,32 @@ def test_real_mwccpsp_function_baselines(
         assert match["matching_words"] == match["total_words"]
     else:
         assert match["limitations"], "an inconclusive result must state its limitation"
-    provenance = report["provenance"]
-    assert provenance["object_sha256"]
-    assert provenance["source_sha256"]
-    assert Path(provenance["source"]).name == source
-    assert Path(provenance["object"]).is_file()
-    assert provenance["flags"] == ["-O4,p", "-sdatathreshold", "0"]
-    assert provenance["compiler"]
+    _assert_provenance(report, source)
+
+
+def test_real_mwccpsp_func_00000508_records_its_one_slot_difference(tmp_path) -> None:
+    """func_00000508 reproduces every word but one scheduling slot (SETO-DECOMP-011).
+
+    The reconstruction describes the whole instruction stream: the only four words
+    that differ are one slot of the last call's argument setup (`move $a0, $s0`),
+    which the original emits before the three zero stores and this compiler emits
+    immediately before the call; the remaining uncertified words are six HI16/LO16
+    pairs whose data identity cannot be proven from the stripped module.  The test
+    pins the documented difference as ``NONMATCHING`` rather than hiding it.
+    """
+    result, report = _real_match_report(tmp_path, 0x508, "func_00000508.c")
+    match = report["match"]
+
+    assert result.returncode == 3, result.stderr
+    assert report["status"] == "NONMATCHING"
+    assert report["verified_decompilation"] is False
+    assert match["total_words"] == 75
+    assert match["difference_count"] == 4
+    assert [item["word_index"] for item in match["differences"]] == [64, 65, 66, 67]
+    # `0x02002021` is `move $a0, $s0`: the original has it first, the candidate
+    # has it last, and the three stores in between shift by one slot.
+    assert match["differences"][0]["original"] == "0x02002021"
+    assert match["differences"][-1]["candidate"] == "0x02002021"
+    assert match["relocation_issues"] == []
+    assert match["limitations"], "an inconclusive result must state its limitation"
+    _assert_provenance(report, "func_00000508.c")
