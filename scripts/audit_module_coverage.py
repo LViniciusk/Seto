@@ -526,6 +526,23 @@ def _call_rows(
     return rows
 
 
+def validate_datarefs_report(
+    actual: Mapping[str, object],
+    expected: Mapping[str, object],
+) -> None:
+    """Require the saved datarefs report to equal the freshly recovered one.
+
+    Comparing the canonical ``section``, ``relocation_inventory`` and
+    ``functions`` parts rejects a tampered instruction, pairing, addend, target,
+    location, status, relocation or entry order even when the report still
+    declares the correct PRX SHA-256. The comparison is exact and canonical:
+    no defaulting turns missing evidence into acceptance.
+    """
+    for key in ("section", "relocation_inventory", "functions"):
+        if actual.get(key) != expected[key]:
+            raise ParseError(f"datarefs report mismatch: {key}")
+
+
 def _load_inputs(prx_path: Path, build_dir: Path) -> tuple[elf.ElfFile, dict[str, object], dict[str, object]]:
     module = elf.parse(prx_path)
     functions_report = _read_json(build_dir / "functions.json", "functions")
@@ -544,32 +561,12 @@ def _load_inputs(prx_path: Path, build_dir: Path) -> tuple[elf.ElfFile, dict[str
     expected_summaries = [function.summary() for function in functions]
     if functions_report.get("functions") != expected_summaries:
         raise ParseError("saved functions report differs from find_functions() for this PRX")
-    dataref_functions = datarefs_report.get("functions")
-    expected_dataref_ranges = [
-        {
-            "function": function.name(),
-            "start": f"0x{function.start:x}",
-            "end": f"0x{function.end:x}",
-        }
-        for function in functions
-    ]
-    if not isinstance(dataref_functions, list) or [
-        {key: item.get(key) for key in ("function", "start", "end")}
-        for item in dataref_functions
-    ] != expected_dataref_ranges:
-        raise ParseError("datarefs report does not cover the current discovered function ranges")
-    for function_report in dataref_functions:
-        start = int(str(function_report["start"]), 16)
-        end = int(str(function_report["end"]), 16)
-        for reference in function_report.get("references", []):
-            instruction = int(str(reference["instruction"]), 16)
-            if not start <= instruction < end:
-                raise ParseError(
-                    f"data reference {reference['instruction']} was assigned outside "
-                    f"{function_report['function']} interval"
-                )
-    if datarefs_report.get("relocation_inventory") != psp_reloc.psp_inventory(module):
-        raise ParseError("datarefs relocation inventory differs from psp_inventory()")
+    expected_datarefs = datarefs.build_reference_report(
+        module,
+        ".text",
+        [(function.name(), function.start, function.end) for function in functions],
+    )
+    validate_datarefs_report(datarefs_report, expected_datarefs)
     return module, imports_report, datarefs_report
 
 
@@ -990,6 +987,28 @@ def _make_checks(
     return checks
 
 
+def overall_audit_status(
+    baseline_checks: Sequence[Mapping[str, object]],
+    external_checks: Mapping[str, Mapping[str, object]],
+) -> str:
+    """Decide the module verdict with strict ``FAIL > BLOCKED > PASS`` precedence.
+
+    Every status from both the internal baseline checks and the external tool
+    checks participates in a single precedence chain, so an unavailable external
+    tool can never hide a proven internal failure. Only the three known statuses
+    are accepted; an empty or malformed set is an error, never a PASS.
+    """
+    statuses = [item.get("status") for item in baseline_checks]
+    statuses.extend(item.get("status") for item in external_checks.values())
+    if not statuses or any(status not in (PASS, FAIL, BLOCKED) for status in statuses):
+        raise ParseError("invalid or missing audit status")
+    if FAIL in statuses:
+        return FAIL
+    if BLOCKED in statuses:
+        return BLOCKED
+    return PASS
+
+
 def _build_audit(prx_path: Path, build_dir: Path) -> dict[str, object]:
     module, imports_report, references_report = _load_inputs(prx_path, build_dir)
     text_section = module.require_section(".text")
@@ -1152,15 +1171,7 @@ def _build_audit(prx_path: Path, build_dir: Path) -> dict[str, object]:
     else:
         checks.append({"claim": "ELF file layout", "observed": "validated", "expected": "no errors", "status": PASS})
 
-    baseline_statuses = [check["status"] for check in checks]
-    if any(value.get("status") == FAIL for value in external.values()):
-        overall = FAIL
-    elif any(value.get("status") == BLOCKED for value in external.values()):
-        overall = BLOCKED
-    elif FAIL in baseline_statuses:
-        overall = FAIL
-    else:
-        overall = PASS
+    overall = overall_audit_status(checks, external)
 
     report = {
         "schema_version": 1,
