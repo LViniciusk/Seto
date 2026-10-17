@@ -35,13 +35,13 @@ REAL_MATCH_CASES = (
     (0x8C, "func_0000008C.c", "MATCHED", 42, 42),
     (0x178, "func_00000178.c", "MATCHED", 51, 51),
     (0x278, "func_00000278.c", "MATCHED", 56, 56),
-    # SETO-DECOMP-010: all three compile byte-identically (0 differences, 0
-    # relocation issues) and stay INCONCLUSIVE only on data-object identity.
+    # SETO-DECOMP-010: 66/84 words certified, zero proven differences;
+    # data relocations remain INCONCLUSIVE without cross-artifact identity.
     (0x0, "func_00000000.c", "INCONCLUSIVE", 7, 13),
     (0x39C, "func_0000039C.c", "INCONCLUSIVE", 28, 30),
     (0x414, "func_00000414.c", "INCONCLUSIVE", 31, 41),
-    # SETO-DECOMP-011: both compile byte-identically (0 differences, 0
-    # relocation issues) and stay INCONCLUSIVE only on data-object identity.
+    # SETO-DECOMP-011: zero proven differences and zero relocation issues; the
+    # uncertified words are HI16/LO16 pairs whose data identity is unprovable.
     # func_00000634 reads the word at +0x1c of the 0xa4-byte buffer;
     # func_00000704 is the state machine over the word at 0x604860.
     (0x634, "func_00000634.c", "INCONCLUSIVE", 42, 44),

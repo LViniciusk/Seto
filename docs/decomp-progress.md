@@ -907,19 +907,30 @@ ramificação. O mecanismo já tem cobertura unitária
 as seis referências do módulo são a ocorrência real dele e continuam visíveis em
 vez de agrupadas por engano.
 
-| Localização | Funções | Papel observado nos bytes |
-|---|---|---|
-| `segment 0 +0x604860` | `func_000006E4`, `func_00000704` | palavra de estado: `func_000006E4` inicializa; `func_00000704` despacha nela, relê a cada incremento e grava o literal `3` nas duas falhas |
-| `segment 0 +0x604864` | `func_00000508`, `func_00000634` | base do bloco de `0xa4` bytes: `func_00000508` limpa e inicializa; `func_00000634` lê o campo `+0x1c` |
-| `segment 0 +0x604918` | `func_00000508` | segundo bloco: gravado em `+0x40`/`+0x68` e passado à chamada local `0x414` |
-| `segment 0 +0x604b18` | `func_00000508` | terceiro bloco: gravado em `+0x50` e passado à chamada local `0x4B8` |
-| `segment 0 +0x604b9c` | `func_000006E4`, `func_00000704` | ponteiro de contexto: `func_00000704` o carrega em `$a0` para `0x508` |
+| Localização | Acessos observados (endereço, instrução, largura) | Funções consumidoras | Papel nos bytes |
+|---|---|---|---|
+| `segment 0 +0x4860` | `addiu` de 32 bits em `0x6f4` (endereço calculado, nunca desreferenciado) | `func_000006E4` | endereço distinto, guardado como **valor** |
+| `segment 0 +0x604860` | `lw`/`sw` de 32 bits em `0x6ec`, `0x710`, `0x768`, `0x788`, `0x78c`, `0x79c`, `0x7b4`, `0x7c4`, `0x7d4`, `0x7e0` | `func_000006E4`, `func_00000704` (agrupadas 5 de 10) | palavra de estado: `func_000006E4` escreve `1`; `func_00000704` despacha, relê a cada incremento e grava o literal `3` nas duas falhas |
+| `segment 0 +0x604864` | bloco de `0xa4` bytes; `func_00000854(base,0,0xa4)` em `0x52c`; 24 `sw` e 1 `lw` de 32 bits | `func_00000508`, `func_00000634` | base do bloco: `+0x1c` lido por `0x634`; `+0x00`–`+0x78` escritos por `0x508` |
+| `segment 0 +0x604918` | `addiu` de 32 bits em `0x594`, `0x5a4`, `0x600`; duas gravações de 32 bits em `+0x40`/`+0x68` do bloco `0x604864` | `func_00000508` | segundo bloco: endereço passado à chamada local `0x414` e guardado como valor |
+| `segment 0 +0x604b18` | `addiu` de 32 bits em `0x5cc`, `0x5d4`; uma gravação de 32 bits em `+0x50` do bloco `0x604864` | `func_00000508` | terceiro bloco: endereço passado à chamada local `0x4B8` e guardado como valor |
+| `segment 0 +0x604b9c` | `sw` de 32 bits em `0x700` (valor `0x4860`); `lw` de 32 bits em `0x770` | `func_000006E4` (agrupada), `func_00000704` (só ordem de relocation, fora do grupo) | ponteiro/valor de contexto: `func_00000704` o carrega em `$a0` para `0x508` |
 
-As demais dez localizações vêm das rodadas 005–010 e não mudaram. As cinco
-localizações `segment 0` acima estão além de `p_filesz = 0x4850`, então continuam
+O relatório local completo — `build/seto011/shared-state.json`, gerado por
+`build/seto011/shared_state.py` a partir do disassembly validado, do
+`datarefs.json` e do `global-usage.json`, sem versionamento — registra os **48
+acessos** das seis localizações, cada um com endereço da instrução, registrador
+base, `operation`, `width_bits`, `field_offset`, valor e confiança. O gerador
+recusa ser executado se uma linha transcrita não bate com o disassembly ou se
+uma referência HI16/LO16 do `datarefs` fica sem acesso correspondente, de modo
+que nenhuma referência (resolvida ou só de ordem) desaparece do relatório.
+
+As demais nove localizações agrupadas vêm das rodadas 005–010 e não mudaram. As
+seis localizações acima estão além de `p_filesz = 0x4850`, então continuam
 `INFERRED`; o Ghidra real também as reporta `UNMAPPED`, o que confirma que nenhum
 nome de objeto é recuperável a partir deste módulo. Nenhum `struct` global foi
-declarado.
+declarado, e as larguras acima vêm da instrução que faz cada acesso, não de um
+tipo inferido.
 
 ### Reconstruções
 
@@ -1023,8 +1034,34 @@ não por bloqueio.
 | Ghidra real (`test_toolchain_real.py`) | 1 passou, 16 faixas, `SETO_LANGUAGE` 16×; o log só cabe inteiro com `max_output` ampliado e o teste agora exige `not result.truncated` |
 | Compilações reais 011 via wibo | 2 `INCONCLUSIVE` (0 divergências comprovadas) + 1 `NONMATCHING` (4 palavras de um único slot), 14 chamadas resolvidas, 0 `relocation_issues` |
 | Baselines reconferidos | as 12 reconstruções anteriores foram reexecutadas sem mudança de status |
-| Determinismo | uma segunda compilação independente das três fontes reproduz os mesmos `Object SHA-256` |
-| `compileall -q src scripts` / `git diff --check` | clean / clean |
+| Determinismo | uma segunda compilação independente das três fontes reproduz os mesmos `Object SHA-256`; o gerador do relatório reproduz um JSON idêntico |
+| `compileall -q src scripts tests` / `git diff --check` | clean / clean |
+
+#### Cobertura de regressão
+
+A rodada **não alterou nenhum código de ferramenta** (`src/`, `scripts/`): as
+mudanças são três fontes C, um protótipo em `decomp/include/sce_stubs.h`, a
+documentação e expectativas de teste. Nenhum comportamento novo foi introduzido,
+logo nenhum teste unitário novo era devido; em vez disso, as dez áreas de
+regressão pedidas foram conferidas contra a suíte existente:
+
+| Área | Teste que cobre |
+|---|---|
+| Endereços distintos não colapsam em uma identidade | `test_global_usage_keeps_the_same_offset_in_different_segments_apart`, `test_reference_key_names_a_segment_only_location` |
+| Offset/largura de `base+0x1c` sem tipo semântico | `test_recover_references_keeps_pairing_and_location_apart`, `test_global_usage_preserves_each_access_without_inventing_a_type` |
+| Larguras diferentes na mesma base não provam uma declaração C | `test_global_usage_preserves_each_access_without_inventing_a_type`, `test_global_usage_never_merges_duplicate_accesses` |
+| Localização zero-filled continua `INFERRED` | `test_load_location_reports_the_segment_offset_and_zero_fill`, `test_reference_key_names_a_segment_only_location` |
+| Pares provados preservados; só-ordem continua inconclusivo | `test_matching.py::test_conditional_control_flow_keeps_order_pairing_inconclusive`, `test_global_usage_keeps_unkeyable_references_visible` |
+| Artefatos diferentes não viram equivalentes | `test_undefined_symbol_requires_an_explicit_original_binary_mapping`, `test_an_unverified_symbol_link_is_an_assertion_not_a_proof` |
+| Referências não resolvidas não desaparecem | `test_global_usage_keeps_unkeyable_references_visible`, `test_global_usage_orders_the_unresolved_references_too` |
+| Ordenação e serialização determinísticas | `test_reference_report_groups_by_function_deterministically`, `test_global_usage_serialises_equivalent_permutations_identically` |
+| Símbolos/relocations impedem falso `MATCHED` | `test_an_unverified_symbol_link_is_an_assertion_not_a_proof` e a suíte `test_matching.py` |
+| ELF inválido não lê fora dos limites | `test_elf.py` |
+
+Os testes de integração foram ampliados como pedido: as faixas novas do Ghidra
+exigem o resultado **observado** (`EXACT` em região única para as três funções,
+`NOT_FOUND` para `0x84`), e os dois `INCONCLUSIVE` entraram em `REAL_MATCH_CASES`
+só depois da compilação real.
 
 | Métrica acumulada | Contagem |
 |---|---:|
@@ -1033,6 +1070,30 @@ não por bloqueio.
 | `INCONCLUSIVE` (sem diferenças comprovadas) | 7 |
 | `NONMATCHING` | 1 |
 | Funções `.text` sem fonte C | 1 (`func_00000084`, classificado) |
+
+### Pendências para a SETO-DECOMP-012
+
+1. **Símbolos de dados.** Nada pode chegar a `MATCHED` enquanto o módulo estiver
+   `strip`ado: as seis localizações acima não têm identidade de objeto e o objeto
+   candidato expõe apenas `D_...` indefinidos. O caminho é encontrar uma tabela de
+   símbolos original (ou um artefato que a carregue) que cubra `0x4860`,
+   `0x604860`, `0x604864`, `0x604918`, `0x604B18` e `0x604B9C`.
+2. **Slot de escalonamento de `func_00000508`.** O `move $a0, $s0` que a original
+   iça para antes dos três stores é o único bloqueio da função. O PRX registra
+   `2.4.1.01` e só `3.0.1 build 219` está disponível; sem o compilador histórico
+   (ou uma forma de fonte entre as 240 já compiladas que o reproduza) o resultado
+   continua `NONMATCHING`.
+3. **Nomes reais dos imports.** As sete chamadas importadas das três fontes
+   resolvem por `(library, NID)` (mais sete chamadas locais resolvidas por
+   endereço); os nomes continuam desconhecidos enquanto a tabela exportadora não
+   for recuperada.
+4. **`func_00000084`.** Fica classificado. Só uma segunda referência de código (ou
+   um metadado de linker) mudaria a leitura de "8 bytes `jr $ra; nop`" para uma
+   função com corpo.
+
+Nenhuma dessas pendências exige infraestrutura nova: as quatro se resolvem com
+evidência externa (símbolos, compilador histórico, tabela de NIDs) ou com a
+releitura dos mesmos relatórios.
 
 ## Matching semantics
 
@@ -1224,8 +1285,8 @@ bytes.
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
 | Matching the historical compiler exactly | PRX `.comment` says 2.4.1.01; supplied compiler is 3.0.1 build 219 | obtain the historically matching licensed compiler, if available |
-| Draft C for the remaining four discovered functions | not yet iterated; `func_00000508`/`func_00000634`/`func_00000704` share a `0xa4`-byte zero-filled buffer whose fields are not recoverable from the PRX, and `func_00000084` has no body | keep iterating the small, independently bounded listings; `build/seto008/selection.json` and `build/seto010/global-usage.json` are the triage starting points |
-| Cross-artifact data identity in every data-dependent reconstruction (`func_000004B8`, `func_000006E4`, and the SETO-DECOMP-010 `func_00000000`, `func_0000039C`, `func_00000414`) | no independent link from candidate data symbols to original objects; the PRX is stripped (`symbols: 0`) and manual JSON maps are assertions only | find original object/linker metadata or another independent artifact proving the link; until then every such function stays `INCONCLUSIVE` with 0 differences |
+| The last scheduling slot of `func_00000508` | the original emits the last call's argument setup (`move $a0, $s0`) before the three zero stores; 3.0.1 build 219 emits it in the delay-slot run-up to the `jal` (words 64–67), and none of the 240 compiled statement orders hoists it | the historical compiler, or a source form that makes 3.0.1 build 219 hoist it; until then the function is `NONMATCHING` and is not presented as verified |
+| Cross-artifact data identity in every data-dependent reconstruction (`func_000004B8`, `func_000006E4`, the SETO-DECOMP-010 `func_00000000`, `func_0000039C`, `func_00000414`, and the SETO-DECOMP-011 `func_00000634`, `func_00000508`, `func_00000704`) | no independent link from candidate data symbols to original objects; the PRX is stripped (`symbols: 0`) and manual JSON maps are assertions only | find original object/linker metadata or another independent artifact proving the link; until then every such function stays `INCONCLUSIVE` with 0 differences |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
 | Identity of the two `func_000006E4` globals | SETO-DECOMP-007 proved the `0x600000` is the high half of a different address, so the three are distinct module-relative addresses; their *section* identity is still unproven because no named section covers them | find another reference to the same offsets, or an original object/symbol table that shows a section; until then they stay `INFERRED` |
@@ -1237,21 +1298,21 @@ re-derived rather than trusted.
 
 ## Next steps
 
-1. Review helper/global prototypes in the reconstructed functions and use the
-   installed `m2c` as a preliminary aid for the four remaining `.text` functions
-   (`0x84`, `0x508`, `0x634`, `0x704`); `build/seto010/global-usage.json` already
-   records that `func_00000508`/`func_00000634` share `segment 0 +0x604864` and
-   that `func_000006E4`/`func_00000704` share `segment 0 +0x604860`.
-2. Recover real *names* for the `(library, NID)` pairs from a module or firmware
+1. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
-   in `decomp/include/`.
-3. Move `func_000006E4`'s three destinations from segment-only to section-backed
+   in `decomp/include/`. The seven imported calls resolved by the SETO-DECOMP-011
+   reconstructions are the current inventory (the round's other seven calls are
+   module-local and resolve by address).
+2. Move the six shared `segment 0` locations (`0x4860`, `0x604860`, `0x604864`,
+   `0x604918`, `0x604B18`, `0x604B9C`) from segment-only to section-backed
    resolution by finding a named section (or an original symbol table) that covers
-   `0x4860`, `0x604860`
-   and `0x604B9C`; SETO-DECOMP-007 showed they are distinct module-relative
-   addresses, so the open question is their section, not their relationship. The
-   `seto datarefs` report is the regression check for that change.
-4. Reproduce the SETO-DECOMP-010 global usage map with
-   `seto datarefs --out build/datarefs.json` followed by
-   `scripts/global_usage.py --report build/datarefs.json --out build/global-usage.json`;
-   `tests/test_datarefs.py` exercises the grouping without a PRX.
+   them; SETO-DECOMP-007 showed they are distinct module-relative addresses, so
+   the open question is their section, not their relationship. `seto datarefs`
+   plus `build/seto011/shared_state.py` are the regression check for that change —
+   as soon as a location becomes section-backed, the corresponding functions can
+   leave `INCONCLUSIVE` without weakening the comparator.
+3. Revisit `func_00000508` only with a new asset: the historical compiler, or an
+   independent statement-order hypothesis for the scheduling slot. Do not relabel
+   the documented difference.
+4. Keep `func_00000084` classified until a second code reference or linker
+   metadata appears.
