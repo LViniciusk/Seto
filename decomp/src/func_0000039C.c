@@ -22,15 +22,22 @@
  * carries the same value for the out-of-range path. Reading the table's identity
  * is what makes the arm order a fact rather than a guess; the table itself is
  * emitted by the compiler for the `switch` below, not a hand-written object.
- * The 0x39C-0x414 boundary is the next function's start and Ghidra's exact body.
+ * BOUNDARIES. The Seto range is `[0x39C, 0x414)`: 30 instructions, with 0x414 the
+ * next function's start. Ghidra's own flow analysis recognises a body of 116 bytes
+ * spread over **two** regions and never defines the word at 0x404
+ * (`SETO_BOUNDARY_STATUS=MISMATCH`, `SETO_DECOMP_STATUS=NOT_RUN`). That missing
+ * word is the compiler-emitted `default:` body; its absence is *consistent* with
+ * the jump-table reading above, but it is neither an `EXACT` body confirmation nor,
+ * on its own, a proof of the original source's intent.
  *
  * REAL COMPILE + MATCH: Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`.
- * INCONCLUSIVE, 28/30 words, 0 differences, 0 relocation issues. The call resolves
- * by `(libehsys, NID 0x31454993)`. The two uncounted words are the HI16/LO16 pair
- * that encodes the jump-table address: the original's destination is proven at
- * `.data+0x8`, but the object's own table is a local symbol with no independent
- * artifact proving it names that same object, so the comparator refuses to report
- * MATCHED. No data map was supplied; a JSON assertion would not be evidence.
+ * INCONCLUSIVE, 28/30 words certified, 0 proven differences, 0 relocation issues.
+ * The call resolves by `(libehsys, NID 0x31454993)`. The two uncertified words are
+ * the HI16/LO16 pair that encodes the jump-table address: the original's
+ * destination is proven at `.data+0x8`, but the object's own table is a local
+ * symbol with no independent artifact proving it names that same object, so
+ * relocation equivalence for those words remains unproven and the comparator will
+ * not report MATCHED. No data map was supplied; a JSON assertion is not evidence.
  * The PRX records compiler 2.4.1.01; equivalence with that version is not claimed.
  *
  * The import name func_00002364 stays an address-derived label; the recovered

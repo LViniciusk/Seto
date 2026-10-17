@@ -721,7 +721,24 @@ def build_global_usage(report: Mapping[str, object]) -> dict[str, object]:
     module*; it never states that two artifacts name the same object, and it does
     not merge a named section with a load segment. References whose location is
     not confidently known are returned in ``unresolved`` rather than dropped.
+
+    Both the grouped references and the unresolved ones are sorted by function,
+    then by the *numeric* instruction address, so two semantically identical
+    reports serialise to the same bytes whatever order they were discovered in.
+    Duplicate accesses are kept: the sort only reorders, never merges.
     """
+
+    def sort_key(item: dict[str, object]) -> tuple[str, int, str, str, str, str, str]:
+        return (
+            str(item["function"]),
+            int(str(item.get("instruction") or "0x0"), 0),
+            str(item.get("kind") or ""),
+            str(item.get("pairing") or ""),
+            str(item.get("location") or ""),
+            str(item.get("status") or ""),
+            str(item.get("unresolved") or ""),
+        )
+
     groups: dict[ReferenceKey, list[dict[str, object]]] = {}
     unresolved: list[dict[str, object]] = []
     for entry in report.get("functions") or []:
@@ -750,14 +767,15 @@ def build_global_usage(report: Mapping[str, object]) -> dict[str, object]:
             location["section"] = container
         else:
             location["segment"] = container
-        location["functions"] = sorted({str(item["function"]) for item in groups[key]})
-        location["references"] = groups[key]
+        accounting = sorted(groups[key], key=sort_key)
+        location["functions"] = sorted({str(item["function"]) for item in accounting})
+        location["references"] = accounting
         locations.append(location)
 
     return {
         "section": report.get("section"),
         "locations": locations,
-        "unresolved": unresolved,
+        "unresolved": sorted(unresolved, key=sort_key),
     }
 
 

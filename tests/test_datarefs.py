@@ -570,6 +570,111 @@ def test_global_usage_sorts_the_functions_of_a_shared_location() -> None:
     assert usage["locations"][0]["functions"] == ["func_a", "func_b"]
 
 
+def test_global_usage_orders_the_references_inside_one_group() -> None:
+    def report(order: tuple[str, ...]) -> dict[str, object]:
+        return {
+            "section": ".text",
+            "functions": [
+                {
+                    "function": "func_a",
+                    "references": [
+                        _summary(
+                            instruction=instruction, target={"section": ".data", "offset": "0x68"}
+                        )
+                        for instruction in order
+                    ],
+                }
+            ],
+        }
+
+    forward = build_global_usage(report(("0x100", "0x10", "0x8")))
+    backward = build_global_usage(report(("0x8", "0x10", "0x100")))
+    # Numeric address order, never lexicographic: 0x8 < 0x10 < 0x100.
+    assert [item["instruction"] for item in forward["locations"][0]["references"]] == [
+        "0x8",
+        "0x10",
+        "0x100",
+    ]
+    assert forward == backward
+
+
+def test_global_usage_orders_the_unresolved_references_too() -> None:
+    def entry(function: str, instruction: str) -> dict[str, object]:
+        return {
+            "function": function,
+            "references": [
+                _summary(
+                    instruction=instruction,
+                    pairing=INFERRED,
+                    target={"section": ".data", "offset": "0x8"},
+                )
+            ],
+        }
+
+    forward = build_global_usage(
+        {"section": ".text", "functions": [entry("func_a", "0x100"), entry("func_b", "0x8")]}
+    )
+    backward = build_global_usage(
+        {"section": ".text", "functions": [entry("func_b", "0x8"), entry("func_a", "0x100")]}
+    )
+    assert forward["locations"] == []
+    assert [(item["function"], item["instruction"]) for item in forward["unresolved"]] == [
+        ("func_a", "0x100"),
+        ("func_b", "0x8"),
+    ]
+    assert forward == backward
+
+
+def test_global_usage_orders_distinct_kinds_at_one_site() -> None:
+    def reference(kind: str) -> dict[str, object]:
+        summary = _summary(instruction="0x20", target={"section": ".data", "offset": "0x68"})
+        summary["kind"] = kind
+        return summary
+
+    report = {
+        "section": ".text",
+        "functions": [
+            {"function": "func_a", "references": [reference("r_mips_32"), reference("hi16-lo16")]}
+        ],
+    }
+    (location,) = build_global_usage(report)["locations"]
+    assert [item["kind"] for item in location["references"]] == ["hi16-lo16", "r_mips_32"]
+
+
+def test_global_usage_never_merges_duplicate_accesses() -> None:
+    summary = _summary(instruction="0x20", target={"section": ".data", "offset": "0x68"})
+    report = {
+        "section": ".text",
+        "functions": [{"function": "func_a", "references": [summary, dict(summary)]}],
+    }
+    (location,) = build_global_usage(report)["locations"]
+    assert len(location["references"]) == 2
+
+
+def test_global_usage_serialises_equivalent_permutations_identically() -> None:
+    import json
+
+    def entry(function: str, instruction: str, offset: str) -> dict[str, object]:
+        return {
+            "function": function,
+            "references": [
+                _summary(instruction=instruction, target={"section": ".data", "offset": offset})
+            ],
+        }
+
+    a = entry("func_a", "0x8", "0x68")
+    b = entry("func_b", "0x10", "0x68")
+    c = entry("func_b", "0x100", "0x20")
+    permutations = ([a, b, c], [c, b, a], [b, a, c], [b, c, a], [c, a, b], [a, c, b])
+    payloads = {
+        json.dumps(
+            build_global_usage({"section": ".text", "functions": list(order)}), sort_keys=True
+        )
+        for order in permutations
+    }
+    assert len(payloads) == 1
+
+
 def test_an_unverified_symbol_link_is_an_assertion_not_a_proof(tmp_path: Path) -> None:
     parsed = _object(tmp_path)
     site = rel(0x04, elf.R_MIPS_HI16, symbol="D_candidate", addend=0)

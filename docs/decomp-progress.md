@@ -766,24 +766,32 @@ PRX, então nenhum struct global foi declarado.
 * **`func_0000039C`** — `switch (func_00002364())` com `sltiu $v0,6`. A tabela
   está em `.data+0x8` (`0x4770`) e seus 6 words são exatamente
   `[0x3d4,0x3dc,0x3e4,0x3ec,0x3f4,0x3fc]`, ou seja, os casos `0..5` retornam
-  `0,1,6,2,5,3` e o `default` retorna `1`. As 30 palavras compiladas são
-  idênticas; as duas não contabilizadas são o par HI16/LO16 da tabela. Ghidra
-  confirma o fim exclusivo `0x414` e, de forma independente, **recusa** o bloco em
-  `0x404`: a função tem 2 ranges e 116 endereços, e a palavra `0x404` fica sem
-  definição na listagem. Esse buraco é evidência independente de que o braço
-  `default` ali é código morto, exatamente como a reconstrução prevê.
+  `0,1,6,2,5,3` e o `default` retorna `1`. O comparador certifica 28 das 30
+  palavras e não encontra nenhuma divergência comprovada; as 2 palavras não
+  certificadas são o par HI16/LO16 que codifica o endereço da tabela. O intervalo
+  usado pelo Seto é `[0x39C, 0x414)` (30 instruções, fim exclusivo = início da
+  função seguinte). Ghidra, com o fluxo que ela mesma inferiu, reconhece um corpo
+  de 116 bytes em **duas** regiões (`SETO_BOUNDARY_STATUS=MISMATCH`,
+  `SETO_DECOMP_STATUS=NOT_RUN`) e não define a palavra `0x404`. Isso é
+  **consistente** com o braço `default` ser código morto, mas não é confirmação de
+  corpo `EXACT` nem prova isolada da intenção do código-fonte original.
 * **`func_00000414`** — `switch (func_00002354())` com `sltiu $v0,7`; a tabela em
   `.data+0x20` (`0x4788`) é `[0x450,0x468,0x480,0x480,0x480,0x480,0x480]`. Cada
   caso chama `func_00008A4($s0, <destino>)`: caso 0 → `.data+0x3c`, caso 1 →
   `.data+0x68`, casos 2–6 → `.data+0x98`, `default` → `.data+0x68`. Ghidra
-  confirma o corpo exato (`0x414–0x4B8`, `EXACT`, 41 instruções). As 41 palavras
-  são idênticas; as 10 não contabilizadas são cinco pares HI16/LO16 (a tabela e as
-  três strings, com `0x68` repetido). As strings são URLs ASCII terminadas em NUL.
+  reconhece o corpo exato (`0x414–0x4B8` como **uma** região de 164 bytes,
+  `SETO_BOUNDARY_STATUS=EXACT`, 41 instruções). O comparador certifica 31 das 41
+  palavras e não encontra divergência comprovada; as 10 não certificadas são cinco
+  pares HI16/LO16 (a tabela e as três strings, com `0x68` repetido). As strings
+  são URLs ASCII terminadas em NUL.
 * **`func_00000000`** — `func_00001F04(func_00000034, func_00000084,
   D_00004850); return 0;`. Três pares HI16/LO16: `.text+0x34` e `.text+0x84`
-  provados, `0x4850` apenas `segment 0`. Ghidra não cria função em `0x0`
-  (`SETO_BOUNDARY_STATUS=NOT_FOUND`): é o entry point e a auto-análise não o modela
-  como função, embora as 13 instruções da faixa sejam exatas. Sobre o significado:
+  provados, `0x4850` apenas `segment 0`. O comparador certifica 7 das 13 palavras
+  (0 divergências comprovadas); as 6 não certificadas são os três pares HI16/LO16.
+  Ghidra não cria função em `0x0` (`SETO_BOUNDARY_STATUS=NOT_FOUND`): é o entry
+  point e a auto-análise não o modela como função, de modo que o intervalo
+  `[0x0, 0x34)` é do Seto e a listagem das 13 instruções nele confere — o que **não**
+  é uma confirmação de corpo por Ghidra. Sobre o significado:
   o PRX mostra dois endereços de código e o início do tail zero-filled passados a
   um import. `0x84` contém apenas `jr $ra; nop` e nenhum outro ponto toma seu
   endereço, o que é compatível com o *fim exclusivo* `[0x34, 0x84)`; a rodada
@@ -797,10 +805,15 @@ dados, e o comparador recusa certificar um destino de dados sem identidade
 qualificada pelo artefato: o objeto candidato expõe apenas símbolos `D_...`
 indefinidos e o PRX é stripped (`symbols: 0`). Um `--data-map` é uma **asserção**,
 não uma prova, e não converte um resultado em `MATCHED`. Por isso as três
-reconstruções ficam `INCONCLUSIVE` com **0 diferenças** e **0 issues** de
-relocation: as 84 palavras foram inspecionadas e nenhuma divergência foi
-comprovada; nenhum caminho foi forçado (sem `extern` enganoso, sem global
-inventado, sem `--data-map`, sem assembly inline, sem `volatile`).
+reconstruções ficam `INCONCLUSIVE`: o comparador certifica **66 das 84 palavras**
+e não encontra nenhuma divergência comprovada nem issue de relocation; as 18
+palavras restantes são pares HI16/LO16 cuja equivalência de relocação dependeria de
+uma identidade de objeto qualificada pelo artefato que não existe aqui, portanto
+permanece **não comprovada**. O número 66/84 descreve apenas as palavras que o
+comparador consegue certificar: **não** afirma igualdade bruta dos bytes das 84
+palavras nem equivalência semântica de relocations. Nenhum caminho foi forçado
+(sem `extern` enganoso, sem global inventado, sem `--data-map`, sem assembly
+inline, sem `volatile`).
 
 ### Proveniência das três compilações (wibo 1.2.0, `-O4,p -sdatathreshold 0`)
 
@@ -809,19 +822,26 @@ SHA-256` do `.o` produzido pela execução.
 
 | Função | Fonte C | Compilação | Instruções | Status | Object SHA-256 | Source SHA-256 |
 |---|---|---|---:|---|---|---|---|
-| `func_00000000` | `decomp/src/func_00000000.c` | OK | 7/13 | **INCONCLUSIVE** | `e5aa6a69ed1fd6ceb01c3445bace376e841fcdfde497735ccb7f883ed8bfa543` | `f79bb5dceb3b3a2a61972d3147a748f9509e60d4a70eed0ba5fde2ca8c7ad6b2` |
-| `func_0000039C` | `decomp/src/func_0000039C.c` | OK | 28/30 | **INCONCLUSIVE** | `776f161be72d985a3eef836141d45263ede9a991867a74699c9ac56cffbc09fd` | `4c1d42675566cd443d82b08b691ed6168b2f4f3a49da3cea81fdc519539b0440` |
-| `func_00000414` | `decomp/src/func_00000414.c` | OK | 31/41 | **INCONCLUSIVE** | `31ccca3915dd0339ebc9afe9579e6c313d4f406238cb70ea19364401ffc73e2a` | `7fcc8ce9c9c6a6b4ce4ef60b651b79cfe160c6dc41bf184f300be84e6c469a25` |
+| `func_00000000` | `decomp/src/func_00000000.c` | OK | 7/13 | **INCONCLUSIVE** | `e5aa6a69ed1fd6ceb01c3445bace376e841fcdfde497735ccb7f883ed8bfa543` | `6873203e1a24bc84bf4aee310cfb524386907486608f99f80ca4881086f8dbb7` |
+| `func_0000039C` | `decomp/src/func_0000039C.c` | OK | 28/30 | **INCONCLUSIVE** | `776f161be72d985a3eef836141d45263ede9a991867a74699c9ac56cffbc09fd` | `231657872547cb99956ab015f99cbe529045a970f31d1e29cc0e02be2576b2d6` |
+| `func_00000414` | `decomp/src/func_00000414.c` | OK | 31/41 | **INCONCLUSIVE** | `31ccca3915dd0339ebc9afe9579e6c313d4f406238cb70ea19364401ffc73e2a` | `98a58db171c55fb2e2696017b1d60d06ea3d93d21dde55a13ff5980734be0986` |
+
+Os `Source SHA-256` acima são a revisão atual dos três arquivos (o endurecimento
+de auditoria ajustou apenas comentários). As três fontes foram **recompiladas**
+depois desses ajustes: os `Object SHA-256` permaneceram exatamente os mesmos, o
+que confirma que a alteração foi inerte para o código gerado.
 
 ### Validação desta rodada
 
 | Ambiente/gate | Resultado |
 |---|---|
-| Windows / `pytest -q` | 490 passou, 15 ignorados |
+| Windows / `pytest -q` | 495 passou, 15 ignorados (endurecimento: +5 testes em `tests/test_datarefs.py`) |
 | Windows / `pytest -m integration -q` | 22 passou, 13 ignorados |
 | WSL2 / `pytest -m integration -q` | 32 passou, 3 ignorados |
+| Determinismo da agregação (64 permutações do relatório real) | 1 payload canônico idêntico (15 localizações, 6 `unresolved`) |
+| Recompilação das 3 fontes após ajuste de comentários | `Object SHA-256` inalterados |
 | Ghidra real (`test_toolchain_real.py`) | 1 passou, 12 faixas, saída `0` |
-| Compilações reais 010 via wibo | 3 `INCONCLUSIVE`, 66/84 palavras, 7 calls resolvidas, 0 diferenças/issues |
+| Compilações reais 010 via wibo | 3 `INCONCLUSIVE`, 66/84 palavras certificadas, 7 calls resolvidas, 0 divergências comprovadas/issues |
 | Baselines reconferidos (as 9 anteriores) | inalteradas: 7 `MATCHED`, 2 `INCONCLUSIVE` |
 | `compileall -q src scripts` / `git diff --check` | clean / clean |
 
@@ -838,6 +858,30 @@ faixa por `func_00000000`), `func_00000508` (constrói o buffer de `0xa4` bytes)
 `func_00000634` e `func_00000704` (leitura do campo `+0x1c` e máquina de estados
 sobre os buffers zero-filled). Elas permanecem para a próxima rodada; nenhuma foi
 decompilada aqui.
+
+### Endurecimento de auditoria (revisão do PR #9)
+
+* `build_global_usage()` passa a ordenar as referências de cada grupo e as não
+  resolvidas por `(função, endereço *numérico* da instrução, tipo, pairing,
+  location, status, unresolved)`, sem descartar duplicatas e sem ordenar
+  endereços lexicograficamente. Cinco testes novos em `tests/test_datarefs.py`
+  cobrem: referências no mesmo grupo recebidas em ordens invertidas, o mesmo
+  para `unresolved`, a ordem `0x8 < 0x10 < 0x100`, tipos distintos no mesmo
+  sítio e igualdade de `json.dumps(..., sort_keys=True)` sob permutações. O
+  relatório real foi agregado sob 64 permutações (funções e referências
+  embaralhadas) e produziu **um único** payload canônico.
+* As afirmações de equivalência foram reescritas. Nenhum arquivo afirma
+  igualdade bruta das 84 palavras nem equivalência semântica das relocations; o
+  texto reporta **66/84 certificadas** e 18 não certificadas, mantendo 0
+  divergências comprovadas, 0 relocation issues e o status `INCONCLUSIVE`.
+* A descrição do Ghidra em `func_0000039C.c` agora distingue o intervalo do Seto
+  `[0x39C, 0x414)` (30 instruções) do corpo de 116 bytes em **duas** regiões que
+  Ghidra reconhece (`SETO_BOUNDARY_STATUS=MISMATCH`) e não apresenta a ausência
+  de `0x404` como confirmação de corpo `EXACT` nem como prova isolada da intenção
+  do código-fonte. As três classificações — `0x414=EXACT`, `0x39C=MISMATCH`,
+  `0x0=NOT_FOUND` — permanecem explícitas e distintas.
+* O endurecimento não tocou código executável: as três fontes foram
+  recompiladas e os `Object SHA-256` permaneceram idênticos (ver acima).
 
 ## Matching semantics
 
