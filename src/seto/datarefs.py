@@ -22,7 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from seto.elf import ET_REL, R_MIPS_32, R_MIPS_HI16, R_MIPS_LO16, ElfFile, Section, Symbol
+from seto.elf import ET_REL, R_MIPS_32, R_MIPS_HI16, R_MIPS_LO16, ElfFile, Relocation, Section, Symbol
 
 
 class RelocationLike(Protocol):
@@ -195,18 +195,19 @@ def module_resolver(
 
 @dataclass(frozen=True)
 class SymbolLink:
-    """An explicit, evidence-backed candidate-symbol -> original-location map.
+    """An explicit candidate-symbol -> original-location assertion.
 
     A candidate object's own ``(section, offset)`` is in the candidate's
     coordinates and proves nothing about the original module. A candidate
     reference may be compared only after a link states which *original* location
-    its symbol names, and that link has to rest on independent evidence - an
-    original symbol, linking information, or a validated mapping - never on the
-    candidate's own section name and offset.
+    its symbol names. A file supplied by the caller is only an assertion, not
+    independent evidence. ``verified`` is reserved for a link validated against
+    an independent artifact by the caller; parsing JSON never sets it.
     """
 
     entries: Mapping[str, DataTarget]
     evidence: tuple[str, ...] = ()
+    verified: bool = False
 
     def original_for(self, symbol: str | None, addend: int) -> DataTarget | None:
         if symbol is None:
@@ -220,6 +221,8 @@ class SymbolLink:
         """Answer in the *original* module's coordinates, or stay unresolved."""
 
         def resolve(site: RelocationLike, addend: int) -> DataIdentity | None:
+            if not self.verified:
+                return None
             target = self.original_for(site.symbol, addend)
             if target is None:
                 return None
@@ -311,6 +314,70 @@ def _unresolved_reason(pairing: str, location: str) -> str:
 
 
 @dataclass(frozen=True)
+class RelocationEvidence:
+    """One relocation behind a reference, with the raw fields it was read from.
+
+    A report has to be auditable without re-parsing the file, so every field the
+    format defines is kept: which table and format the entry came from, the raw
+    ``r_offset``/``r_info`` pair, the segment indices ``r_info`` packs, where the
+    entry is applied, and the addend the caller combined.  ``site`` is the module
+    address the loader patches; ``application`` names the section and offset.
+    """
+
+    type: str
+    format: str
+    site: int
+    application_section: str | None
+    application_offset: int | None
+    raw_offset: int
+    raw_info: int
+    segment_index: int
+    relative_index: int
+    source_section: str | None
+    addend: int
+    addend_valid: bool
+
+    @property
+    def application(self) -> str | None:
+        if self.application_section is None or self.application_offset is None:
+            return None
+        return f"{self.application_section}+0x{self.application_offset:x}"
+
+    def summary(self) -> dict[str, object]:
+        return {
+            "type": self.type,
+            "format": self.format,
+            "site": f"0x{self.site:x}",
+            "application": self.application,
+            "source_section": self.source_section,
+            "raw_offset": f"0x{self.raw_offset:x}",
+            "raw_info": f"0x{self.raw_info:08x}",
+            "segment_index": self.segment_index,
+            "relative_index": self.relative_index,
+            "addend": f"0x{self.addend & 0xFFFFFFFF:08x}",
+            "addend_valid": self.addend_valid,
+        }
+
+
+def relocation_evidence(relocation: Relocation) -> RelocationEvidence:
+    """Project a parsed relocation onto the report's evidence shape."""
+    return RelocationEvidence(
+        type=relocation.type_name,
+        format=relocation.format,
+        site=relocation.offset,
+        application_section=relocation.target_section,
+        application_offset=relocation.section_offset,
+        raw_offset=relocation.raw_offset,
+        raw_info=relocation.info,
+        segment_index=relocation.segment_index,
+        relative_index=relocation.relative_index,
+        source_section=relocation.source_section,
+        addend=relocation.addend,
+        addend_valid=relocation.addend_valid,
+    )
+
+
+@dataclass(frozen=True)
 class DataReference:
     """One data reference recovered from a function's relocation table.
 
@@ -323,7 +390,7 @@ class DataReference:
 
     instruction: int
     kind: str
-    relocations: tuple[tuple[str, int], ...]
+    relocations: tuple[RelocationEvidence, ...]
     addends: tuple[int, ...]
     combined: int
     target: DataTarget | None
@@ -338,14 +405,16 @@ class DataReference:
         payload: dict[str, object] = {
             "instruction": f"0x{self.instruction:x}",
             "kind": self.kind,
-            "relocations": [
-                {"type": name, "site": f"0x{site:x}"} for name, site in self.relocations
-            ],
+            "relocations": [item.summary() for item in self.relocations],
             "raw_addends": [f"0x{value & 0xFFFFFFFF:08x}" for value in self.addends],
             "combined_addend": f"0x{self.combined & 0xFFFFFFFF:08x}",
+            "combined_addend_valid": all(item.addend_valid for item in self.relocations),
             "target": None if self.target is None else self.target.summary(),
             "pairing": self.pairing,
             "location": self.location,
+            # A module-local report does not compare this location to a
+            # candidate artifact; matching establishes this axis separately.
+            "object_identity": NOT_APPLICABLE,
             "status": self.status,
             "evidence": self.evidence,
             "unresolved": self.unresolved,
@@ -380,21 +449,29 @@ def recover_references(
     # Imported lazily: ``seto.matching`` imports ``DataTarget`` from this module,
     # so a module-level import would be circular.
     from seto.matching import combine_hi16_lo16, pair_hi16_lo16, relocation_sites
+    from seto.mips import decode_words
 
     section = module.require_section(section_name)
     region_offset = start - section.addr
-    mapping = relocation_sites(module.relocations_for(section_name), region_offset, end - start)
+    section_code = module.section_data(section)
+    region_words = decode_words(
+        section_code[region_offset : region_offset + end - start],
+        f"{module.reader.name}:{section_name}+0x{region_offset:x}",
+    )
+    section_relocations = module.relocations_for(section_name)
+    mapping = relocation_sites(section_relocations, region_offset, end - start)
     sites = mapping.sites
-    pairing = pair_hi16_lo16(sites)
+    pairing = pair_hi16_lo16(sites, region_words)
     paired_low = set(pairing.hi_to_lo.values())
 
-    def order_only(hi_index: int, low_index: int) -> bool:
-        # ``pair_hi16_lo16`` records the order-only note at the LO16's word index.
-        return any(
-            item.startswith(f"word {index}: HI16/LO16 association relies on relocation order")
-            for index in (hi_index, low_index)
-            for item in pairing.limitations
-        )
+    evidence_by_offset = {
+        relocation.section_offset: relocation
+        for relocation in section_relocations
+        if relocation.section_offset is not None
+    }
+
+    def evidence_for(word_index: int) -> RelocationEvidence:
+        return relocation_evidence(evidence_by_offset[region_offset + word_index * 4])
 
     references: list[DataReference] = []
     for word_index in sorted(sites):
@@ -403,11 +480,15 @@ def recover_references(
         if site.type == R_MIPS_HI16:
             low_index = pairing.hi_to_lo.get(word_index)
             if low_index is None:
+                evidence = evidence_for(word_index)
+                unresolved = "no LO16 partner closes this HI16"
+                if not evidence.addend_valid:
+                    unresolved += "; in-place word does not have a recoverable addend"
                 references.append(
                     DataReference(
                         instruction=instruction,
                         kind="hi16",
-                        relocations=((site.type_name, instruction),),
+                        relocations=(evidence,),
                         addends=(site.addend,),
                         combined=site.addend,
                         target=None,
@@ -416,29 +497,53 @@ def recover_references(
                         location=UNKNOWN,
                         status=UNKNOWN,
                         evidence=f"ELF {site.type_name} has no LO16 to resolve it",
-                        unresolved="no LO16 partner closes this HI16",
+                        unresolved=unresolved,
                     )
                 )
                 continue
             low = sites[low_index]
             low_instruction = region_offset + low_index * 4
+            pairing_evidence = pairing.evidence.get(word_index, "relocation-order")
+            pairing_status = INFERRED if pairing_evidence == "relocation-order" else PROVEN
+            hi_evidence = evidence_for(word_index)
+            lo_evidence = evidence_for(low_index)
+            if not hi_evidence.addend_valid or not lo_evidence.addend_valid:
+                note = (
+                    "pairing established, but one or both in-place words cross the "
+                    "initialized/zero-fill boundary and the combined addend is unresolved"
+                )
+                references.append(
+                    DataReference(
+                        instruction=low_instruction,
+                        kind="hi16-lo16",
+                        relocations=(hi_evidence, lo_evidence),
+                        addends=(site.addend, low.addend),
+                        combined=0,
+                        target=None,
+                        load=None,
+                        pairing=pairing_status,
+                        location=UNKNOWN,
+                        status=UNKNOWN,
+                        evidence=f"ELF {site.type_name}+{low.type_name} pair; {note}",
+                        unresolved=note,
+                    )
+                )
+                continue
             combined = combine_hi16_lo16(site.addend, low.addend)
             target, load, location = _classify(module, combined)
-            pairing_status = INFERRED if order_only(word_index, low_index) else PROVEN
             status = _overall_status(pairing_status, location)
             note = (
-                "pairing rests on relocation order only"
-                if pairing_status == INFERRED
-                else "pairing rests on symbol identity"
+                {
+                    "relocation-order": "pairing rests on relocation order only",
+                    "symbol": "pairing rests on shared ELF symbol identity",
+                    "register-flow": "pairing is confirmed by the LUI-to-LO16 register flow",
+                }.get(pairing_evidence, "pairing evidence unavailable")
             )
             references.append(
                 DataReference(
                     instruction=low_instruction,
                     kind="hi16-lo16",
-                    relocations=(
-                        (site.type_name, instruction),
-                        (low.type_name, low_instruction),
-                    ),
+                    relocations=(hi_evidence, lo_evidence),
                     addends=(site.addend, low.addend),
                     combined=combined,
                     target=target,
@@ -459,11 +564,15 @@ def recover_references(
         if site.type == R_MIPS_LO16:
             if word_index in paired_low:
                 continue  # already reported as part of its HI16/LO16 pair
+            evidence = evidence_for(word_index)
+            unresolved = "no HI16 is associated with this LO16"
+            if not evidence.addend_valid:
+                unresolved += "; in-place word does not have a recoverable addend"
             references.append(
                 DataReference(
                     instruction=instruction,
                     kind="lo16",
-                    relocations=((site.type_name, instruction),),
+                    relocations=(evidence,),
                     addends=(site.addend,),
                     combined=site.addend,
                     target=None,
@@ -472,11 +581,31 @@ def recover_references(
                     location=UNKNOWN,
                     status=UNKNOWN,
                     evidence=f"ELF {site.type_name} has no HI16 to complete it",
-                    unresolved="no HI16 is associated with this LO16",
+                    unresolved=unresolved,
                 )
             )
             continue
         if site.type == R_MIPS_32:
+            evidence = evidence_for(word_index)
+            if not evidence.addend_valid:
+                unresolved = "R_MIPS_32 in-place addend is not fully file-backed or zero-filled"
+                references.append(
+                    DataReference(
+                        instruction=instruction,
+                        kind="r_mips_32",
+                        relocations=(evidence,),
+                        addends=(site.addend,),
+                        combined=0,
+                        target=None,
+                        load=None,
+                        pairing=NOT_APPLICABLE,
+                        location=UNKNOWN,
+                        status=UNKNOWN,
+                        evidence=unresolved,
+                        unresolved=unresolved,
+                    )
+                )
+                continue
             target = resolve_data_target(
                 site,
                 symbols,
@@ -495,7 +624,7 @@ def recover_references(
                 DataReference(
                     instruction=instruction,
                     kind="r_mips_32",
-                    relocations=((site.type_name, instruction),),
+                    relocations=(evidence,),
                     addends=(site.addend,),
                     combined=site.addend,
                     target=target,
@@ -520,7 +649,14 @@ def build_reference_report(
     symbols: Sequence[Symbol] = (),
     explicit_targets: Mapping[str, DataTarget] | None = None,
 ) -> dict[str, object]:
-    """Assemble the deterministic per-function reference report."""
+    """Assemble the deterministic per-function reference report.
+
+    The report carries the module's relocation-format inventory next to the
+    references: an unknown or undecodable relocation has to be a *result*, not a
+    silence, so a reader can see whether the table was understood completely.
+    """
+    from seto.psp_reloc import psp_inventory
+
     entries: list[dict[str, object]] = []
     for name, start, end in functions:
         references = recover_references(
@@ -539,7 +675,11 @@ def build_reference_report(
                 "references": [reference.summary() for reference in references],
             }
         )
-    return {"section": section_name, "functions": entries}
+    return {
+        "section": section_name,
+        "relocation_inventory": psp_inventory(module),
+        "functions": entries,
+    }
 
 
 __all__ = [
@@ -552,6 +692,7 @@ __all__ = [
     "DataReference",
     "DataTarget",
     "LoadLocation",
+    "RelocationEvidence",
     "RelocationLike",
     "SymbolLink",
     "build_reference_report",
@@ -559,5 +700,6 @@ __all__ = [
     "load_location",
     "module_resolver",
     "recover_references",
+    "relocation_evidence",
     "resolve_data_target",
 ]

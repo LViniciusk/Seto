@@ -68,15 +68,22 @@ keeps its historical `state` field (`available`/`missing`) and adds
 `capability`/`capabilities`, so existing consumers remain compatible. A command
 that needs an unavailable tool still exits `4` (`BLOCKED`).
 
-## Reference environment status (2026-10-16)
+For a Windows PE compiler on POSIX, `path` remains the detected compiler binary,
+`loader` identifies wibo/Wine, `version_probe` reports the probe result, and
+`capabilities` reports the independent compile smoke. Seto never attempts the
+version probe by executing the PE directly on Linux, and a version string alone
+does not promote compilation to `READY`.
 
-Measured with `seto toolchain --smoke` on Windows 11 in the development
-environment. `READY` below means the named functional check passed, not that all
-PSP workflows are ready:
+## Reference environment status (2026-10-17)
+
+Measured on the Windows 11 host and its WSL2 Ubuntu environment. `READY` is tied
+to the named functional check, not inferred from a file existing or printing a
+version:
 
 | Tool | Functional evidence |
 | --- | --- |
-| `mwccpsp` | **MISSING**; proprietary compiler not supplied. First real compilation/match remains blocked. |
+| `mwccpsp` via WSL2 | **READY**; version probe and synthetic ELF32 MIPS compilation both run through wibo 1.2.0; Metrowerks 3.0.1 build 219. |
+| `mwccpsp` native Windows | Version probe **READY**, but the functional compiler smoke exceeded its 120s timeout on this host; use the tested WSL2+wibo route rather than claiming native compile readiness. |
 | `splat` | **READY**; pinned 0.50.1 split the synthetic ELF and Seto verified all emitted words. |
 | `m2c` | **READY**; pinned commit `708d2d2` produced C for the synthetic MIPS function. |
 | `objdump` | **READY**; LLVM 21.1.8 read the ELF32 MIPS header, sections, symbol, relocation and instructions. |
@@ -84,12 +91,12 @@ PSP workflows are ready:
 | Real PSP PRX | **PROVEN** separately by integration test: automatic import of `libhtml_view.prx` selected `Allegrex:LE:32:default`. The general smoke report keeps `prx: BLOCKED` because it uses only synthetic input. |
 | `rea` | 6.5.0 CLI **READY** and stdio MCP initialize/`tools/list` **READY** (207 tools); native-provider analysis and PSP-PRX support remain **BLOCKED**/unproven. |
 | `node` / `java` | **READY**; Node 24.21.0, Java Corretto 25.0.3. |
-| `wibo` / `wine` | `NOT_APPLICABLE` on native Windows; not installed here. |
+| `wibo` / `wine` | `NOT_APPLICABLE` for native Windows execution; WSL2 `wibo` 1.2.0 is installed and used for the real builds. |
 
 The smoke report deliberately keeps different claims separate: REA installed is
 not the same as an MCP connection; an MCP connection does not prove native binary
 analysis; Ghidra loading an architecture does not prove that it recognizes a PSP
-PRX. See `docs/decomp-progress.md` for the current decompilation blocker.
+PRX. See `docs/decomp-progress.md` for the remaining data-identity blockers.
 
 ## Reproducible bootstrap
 
@@ -155,25 +162,54 @@ client configuration is written by the bootstrap.
 
 The compiler is a 32-bit Windows binary, so on Linux it is run through a loader.
 
+Install Python/Seto and wibo if this WSL distribution is not configured yet:
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y python3.12 python3.12-venv build-essential
-
-git clone <this repo> seto && cd seto
 python3.12 -m venv .venv && . .venv/bin/activate
 python -m pip install -e ".[dev,disasm,yaml]"
-
-# Install the pinned wibo release where a binary exists; the script warns before
-# a package-manager command that needs root.
 bash scripts/bootstrap_toolchain.sh --install --tool wibo
-
-export SETO_MWCCPSP=/mnt/c/tools/mwccpsp.exe
-export SETO_WIBO="$(command -v wibo)"
-seto toolchain
 ```
 
-`wibo` (or `wine`) is prepended to the compiler command line by
-`scripts/match_function.py --loader wibo`.
+Use the persistent, ignored WSL profile instead of recreating a `/tmp` config:
+
+```bash
+cp config/wsl/seto.example.toml config/wsl/seto.toml
+# Edit tools.mwccpsp.path and tools.wibo.path for this machine.
+PYTHONPATH=src python3 -m seto --config config/wsl/seto.toml \
+    toolchain --smoke --tool mwccpsp --json
+```
+
+The profile is selected explicitly and does not merge the Windows-only
+`config/seto.local.toml`; its personal-path copy is git-ignored. In the validated
+environment the values are the licensed PE compiler under `/mnt/c/Users/...`
+and `/home/.../.local/bin/wibo`. Those machine-specific paths are **not** in the
+tracked example or tracked configuration.
+
+`scripts/match_function.py` automatically picks configured/discovered `wibo`
+(preferred) or Wine on POSIX when `--loader` is omitted. An explicit
+`--loader /path/to/wibo` still overrides it. If neither loader is available, the
+script exits `4` (`BLOCKED`) before attempting to run the PE compiler. Argument
+lists are passed directly; no shell is used.
+
+For the three local integration runs, from the repository root in WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/match_function.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --function 0x244 --source decomp/src/func_00000244.c \
+  --out build/match/func_00000244 --json
+```
+
+Repeat with functions `0x4B8` / `func_000004B8.c` and `0x6E4` /
+`func_000006E4.c`. Reports and objects are written under ignored `build/`; smoke
+uses synthetic input and never reads `private/` or the ISO.
+
+The real compiler emits `Environment variable 'MWCIncludes' not found`; it still
+exits successfully and produces the expected ELF32 MIPS object through WSL2+wibo.
+No dummy environment variable is set to hide that warning.
 
 ## Subprocess safety
 

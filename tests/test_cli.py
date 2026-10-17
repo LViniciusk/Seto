@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from seto import cli
+from seto.elf import SHT_MIPS_PSPREL
 from seto.hashing import fingerprint_file
 from seto.toolchain import NOT_APPLICABLE, RunResult, ToolStatus
 
@@ -773,7 +774,7 @@ def test_match_data_reference_without_a_map_stays_inconclusive(tmp_path, capsys)
     assert any("cannot be proven" in note for note in payload["limitations"])
 
 
-def test_match_data_reference_with_a_proven_map_matches(tmp_path, capsys) -> None:
+def test_match_data_reference_with_an_unverified_map_stays_inconclusive(tmp_path, capsys) -> None:
     original = _data32_prx(tmp_path)
     candidate = tmp_path / "func.o"
     candidate.write_bytes(_data_object_bytes("D_string"))
@@ -784,10 +785,11 @@ def test_match_data_reference_with_a_proven_map_matches(tmp_path, capsys) -> Non
         ["match", "--prx", str(original), "--function", "0x0", "--candidate", str(candidate),
          "--candidate-section-offset", "0", "--data-map", str(data_map), "--json"]
     )
-    assert status == cli.EXIT_OK
+    assert status == cli.EXIT_INCONCLUSIVE
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "MATCHED"
-    assert payload["resolved_data"]
+    assert payload["status"] == "INCONCLUSIVE"
+    assert not payload["resolved_data"]
+    assert any("unverified assertion" in note for note in payload["limitations"])
 
 
 def test_match_rejects_a_malformed_data_map(tmp_path, capsys) -> None:
@@ -841,6 +843,9 @@ def _data_reference_prx(tmp_path):
     )
     module = build_elf32(
         e_type=0xFFA0,
+        program_headers=[
+            {"type": 1, "vaddr": 0, "filesz": len(code), "memsz": 0x8000},
+        ],
         sections=[
             {
                 "name": ".text",
@@ -860,7 +865,7 @@ def _data_reference_prx(tmp_path):
             },
             {
                 "name": ".rel.text",
-                "type": 9,
+                "type": SHT_MIPS_PSPREL,
                 "flags": 0,
                 "addr": 0,
                 "size": len(relocations),
@@ -878,9 +883,9 @@ def test_datarefs_separates_pairing_from_location(tmp_path, capsys) -> None:
     module = _data_reference_prx(tmp_path)
     out = tmp_path / "report" / "datarefs.json"
     status = cli.main(["datarefs", "--prx", str(module), "--out", str(out), "--json"])
-    # The string reference lands inside .data, but its HI16/LO16 pair is
-    # associated by relocation order alone, so the reference is not fully proven
-    # and the exit code says so.
+    # Register flow proves the pair and the numeric target is in .data. Object
+    # identity is not compared by this standalone report; another unresolved
+    # reference keeps the overall command inconclusive.
     assert status == cli.EXIT_INCONCLUSIVE
     payload = json.loads(capsys.readouterr().out)
     assert payload["section"] == ".text"
@@ -889,14 +894,72 @@ def test_datarefs_separates_pairing_from_location(tmp_path, capsys) -> None:
     string = references["0xc"]
     assert string["target"] == {"section": ".data", "offset": "0xc8"}
     assert string["location"] == "PROVEN"
-    assert string["pairing"] == "INFERRED"
-    assert string["status"] == "INFERRED"
+    assert string["pairing"] == "PROVEN"
+    assert string["status"] == "PROVEN"
+    assert string["object_identity"] == "NOT_APPLICABLE"
     assert string["combined_addend"] == "0x00004830"
-    assert string["unresolved"] is not None
+    assert string["unresolved"] is None
+    assert string["relocations"][0]["format"] == "PSP"
+    assert string["relocations"][0]["source_section"] == ".rel.text"
+    assert string["relocations"][0]["raw_offset"] == "0x8"
+    assert string["relocations"][1]["raw_offset"] == "0xc"
     outside = references["0x4"]
     assert outside["status"] == "UNKNOWN"
     assert outside["target"] is None
+    inventory = payload["relocation_inventory"]
+    assert inventory["formats"] == ["PSP"]
+    assert inventory["psp_entries"] == 4
+    assert inventory["standard_entries"] == 0
+    assert inventory["unknown_types"] == []
+    assert inventory["segment_indices"] == {"0": 4}
     assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+
+def test_datarefs_prints_the_relocation_inventory(tmp_path, capsys) -> None:
+    module = _data_reference_prx(tmp_path)
+    cli.main(["datarefs", "--prx", str(module)])
+    out = capsys.readouterr().out
+    assert "relocation formats: PSP (4 PSP, 0 standard)" in out
+    assert "relocation types: R_MIPS_HI16 x2, R_MIPS_LO16 x2" in out
+    assert "unresolved:" in out
+
+
+def test_datarefs_reports_a_standard_rel_format(tmp_path, capsys) -> None:
+    # A relocatable object keeps the standard SHT_REL layout, and the inventory
+    # must name that format rather than assume the PSP one.
+    code = word(0x3C040000) + word(0x24844830) + word(jr(31)) + word(0)
+    relocations = build_relocations([(0x00, 5, 1), (0x04, 6, 1)])
+    module = build_elf32(
+        e_type=1,
+        sections=[
+            {
+                "name": ".text",
+                "type": 1,
+                "flags": SHF_ALLOC | SHF_EXECINSTR,
+                "addr": 0,
+                "size": len(code),
+                "data": code,
+            },
+            {
+                "name": ".rel.text",
+                "type": 9,
+                "flags": 0,
+                "addr": 0,
+                "size": len(relocations),
+                "data": relocations,
+                "entsize": 8,
+            },
+        ],
+    )
+    path = tmp_path / "func.o"
+    path.write_bytes(module)
+    assert cli.main(["datarefs", "--prx", str(path), "--json"]) == cli.EXIT_INCONCLUSIVE
+    payload = json.loads(capsys.readouterr().out)
+    inventory = payload["relocation_inventory"]
+    assert inventory["formats"] == ["REL"]
+    assert inventory["standard_entries"] == 2
+    assert inventory["psp_entries"] == 0
+    assert inventory["segment_indices"] == {}
 
 
 def test_datarefs_unknown_function_is_an_error(tmp_path, capsys) -> None:

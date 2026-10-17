@@ -19,7 +19,7 @@ from functools import partial
 from pathlib import Path
 from typing import Sequence
 
-from seto import __version__, datarefs, elf, formats, imports, inventory, mips, split
+from seto import __version__, datarefs, elf, formats, imports, inventory, mips, psp_reloc, split
 from seto.binio import ParseError, SetoError
 from seto.hashing import sha256_file, verify_file
 from seto.matching import (
@@ -164,8 +164,8 @@ def build_parser() -> argparse.ArgumentParser:
     match_parser.add_argument(
         "--data-map", type=Path, default=None,
         help=(
-            "JSON file that states, with evidence, which original location each "
-            "candidate data symbol names; without it, data references stay INCONCLUSIVE"
+            "advisory JSON assertion linking candidate data symbols to original locations; "
+            "it is not identity proof without independent validation"
         ),
     )
     match_parser.add_argument("--json", action="store_true")
@@ -564,10 +564,9 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
     # authority that decides whether both name the same imported function.
     resolver = _call_resolver(original_elf, region.symbol_addresses)
 
-    # Data references are resolved in the *original* module's coordinates.  The
-    # candidate side may only answer through a proven link (``--data-map``); with
-    # no link its references stay unresolved, which keeps the comparison
-    # INCONCLUSIVE instead of trusting an equal section name and offset.
+    # Data references are resolved in the *original* module's coordinates. A
+    # manually supplied --data-map is advisory only: it cannot prove an
+    # independent candidate-symbol identity by declaring one.
     try:
         data_link = _load_data_map(arguments.data_map) if arguments.data_map else None
     except (ParseError, OSError) as exc:
@@ -581,6 +580,22 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
     }
     if data_link is not None:
         data_resolvers["candidate_data_resolver"] = data_link.resolver(original_elf, artifact)
+    has_candidate_data_relocation = any(
+        item.type in (elf.R_MIPS_32, elf.R_MIPS_HI16, elf.R_MIPS_LO16)
+        for item in region.relocations
+    )
+    data_map_limitations = (
+        ["candidate data map is an unverified assertion; it is not used as object-identity proof"]
+        if data_link is not None and has_candidate_data_relocation
+        else []
+    )
+    relocation_inventory = psp_reloc.psp_inventory(original_elf)
+    inventory_limitations = []
+    if not relocation_inventory["complete"]:
+        inventory_limitations.append(
+            "original relocation inventory is incomplete (unknown/unsupported, malformed, "
+            "or compressed entries are present)"
+        )
 
     # ``seto match`` compares instructions and relocations; it cannot know where
     # the candidate came from, so its evidence is always "binary-range" and a
@@ -595,7 +610,7 @@ def _command_match(arguments: argparse.Namespace, settings: Settings) -> int:
         candidate_relocations=region.relocations,
         original_section_offset=region_offset,
         candidate_section_offset=region.section_offset,
-        limitations=region.limitations,
+        limitations=[*region.limitations, *data_map_limitations, *inventory_limitations],
         call_resolver=resolver,
         **data_resolvers,
     )
@@ -720,11 +735,41 @@ def _command_datarefs(arguments: argparse.Namespace, settings: Settings) -> int:
         for reference in entry["references"]
         if reference["status"] != datarefs.PROVEN
     ]
-    return EXIT_INCONCLUSIVE if unresolved else EXIT_OK
+    relocation_inventory = report["relocation_inventory"]
+    return (
+        EXIT_INCONCLUSIVE
+        if unresolved or not relocation_inventory["complete"]
+        else EXIT_OK
+    )
 
 
 def _print_datarefs(report: dict[str, object]) -> None:
     print(f"{report['prx']} :: {report['section']}")
+    inventory = report.get("relocation_inventory") or {}
+    formats = ", ".join(inventory.get("formats", ())) or "none"
+    print(
+        f"relocation formats: {formats} "
+        f"({inventory.get('psp_entries', 0)} PSP, {inventory.get('standard_entries', 0)} standard)"
+    )
+    types = inventory.get("types", {})
+    counts = ", ".join(f"{name} x{count}" for name, count in sorted(types.items()))
+    print(f"relocation types: {counts or 'none'}")
+    unknown = inventory.get("unknown_types", ())
+    if unknown:
+        print(f"UNKNOWN relocation types: {', '.join(unknown)}")
+    unsupported = inventory.get("unsupported_types", ())
+    if unsupported:
+        print(f"unsupported relocation types: {', '.join(unsupported)}")
+    if inventory.get("invalid_entries"):
+        print(f"invalid PSP application locations: {len(inventory['invalid_entries'])}")
+    if inventory.get("reserved_field_entries"):
+        print(f"PSP relocations with reserved r_info bits: {len(inventory['reserved_field_entries'])}")
+    if inventory.get("incomplete_entries"):
+        print(f"relocations with unresolved application locations: {len(inventory['incomplete_entries'])}")
+    if inventory.get("compressed_sections") or inventory.get("segment_relocation_payloads"):
+        print("unsupported compressed PSP relocation payload is present")
+    if not inventory.get("complete", True):
+        print("relocation inventory: INCOMPLETE")
     for entry in report["functions"]:
         references = entry["references"]
         if not references:
@@ -739,11 +784,16 @@ def _print_datarefs(report: dict[str, object]) -> None:
                 destination = f"segment {reference['load_segment']} +{reference['load_offset']} ({state})"
             else:
                 destination = "unresolved"
+            relocations = reference["relocations"]
+            fmt = relocations[0]["format"] if relocations else "?"
             print(
-                f"  {reference['instruction']} {reference['kind']:<10} "
+                f"  {reference['instruction']} {reference['kind']:<10} fmt={fmt:<4} "
                 f"pair={reference['pairing']:<14} loc={reference['location']:<8} "
+                f"identity={reference['object_identity']:<14} "
                 f"{reference['status']:<8} {destination}"
             )
+            if reference["unresolved"] is not None:
+                print(f"      unresolved: {reference['unresolved']}")
 
 
 def _print_imports(
@@ -909,12 +959,11 @@ def _as_int(value: object, label: str) -> int:
 
 
 def _load_data_map(path: Path) -> datarefs.SymbolLink:
-    """Read the explicit candidate-symbol -> original-location link.
+    """Read an advisory candidate-symbol -> original-location assertion.
 
-    The file *is* the evidence: Seto cannot verify that a candidate symbol names a
-    given original object, so the mapping has to be stated deliberately. Each
-    entry names a candidate symbol and the original section/offset it stands for;
-    an optional top-level ``evidence`` string records where the mapping came from.
+    The JSON may document an externally supplied hypothesis, but its presence or
+    evidence string is not independent validation. Only a link validated against
+    another artifact can resolve an identity; this loader never marks one verified.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

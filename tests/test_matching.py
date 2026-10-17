@@ -353,6 +353,7 @@ def test_duplicate_relocations_are_rejected_not_silently_overwritten() -> None:
 def test_hi16_lo16_pair_with_equal_symbols_matches() -> None:
     original = _code(0x3C040000, 0x24840000)
     candidate = _code(0x3C040000, 0x24840000)
+    target = DataTarget(".data", 0x10)
     result = compare(
         original,
         candidate,
@@ -365,15 +366,17 @@ def test_hi16_lo16_pair_with_equal_symbols_matches() -> None:
             rel(0, R_MIPS_HI16, addend=0x0001, symbol="target"),
             rel(4, R_MIPS_LO16, addend=0x0002, symbol="target"),
         ],
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
     )
     assert result.status == MATCHED
     assert result.matching_words == 2
     assert result.limitations == ()
 
 
-def test_hi16_lo16_pair_verifies_the_lo16_symbol() -> None:
-    # Regression: the LO16 half used to be ignored, so a pair whose LO16 pointed
-    # at a different symbol was declared equivalent.
+def test_equal_numeric_pairs_without_object_identity_stay_inconclusive() -> None:
+    # Even matching instructions/addends and a matching HI symbol cannot prove
+    # that a separately compiled LO symbol denotes the original data object.
     original = _code(0x3C040000, 0x24840000)
     candidate = _code(0x3C040000, 0x24840000)
     result = compare(
@@ -389,10 +392,27 @@ def test_hi16_lo16_pair_verifies_the_lo16_symbol() -> None:
             rel(4, R_MIPS_LO16, addend=0x0002, symbol="second"),
         ],
     )
-    assert result.status == NONMATCHING
-    assert "LO16 symbol" in result.differences[0].reason
-    # The pair must not be counted as matching when a symbol diverges.
+    assert result.status == INCONCLUSIVE
+    assert any("identity cannot be proven" in item for item in result.limitations)
     assert result.matching_words == 0
+
+
+def test_equal_hilo_addends_and_symbol_names_without_resolvers_are_inconclusive() -> None:
+    code = _code(0x3C040000, 0x24840000)
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=1, symbol="same_name"),
+        rel(4, R_MIPS_LO16, addend=2, symbol="same_name"),
+    ]
+    result = compare(
+        code,
+        code,
+        name="independent-artifacts",
+        original_relocations=relocations,
+        candidate_relocations=relocations,
+    )
+    assert result.status == INCONCLUSIVE
+    assert not result.resolved_data
+    assert any("identity cannot be proven" in item for item in result.limitations)
 
 
 def test_hi16_and_lo16_with_different_symbols_are_not_associated() -> None:
@@ -431,6 +451,8 @@ def test_hi16_lo16_association_does_not_require_adjacent_instructions() -> None:
         name="f",
         original_relocations=relocations,
         candidate_relocations=relocations,
+        original_data_resolver=_identity(DataTarget(".data", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x10)),
     )
     assert result.status == MATCHED
     assert result.matching_words == 3
@@ -454,6 +476,8 @@ def test_hi16_lo16_association_follows_relocation_order_not_word_order() -> None
         name="f",
         original_relocations=relocations,
         candidate_relocations=relocations,
+        original_data_resolver=_identity(DataTarget(".data", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x10)),
     )
     assert result.status == MATCHED
     assert result.matching_words == 2
@@ -476,6 +500,8 @@ def test_one_lo16_resolves_multiple_pending_hi16() -> None:
         name="f",
         original_relocations=relocations,
         candidate_relocations=relocations,
+        original_data_resolver=_identity(DataTarget(".data", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x10)),
     )
     assert result.status == MATCHED
     # The shared LO16 is one word, not two.
@@ -483,8 +509,8 @@ def test_one_lo16_resolves_multiple_pending_hi16() -> None:
 
 
 def test_hi16_lo16_association_without_symbols_is_inconclusive() -> None:
-    # With no symbol identity the pair can only be formed from relocation order,
-    # which is a limitation rather than a proof.
+    # Register flow proves which HI closes which LO, but that alone cannot prove
+    # that an object in a separate candidate artifact is the same object.
     code = _code(0x3C040000, 0x24840000)
     relocations = [rel(0, R_MIPS_HI16, addend=1), rel(4, R_MIPS_LO16, addend=2)]
     result = compare(
@@ -493,11 +519,87 @@ def test_hi16_lo16_association_without_symbols_is_inconclusive() -> None:
         name="f",
         original_relocations=relocations,
         candidate_relocations=relocations,
+        original_data_resolver=lambda _site, _value: DataIdentity(
+            "original", DataTarget(".data", 0x10)
+        ),
+        candidate_data_resolver=lambda _site, _value: None,
     )
     assert result.status == INCONCLUSIVE
     assert not result.is_matched
-    assert any("relocation order" in item for item in result.limitations)
-    assert result.matching_words == 2
+    assert not any("relocation order" in item for item in result.limitations)
+    assert any("identity cannot be proven" in item for item in result.limitations)
+    assert result.matching_words == 0
+
+
+def _lui(register: int, immediate: int = 0) -> int:
+    return (0x0F << 26) | (register << 16) | (immediate & 0xFFFF)
+
+
+def _i_type(op: int, source: int, target: int, immediate: int = 0) -> int:
+    return (op << 26) | (source << 21) | (target << 16) | (immediate & 0xFFFF)
+
+
+def test_register_flow_proves_the_unique_hi16_lo16_pair() -> None:
+    code = _code(_lui(4, 0x60), _i_type(9, 4, 4, 0x4860))
+    relocations = [rel(0, R_MIPS_HI16, addend=0x60), rel(4, R_MIPS_LO16, addend=0x4860)]
+    words = (_lui(4, 0x60), _i_type(9, 4, 4, 0x4860))
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 1}
+    assert pairing.evidence == {0: "register-flow"}
+    assert not any("relocation order" in item for item in pairing.limitations)
+
+
+def test_register_redefinition_blocks_a_false_hi16_lo16_pair() -> None:
+    words = (_lui(4), _i_type(9, 4, 4, 1), _i_type(9, 4, 5, 2))
+    relocations = [rel(0, R_MIPS_HI16, addend=0), rel(8, R_MIPS_LO16, addend=2)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {}
+    assert any("redefines the LO16 base register" in item for item in pairing.limitations)
+
+
+@pytest.mark.parametrize(
+    ("words", "low_index"),
+    [
+        ((_lui(5), 0x0C000000, _i_type(9, 5, 5, 0x4830)), 2),
+        ((_lui(3), 0x03E00008, _i_type(0x2B, 3, 4, 0x4860)), 2),
+    ],
+)
+def test_register_flow_observes_unconditional_control_delay_slots(words, low_index) -> None:
+    hi_index = 0
+    relocations = [rel(hi_index * 4, R_MIPS_HI16, addend=0)]
+    relocations.append(rel(low_index * 4, R_MIPS_LO16, addend=0x4830))
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {hi_index: low_index}
+    assert pairing.evidence[hi_index] == "register-flow"
+
+
+def test_conditional_control_flow_keeps_order_pairing_inconclusive() -> None:
+    words = (_lui(4), 0x10800000, 0, _i_type(9, 4, 4, 0x4830))  # beq, delay slot, LO
+    relocations = [rel(0, R_MIPS_HI16, addend=0), rel(12, R_MIPS_LO16, addend=0x4830)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 3}
+    assert pairing.evidence[0] == "relocation-order"
+    assert any("control flow crosses" in item for item in pairing.limitations)
+    assert any("relocation order" in item for item in pairing.limitations)
+
+
+def test_register_flow_does_not_attach_one_lo_to_another_registers_hi() -> None:
+    words = (_lui(4), _lui(5), _i_type(9, 4, 4, 1), _i_type(9, 5, 5, 2))
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=0),
+        rel(4, R_MIPS_HI16, addend=0),
+        rel(8, R_MIPS_LO16, addend=1),
+        rel(12, R_MIPS_LO16, addend=2),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 2, 1: 3}
+    assert pairing.evidence == {0: "register-flow", 1: "register-flow"}
+
+
+def test_an_orphan_lo16_is_a_pairing_limitation() -> None:
+    pairing = pair_hi16_lo16({0: RelocationSite(0, R_MIPS_LO16, 0x1234, None)})
+    assert pairing.hi_to_lo == {}
+    assert any("LO16 relocation has no associated HI16" in item for item in pairing.limitations)
 
 
 def test_unnamed_section_symbols_pair_by_their_shared_symbol_table_index() -> None:
@@ -514,6 +616,8 @@ def test_unnamed_section_symbols_pair_by_their_shared_symbol_table_index() -> No
         name="f",
         original_relocations=relocations,
         candidate_relocations=relocations,
+        original_data_resolver=_identity(DataTarget(".data", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x10)),
     )
 
     assert pairing.hi_to_lo == {0: 1}
@@ -541,8 +645,8 @@ def test_unnamed_hi16_lo16_with_different_symbol_indices_stays_inconclusive() ->
 
 
 def test_ambiguous_hi16_lo16_association_is_inconclusive() -> None:
-    # Two pending HI16 with unknown symbols closed by one unknown LO16: which
-    # HI16 the LO16 resolves cannot be shown, so no artificial pair is claimed.
+    # Two pending HI16 with unknown symbols but only one reaching-register match:
+    # the other HI16 stays unresolved, and data identity is not inferred.
     code = _code(0x3C040000, 0x3C050000, 0x24840000)
     relocations = [
         rel(0, R_MIPS_HI16, addend=1),
@@ -557,7 +661,7 @@ def test_ambiguous_hi16_lo16_association_is_inconclusive() -> None:
         candidate_relocations=relocations,
     )
     assert result.status == INCONCLUSIVE
-    assert result.matching_words == 3
+    assert result.matching_words == 1
 
 
 def test_hi16_lo16_pair_on_one_side_only_is_a_difference() -> None:
@@ -619,15 +723,17 @@ def test_hi16_lo16_pair_with_different_combined_value_is_a_difference() -> None:
             rel(0, R_MIPS_HI16, addend=0x0002),
             rel(4, R_MIPS_LO16, addend=0x0002),
         ],
+        original_data_resolver=_identity(DataTarget(".data", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x20)),
     )
     assert result.status == NONMATCHING
-    assert "HI16/LO16 pair" in result.differences[0].reason
+    assert "data target differs" in result.differences[0].reason
     assert result.matching_words == 0
 
 
-def test_matching_words_counts_only_the_words_of_an_agreed_pair() -> None:
-    # A pair with a diverged symbol must contribute nothing, while the untouched
-    # words around it are still counted.
+def test_unlinked_different_symbols_do_not_make_a_pair_nonmatching() -> None:
+    # Without an independent cross-artifact link, different candidate symbol
+    # spellings cannot prove that the underlying data objects differ.
     original = _code(0x3C040000, 0x24840000, NOP)
     candidate = _code(0x3C040000, 0x24840000, NOP)
     result = compare(
@@ -643,10 +749,11 @@ def test_matching_words_counts_only_the_words_of_an_agreed_pair() -> None:
             rel(4, R_MIPS_LO16, addend=0x0002, symbol="second"),
         ],
     )
-    assert result.status == NONMATCHING
+    assert result.status == INCONCLUSIVE
     assert result.total_words == 3
     assert result.matching_words == 1
-    assert result.differences[0].word_index == 0
+    assert result.differences == ()
+    assert any("identity cannot be proven" in item for item in result.limitations)
 
 
 def test_combine_hi16_lo16_uses_the_raw_high_half_and_signed_low_half() -> None:
@@ -738,6 +845,18 @@ def test_r_mips_32_resolved_to_the_same_section_offset_matches() -> None:
     assert result.status == MATCHED
     assert result.resolved_data
     assert result.equivalence == EQUIVALENCE_RESOLVED_RELOCATIONS
+
+
+def test_r_mips_32_equal_numeric_addends_without_resolvers_stay_inconclusive() -> None:
+    result = compare(
+        _code(0x00000100),
+        _code(0x00000100),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+        candidate_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+    )
+    assert result.status == INCONCLUSIVE
+    assert any("identity cannot be proven" in item for item in result.limitations)
 
 
 def test_r_mips_32_proven_different_targets_are_nonmatching() -> None:
@@ -848,10 +967,9 @@ def test_hi16_lo16_with_proven_symbols_and_different_targets_is_nonmatching() ->
     assert "data target differs" in result.differences[0].reason
 
 
-def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
-    # The PRX is stripped, so a HI16/LO16 association can rest on relocation
-    # order alone.  A destination difference then cannot be attributed to the
-    # code: it may be the wrong LO16 closing the HI16.
+def test_a_target_difference_on_a_register_proven_pair_is_nonmatching() -> None:
+    # The straight-line LUI-to-LO16 register flow proves the association, so a
+    # proven destination difference is a real data-reference divergence.
     result = compare(
         _code(0x3C040001, 0x24840002),
         _code(0x3C040000, 0x24840003),
@@ -867,8 +985,32 @@ def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
         original_data_resolver=_identity(DataTarget(".data", 0x20)),
         candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
     )
+    assert result.status == NONMATCHING
+    assert "data target differs" in result.differences[0].reason
+
+
+def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
+    # A conditional branch makes the limited register-flow scan ambiguous; the
+    # order fallback must not turn different resolved destinations into a proven
+    # code/data divergence.
+    result = compare(
+        _code(0x3C040001, 0x10800000, 0, 0x24840002),
+        _code(0x3C040000, 0x10800000, 0, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1),
+            rel(12, R_MIPS_LO16, addend=0x2),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0),
+            rel(12, R_MIPS_LO16, addend=0x3),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
     assert result.status == INCONCLUSIVE
-    assert not result.differences
+    assert result.differences == ()
+    assert any("pair lacks symbol identity" in item for item in result.limitations)
 
 
 def test_data_resolution_never_hides_a_non_relocatable_difference() -> None:
