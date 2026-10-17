@@ -23,26 +23,31 @@
  * shifted by 16 - the high half of a *different* address, not a base.  The
  * module has a single PT_LOAD with p_vaddr 0, so the loader adds the same base to
  * every relocation (PPSSPP's `ElfReader::LoadRelocations`; `seto psp_reloc`
- * models it): applying the real HI16/LO16 entries to the real instruction words
- * with that base is an identity, so the difference survives relocation and the
- * three addresses cannot collapse onto each other.  They are three distinct
+ * models it). `load_base=0` reproduces the stored module-relative addends; the
+ * actual runtime load base is not encoded by this ELF and is not claimed to be
+ * zero. Adding the same runtime base to all three preserves their differences,
+ * so they cannot collapse onto each other. They are three distinct
  * module-relative addresses.
  *
  * Their *identity* still stays weak: the ELF section headers cover neither
  * 0x604860/0x604b9c nor 0x4860 - `.data` ends at 0x4850 and the `.bss` section is
  * empty (size 0) - so these bytes live only in the zero-filled tail of that
- * segment.  `seto datarefs` records all three as INFERRED (their offset inside
- * the segment), never as a section, and marks the HI16/LO16 pairing as order-only
- * too (the stripped module exposes no symbol identity), so a reference as a whole
- * is never `PROVEN`.  The identifiers below stay distinct on purpose: nothing
- * here may assume two different addresses name the same object.
+ * segment. `seto datarefs` records all three as INFERRED (their offset inside the
+ * segment), never as a section. The local LUI-to-LO16 register flow proves each
+ * pair even without symbols, but the destination/variable identities stay
+ * unknown; these references are not cross-artifact identity proof. The
+ * identifiers below stay distinct on purpose: nothing here may assume two
+ * different addresses name the same object.
  *
- * The original PRX is stripped. `D_...` names and the inferred global types are
- * provisional address-based labels, not recovered source names. No `mwccpsp` is
- * available, so this C is UNVERIFIED and must not be counted as a matching
- * decompilation.
+ * REAL COMPILE + MATCH: Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`.
+ * INCONCLUSIVE, 2/8 words, 0 differences, 0 relocation issues. Register flow
+ * proves all three pairs; the six uncounted words reflect unresolved data-object
+ * identity, not six proven code divergences. The original PRX is stripped;
+ * `D_...` names and inferred global types remain provisional address labels, not
+ * recovered source names. The PRX records compiler 2.4.1.01; the observed match
+ * status is for build 3.0.1 only.
  *
- * Status: UNVERIFIED (compilation/matching BLOCKED: no licensed mwccpsp).
+ * Status: INCONCLUSIVE (real compile succeeded; data identity remains unproven).
  */
 
 typedef unsigned int u32;

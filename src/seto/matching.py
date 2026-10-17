@@ -13,10 +13,10 @@ associated from the relocation table (never from mere adjacency) and compared as
 a unit.
 
 A call or data reference may be encoded differently on the two sides. A caller
-may supply a :data:`CallResolver` for the module's proven call identities or
-separate data resolvers for proven section/offset identities. They are only
-consulted when their respective relocation kinds require them; unresolved
-targets become ``INCONCLUSIVE``. A data resolver answers with a
+may supply a :data:`CallResolver` for the module's proven call identities and
+data resolvers for proven cross-artifact object identities. Data locations and
+equal addends alone never prove identity; without data resolvers, data-relocated
+words remain ``INCONCLUSIVE``. A data resolver answers with a
 :class:`~seto.datarefs.DataIdentity`, which carries the artifact the location
 belongs to: two answers in different artifacts are inconclusive, never equal.
 
@@ -47,6 +47,7 @@ from seto.elf import (
     R_MIPS_HI16,
     R_MIPS_LO16,
     Relocation,
+    decode_psp_relocation_info,
     decode_relocation_addend,
     relocation_mask,
     relocation_type_name,
@@ -266,6 +267,7 @@ class Hi16Lo16Pairing:
 
     hi_to_lo: dict[int, int]
     limitations: tuple[str, ...] = ()
+    evidence: dict[int, str] = field(default_factory=dict)
 
 
 def relocation_sites(
@@ -286,6 +288,13 @@ def relocation_sites(
     sites: dict[int, RelocationSite] = {}
     limitations: list[str] = []
     for relocation in relocations:
+        if relocation.format == "PSP":
+            _, _, _, reserved = decode_psp_relocation_info(relocation.info)
+            if reserved:
+                limitations.append(
+                    f"{relocation.type_name} relocation has reserved PSP r_info bits "
+                    f"0x{reserved:08x}"
+                )
         if relocation.section_offset is None:
             limitations.append(
                 f"a {relocation.type_name} relocation has no resolved section and cannot be placed"
@@ -332,7 +341,9 @@ def _pair_symbol_identity(hi: RelocationSite, lo: RelocationSite) -> bool | None
     return None
 
 
-def pair_hi16_lo16(sites: dict[int, RelocationSite]) -> Hi16Lo16Pairing:
+def pair_hi16_lo16(
+    sites: dict[int, RelocationSite], words: tuple[int, ...] | None = None
+) -> Hi16Lo16Pairing:
     """Associate every ``R_MIPS_HI16`` with the ``R_MIPS_LO16`` that resolves it.
 
     Relocations are consumed in relocation-table order (the order of ``sites``),
@@ -344,6 +355,7 @@ def pair_hi16_lo16(sites: dict[int, RelocationSite]) -> Hi16Lo16Pairing:
     limitation rather than presented as proven.
     """
     hi_to_lo: dict[int, int] = {}
+    evidence: dict[int, str] = {}
     pending: list[int] = []
     limitations: list[str] = []
     for word_index, site in sites.items():
@@ -352,28 +364,166 @@ def pair_hi16_lo16(sites: dict[int, RelocationSite]) -> Hi16Lo16Pairing:
             continue
         if site.type != R_MIPS_LO16:
             continue
+        flow_kind, flow_hi, flow_reason = _register_flow_pair(site, word_index, sites, words)
+
+        # Explicitly shared ELF-symbol identity remains useful (some valid MIPS
+        # streams have one LO resolving several pending HI relocations).  When
+        # the symbols are absent, use the instruction stream only if the LO's
+        # reaching definition is a unique relocated LUI.
         closed: list[int] = []
-        unproven = False
         for hi_index in pending:
-            verdict = _pair_symbol_identity(sites[hi_index], site)
-            if verdict is False:
-                continue
-            closed.append(hi_index)
-            unproven = unproven or verdict is None
-        if not closed:
-            continue
-        if unproven:
+            if _pair_symbol_identity(sites[hi_index], site) is True:
+                closed.append(hi_index)
+
+        if closed:
+            for hi_index in closed:
+                hi_to_lo[hi_index] = word_index
+                evidence[hi_index] = "symbol"
+        elif flow_kind == "match":
+            if flow_hi not in pending:
+                limitations.append(
+                    f"word {word_index}: register flow reaches HI16 word {flow_hi}, "
+                    "but it is not pending in relocation-table order"
+                )
+            elif _pair_symbol_identity(sites[flow_hi], site) is False:
+                limitations.append(
+                    f"word {word_index}: register flow reaches HI16 word {flow_hi}, "
+                    "but the relocation symbols differ"
+                )
+            else:
+                hi_to_lo[flow_hi] = word_index
+                evidence[flow_hi] = "register-flow"
+                closed.append(flow_hi)
+        elif flow_kind == "definite-none":
             limitations.append(
-                f"word {word_index}: HI16/LO16 association relies on relocation order "
-                "(symbol identity unavailable)"
+                f"word {word_index}: no relocated HI16 reaches the LO16 source register "
+                f"({flow_reason})"
             )
-        for hi_index in closed:
-            hi_to_lo[hi_index] = word_index
+        else:
+            # If the code cannot establish a reaching definition (e.g. a branch,
+            # unknown instruction, or no instruction words were supplied), retain
+            # the legacy order association but do not promote its confidence.
+            order_candidates = [
+                hi_index
+                for hi_index in pending
+                if _pair_symbol_identity(sites[hi_index], site) is None
+            ]
+            if flow_kind == "uncertain" and flow_reason:
+                limitations.append(
+                    f"word {word_index}: register-flow pairing is uncertain: {flow_reason}"
+                )
+            for hi_index in order_candidates:
+                hi_to_lo[hi_index] = word_index
+                evidence[hi_index] = "relocation-order"
+                closed.append(hi_index)
+            if order_candidates:
+                limitations.append(
+                    f"word {word_index}: HI16/LO16 association relies on relocation order "
+                    "(symbol identity unavailable)"
+                )
+
+        if not closed:
+            limitations.append(f"word {word_index}: LO16 relocation has no associated HI16")
+            continue
         closed_set = set(closed)
         pending = [hi_index for hi_index in pending if hi_index not in closed_set]
     for hi_index in pending:
         limitations.append(f"word {hi_index}: HI16 relocation has no LO16 to resolve it")
-    return Hi16Lo16Pairing(hi_to_lo=hi_to_lo, limitations=tuple(dict.fromkeys(limitations)))
+    return Hi16Lo16Pairing(
+        hi_to_lo=hi_to_lo,
+        limitations=tuple(dict.fromkeys(limitations)),
+        evidence=evidence,
+    )
+
+
+def _register_flow_pair(
+    low: RelocationSite,
+    low_index: int,
+    sites: dict[int, RelocationSite],
+    words: tuple[int, ...] | None,
+) -> tuple[str, int | None, str]:
+    """Find the unique straight-line ``lui`` reaching a supported LO16 use.
+
+    This intentionally is not a CFG/SSA pass. Any conditional transfer or
+    instruction with unknown register effects stops the proof. An unconditional
+    control transfer immediately before the LO is treated as its delay-slot
+    predecessor; its link-register write is still respected.
+    """
+    if words is None:
+        return "unavailable", None, "instruction words were not supplied"
+    if not 0 <= low_index < len(words):
+        return "uncertain", None, "LO16 instruction lies outside the available words"
+    source = _lo_source_register(words[low_index])
+    if source is None:
+        return "uncertain", None, "LO16 instruction form is not supported by the local analyzer"
+    if source == 0:
+        return "definite-none", None, "LO16 uses the constant zero register"
+
+    for index in range(low_index - 1, -1, -1):
+        word = words[index]
+        control, unconditional, writes = _instruction_effect(word)
+        if control:
+            if index == low_index - 1 and unconditional:
+                if writes is None:
+                    return "uncertain", None, "delay-slot control transfer has unknown effects"
+                if source in writes:
+                    return "definite-none", None, "delay-slot link overwrites the source register"
+                continue
+            return "uncertain", None, "control flow crosses the HI16-to-LO16 scan"
+        if writes is None:
+            return "uncertain", None, f"unknown register effects at word {index}"
+        if source not in writes:
+            continue
+        if (word >> 26) == 0x0F and index in sites and sites[index].type == R_MIPS_HI16:
+            if index < low_index:
+                return "match", index, "relocated LUI reaches the LO16 base register"
+        return "definite-none", None, f"word {index} redefines the LO16 base register"
+    return "uncertain", None, "no reaching definition inside the available straight-line range"
+
+
+def _lo_source_register(word: int) -> int | None:
+    """Return the register read as the base/source by supported I-type LO uses."""
+    op = (word >> 26) & 0x3F
+    if op in (0x08, 0x09):  # addi/addiu: signed immediate address arithmetic
+        return (word >> 21) & 0x1F
+    if 0x20 <= op <= 0x2F or 0x30 <= op <= 0x3F:  # loads, stores, cache/pref
+        return (word >> 21) & 0x1F
+    return None
+
+
+def _instruction_effect(word: int) -> tuple[bool, bool, set[int] | None]:
+    """Return (control transfer, unconditional, GPR destinations); None is unknown."""
+    op = (word >> 26) & 0x3F
+    rs = (word >> 21) & 0x1F
+    rt = (word >> 16) & 0x1F
+    rd = (word >> 11) & 0x1F
+    funct = word & 0x3F
+    if op == 0:
+        if funct == 8:  # jr
+            return True, True, set()
+        if funct == 9:  # jalr
+            return True, True, {rd} if rd else set()
+        if funct in (0, 2, 3, 4, 6, 7, 10, 11, 16, 18, 32, 33, 34, 35, 36, 37, 38, 39, 42, 43):
+            return False, False, {rd} if rd else set()
+        if funct in (12, 13, 15, 17, 19, 24, 25, 26, 27):
+            return False, False, set()
+        return False, False, None
+    if op in (2, 3):
+        return True, True, ({31} if op == 3 else set())
+    if op == 1 or 4 <= op <= 7 or 0x14 <= op <= 0x17:
+        writes = {31} if op == 1 and rt in (16, 17, 18, 19) else set()
+        return True, False, writes
+    if 8 <= op <= 15:
+        return False, False, {rt} if rt else set()
+    if 0x20 <= op <= 0x27 or 0x30 <= op <= 0x37:
+        return False, False, {rt} if rt else set()
+    if op == 0x38:  # sc writes the success result back to rt
+        return False, False, {rt} if rt else set()
+    if 0x28 <= op <= 0x2F or 0x39 <= op <= 0x3F:
+        return False, False, set()
+    if op in (0x10, 0x11, 0x12, 0x13) and rs == 8:
+        return True, False, set()
+    return False, False, None
 
 
 def _describe_pair(low: int | None, sites: dict[int, RelocationSite], index: int) -> str:
@@ -424,11 +574,11 @@ def compare(
     proves that both sides name the same destination, proves that they name
     different ones, or leaves the outcome inconclusive.
 
-    Data resolvers are optional. When supplied, ``R_MIPS_32`` and paired
-    ``R_MIPS_HI16``/``LO16`` references are compared by artifact-qualified
-    identity: the two answers must name the *same* artifact before their
-    locations may be compared at all. If either side cannot prove an identity, or
-    the two answers come from different artifacts, the result is
+    Data resolvers are required to conclude equivalence for ``R_MIPS_32`` and
+    paired ``R_MIPS_HI16``/``LO16`` references. When supplied, they answer with
+    artifact-qualified identities: the two answers must name the *same* artifact
+    before their locations may be compared at all. If either side cannot prove an
+    identity, or the two answers come from different artifacts, the result is
     ``INCONCLUSIVE``; symbol-like spelling or equal numeric addends alone never
     establishes data identity.
     """
@@ -436,8 +586,8 @@ def compare(
     candidate_words = decode_words(candidate, f"{name}: candidate")
     original_map = relocation_sites(original_relocations, original_section_offset, len(original))
     candidate_map = relocation_sites(candidate_relocations, candidate_section_offset, len(candidate))
-    original_pairs = pair_hi16_lo16(original_map.sites)
-    candidate_pairs = pair_hi16_lo16(candidate_map.sites)
+    original_pairs = pair_hi16_lo16(original_map.sites, original_words)
+    candidate_pairs = pair_hi16_lo16(candidate_map.sites, candidate_words)
 
     limitations = (
         list(limitations)
@@ -602,23 +752,11 @@ def compare(
             compare_data_identity(hi_index, low, identity_a, identity_b, "HI16/LO16 data")
             continue
 
-        if original_value != candidate_value:
-            record_difference(
-                hi_index,
-                f"HI16/LO16 pair encodes 0x{original_value:08x} vs 0x{candidate_value:08x}",
-            )
-            continue
-
-        symbol_issues: list[str] = []
-        if not _symbols_agree(hi_index, site_a_hi, site_b_hi, limitations):
-            symbol_issues.append(f"HI16 symbol {site_a_hi.symbol!r} vs {site_b_hi.symbol!r}")
-        if not _symbols_agree(low, site_a_lo, site_b_lo, limitations):
-            symbol_issues.append(f"LO16 symbol {site_a_lo.symbol!r} vs {site_b_lo.symbol!r}")
-        if symbol_issues:
-            record_difference(hi_index, "HI16/LO16 " + "; ".join(symbol_issues))
-            continue
-        count_matching(hi_index)
-        count_matching(low)
+        limitations.append(
+            f"word {hi_index}: HI16/LO16 cross-artifact data identity cannot be proven "
+            "without data resolvers"
+        )
+        continue
 
     for index in range(compared):
         if index in handled:
@@ -662,9 +800,13 @@ def compare(
             record_difference(index, "relocated word differs outside the relocation field")
             continue
 
-        if site_a.type == R_MIPS_32 and (
-            original_data_resolver is not None or candidate_data_resolver is not None
-        ):
+        if site_a.type == R_MIPS_32:
+            if original_data_resolver is None and candidate_data_resolver is None:
+                limitations.append(
+                    f"word {index}: R_MIPS_32 cross-artifact data identity cannot be proven "
+                    "without data resolvers"
+                )
+                continue
             identity_a = (
                 None
                 if original_data_resolver is None

@@ -38,7 +38,7 @@ def script():
 
 @pytest.fixture
 def compiler(script, monkeypatch):
-    """Make ``find_tool`` report the (faked) compiler as available."""
+    """Fake a native Windows compiler; loader cases are tested independently."""
     monkeypatch.setattr(
         script,
         "find_tool",
@@ -46,6 +46,7 @@ def compiler(script, monkeypatch):
             name="mwccpsp", kind="compiler", found=True, path=configured or "mwccpsp.exe"
         ),
     )
+    monkeypatch.setattr(script, "resolve_loaders", lambda _requested, _settings: ())
 
 
 def _arguments(tmp_path: Path, *extra: str) -> list[str]:
@@ -176,6 +177,21 @@ def test_resolve_includes_falls_back_to_configuration(script) -> None:
     assert script.resolve_includes([], Settings(data={})) == ["decomp/include"]
 
 
+def test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces(script, tmp_path) -> None:
+    loader = tmp_path / "a path" / "wibo"
+    loader.parent.mkdir()
+    loader.write_text("loader fixture", encoding="utf-8")
+    settings = Settings(data={"tools": {"wibo": {"path": str(loader)}}})
+    assert script.resolve_loaders([], settings, platform="posix") == (str(loader),)
+    assert script.resolve_loaders(["wibo"], settings, platform="posix") == (str(loader),)
+    assert script.resolve_loaders([], settings, platform="nt") == ()
+
+
+def test_resolve_loaders_reports_a_missing_explicit_loader(script, monkeypatch) -> None:
+    monkeypatch.setattr(script.shutil, "which", lambda _name: None)
+    assert script.resolve_loaders(["missing-wibo"], Settings(data={}), platform="posix") is None
+
+
 # ---------------------------------------------------------------------- blocked
 
 
@@ -199,6 +215,17 @@ def test_blocked_run_writes_no_record(script, tmp_path, capsys) -> None:
     script.main(_arguments(tmp_path))
     assert "BLOCKED" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
+
+
+def test_script_is_blocked_on_posix_when_no_win32_loader_is_available(
+    script, compiler, monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.setattr(script, "resolve_loaders", lambda _requested, _settings: None)
+    runner = FakeRunner()
+    monkeypatch.setattr(script, "run", runner)
+    assert script.main(_arguments(tmp_path)) == EXIT_BLOCKED
+    assert runner.calls == []
+    assert "no usable Win32 loader" in capsys.readouterr().err
 
 
 # ------------------------------------------------------------------- provenance

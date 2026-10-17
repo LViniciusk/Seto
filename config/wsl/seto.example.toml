@@ -1,0 +1,12 @@
+# Copy to config/wsl/seto.toml and replace both paths with your local installs.
+# The copied file is git-ignored and selected explicitly with --config.
+
+[tools.mwccpsp]
+path = "/path/to/mwccpsp.exe"
+
+[tools.wibo]
+path = "/path/to/wibo"
+
+[match]
+flags = ["-O4,p", "-sdatathreshold", "0"]
+includes = ["decomp/include"]

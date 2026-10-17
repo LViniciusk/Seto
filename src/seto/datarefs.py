@@ -195,18 +195,19 @@ def module_resolver(
 
 @dataclass(frozen=True)
 class SymbolLink:
-    """An explicit, evidence-backed candidate-symbol -> original-location map.
+    """An explicit candidate-symbol -> original-location assertion.
 
     A candidate object's own ``(section, offset)`` is in the candidate's
     coordinates and proves nothing about the original module. A candidate
     reference may be compared only after a link states which *original* location
-    its symbol names, and that link has to rest on independent evidence - an
-    original symbol, linking information, or a validated mapping - never on the
-    candidate's own section name and offset.
+    its symbol names. A file supplied by the caller is only an assertion, not
+    independent evidence. ``verified`` is reserved for a link validated against
+    an independent artifact by the caller; parsing JSON never sets it.
     """
 
     entries: Mapping[str, DataTarget]
     evidence: tuple[str, ...] = ()
+    verified: bool = False
 
     def original_for(self, symbol: str | None, addend: int) -> DataTarget | None:
         if symbol is None:
@@ -220,6 +221,8 @@ class SymbolLink:
         """Answer in the *original* module's coordinates, or stay unresolved."""
 
         def resolve(site: RelocationLike, addend: int) -> DataIdentity | None:
+            if not self.verified:
+                return None
             target = self.original_for(site.symbol, addend)
             if target is None:
                 return None
@@ -405,6 +408,9 @@ class DataReference:
             "target": None if self.target is None else self.target.summary(),
             "pairing": self.pairing,
             "location": self.location,
+            # A module-local report does not compare this location to a
+            # candidate artifact; matching establishes this axis separately.
+            "object_identity": NOT_APPLICABLE,
             "status": self.status,
             "evidence": self.evidence,
             "unresolved": self.unresolved,
@@ -439,13 +445,19 @@ def recover_references(
     # Imported lazily: ``seto.matching`` imports ``DataTarget`` from this module,
     # so a module-level import would be circular.
     from seto.matching import combine_hi16_lo16, pair_hi16_lo16, relocation_sites
+    from seto.mips import decode_words
 
     section = module.require_section(section_name)
     region_offset = start - section.addr
+    section_code = module.section_data(section)
+    region_words = decode_words(
+        section_code[region_offset : region_offset + end - start],
+        f"{module.reader.name}:{section_name}+0x{region_offset:x}",
+    )
     section_relocations = module.relocations_for(section_name)
     mapping = relocation_sites(section_relocations, region_offset, end - start)
     sites = mapping.sites
-    pairing = pair_hi16_lo16(sites)
+    pairing = pair_hi16_lo16(sites, region_words)
     paired_low = set(pairing.hi_to_lo.values())
 
     evidence_by_offset = {
@@ -456,14 +468,6 @@ def recover_references(
 
     def evidence_for(word_index: int) -> RelocationEvidence:
         return relocation_evidence(evidence_by_offset[region_offset + word_index * 4])
-
-    def order_only(hi_index: int, low_index: int) -> bool:
-        # ``pair_hi16_lo16`` records the order-only note at the LO16's word index.
-        return any(
-            item.startswith(f"word {index}: HI16/LO16 association relies on relocation order")
-            for index in (hi_index, low_index)
-            for item in pairing.limitations
-        )
 
     references: list[DataReference] = []
     for word_index in sorted(sites):
@@ -493,12 +497,15 @@ def recover_references(
             low_instruction = region_offset + low_index * 4
             combined = combine_hi16_lo16(site.addend, low.addend)
             target, load, location = _classify(module, combined)
-            pairing_status = INFERRED if order_only(word_index, low_index) else PROVEN
+            pairing_evidence = pairing.evidence.get(word_index, "relocation-order")
+            pairing_status = INFERRED if pairing_evidence == "relocation-order" else PROVEN
             status = _overall_status(pairing_status, location)
             note = (
-                "pairing rests on relocation order only"
-                if pairing_status == INFERRED
-                else "pairing rests on symbol identity"
+                {
+                    "relocation-order": "pairing rests on relocation order only",
+                    "symbol": "pairing rests on shared ELF symbol identity",
+                    "register-flow": "pairing is confirmed by the LUI-to-LO16 register flow",
+                }.get(pairing_evidence, "pairing evidence unavailable")
             )
             references.append(
                 DataReference(

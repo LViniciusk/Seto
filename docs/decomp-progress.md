@@ -28,15 +28,18 @@ Status vocabulary, used strictly:
 | Call classification of `.text` (72 `R_MIPS_26`) | `seto imports` | **OK** (50 imported, 22 local, 0 unresolved) |
 | The four `jal`s of `func_00000244` | `seto imports --function 0x244` | **PROVEN** — `(library, NID)` recovered for each |
 | Comparator sanity check (`func_00000244` vs itself) | `seto match` | **MATCHED** (`evidence: binary-range`, *not* a decompiled function) |
-| `func_00000244` reconstructed C vs original | `scripts/match_function.py` | **UNVERIFIED** (compilation/matching **BLOCKED**; no `mwccpsp`) |
+| `mwccpsp 3.0.1 build 219` + `wibo 1.2.0` | WSL2 functional smoke | **READY** (version probe and ELF32 MIPS compile both run through wibo) |
+| `func_00000244` reconstructed C vs original | real compile + `scripts/match_function.py` | **MATCHED**, 13/13 words, verified decompilation |
+| `func_000004B8` reconstructed C vs original | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 18/20; data-object identity unproven |
+| `func_000006E4` reconstructed C vs original | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 2/8; data-object identities unproven |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
 | Ghidra native MIPS32 / Allegrex language | headless forced-language imports | **READY** (`MIPS:LE:32:default`, `Allegrex:LE:32:default`) |
 | Ghidra automatic selection of the synthetic ELF32 ET_REL | `seto toolchain --smoke --tool ghidra` | **INCOMPATIBLE** (Ghidra selected `MIPS:LE:64:64-32R6addr`; this is not accepted as ELF32 proof) |
 | Ghidra automatic selection of the real PSP PRX | `tests/integration/test_toolchain_real.py` | **PROVEN** (`libhtml_view.prx` selected `Allegrex:LE:32:default`) |
 | REA MCP transport | initialize + `tools/list` handshake | **READY** (207 tools); native-provider analysis and REA PRX support remain unproven |
-| `func_000006E4` reconstruction | m2c + verified splat + Ghidra | **UNVERIFIED** (global types provisional; no compiler) |
-| `func_000004B8` reconstruction | m2c + verified splat + Ghidra | **UNVERIFIED** (m2c missed an argument; Ghidra/assembly resolved it; no compiler) |
+| `func_000006E4` reconstruction | m2c + verified splat + Ghidra + real compile | **INCONCLUSIVE** (global types provisional; data identities unresolved) |
+| `func_000004B8` reconstruction | m2c + verified splat + Ghidra + real compile | **INCONCLUSIVE** (m2c missed an argument; C follows instructions; data identity unresolved) |
 
 ## What is actually proven
 
@@ -101,9 +104,9 @@ Status vocabulary, used strictly:
      evidence: binary-range
    ```
 
-    This proves the relocation-aware pipeline is self-consistent. It is **not** a
-    claim that the reconstruction in `decomp/src/` matches — that still requires a
-    compile, and it does not increase the count of decompiled functions.
+    This proves the relocation-aware pipeline is self-consistent, but is not by
+    itself a decompilation result. The later real compile-and-match is recorded
+    separately below.
 
 5. **The relocation format is understood, not assumed.** Every relocation table in
    `libhtml_view.prx` is the fixed-width PSP form (`SHT_PSPREL`, `0x700000A0`):
@@ -112,6 +115,14 @@ Status vocabulary, used strictly:
    fields (never a symbol index) and `r_offset` is segment-relative, both
    reproduced from PPSSPP's loader and covered by synthetic fixtures. See
    [SETO-DECOMP-007](#seto-decomp-007--psp-relocation-semantics-and-runtime-memory-mapping).
+
+6. **Real compilation and matching were run.** With licensed Metrowerks 3.0.1
+   build 219 and `-O4,p -sdatathreshold 0`, `func_00000244` is `MATCHED` (13/13,
+   zero differences/limitations); `func_000004B8` is `INCONCLUSIVE` (18/20,
+   zero differences); and `func_000006E4` is `INCONCLUSIVE` (2/8, zero
+   differences). The latter two have proved register-flow pairings, but no
+   independent candidate-symbol-to-original-object link. Full hashes and
+   reproduction commands are in [the real compile baseline](#real-compile-and-match-baseline).
 
 ## SETO-DECOMP-005 — first function analysis and two new reconstructions
 
@@ -128,17 +139,19 @@ output was reviewed against the listing rather than accepted blindly.
 
 | Function | Interval / size | C source | Evidence and status | Next action |
 | --- | --- | --- | --- | --- |
-| `func_00000244` | `0x244–0x278`, `0x34` bytes, 13 instructions | `decomp/src/func_00000244.c` (existing C retained) | Ghidra, splat, `seto disasm`, and m2c agree on the four calls and delay slots. Import identities are proven. **UNVERIFIED**; compile **BLOCKED**. | Compile with licensed `mwccpsp`; compare both existing flag hypotheses. |
-| `func_000006E4` | `0x6E4–0x704`, `0x20` bytes, 8 instructions | `decomp/src/func_000006E4.c` | Straight-line initialization: store `1` at `0x604860`, form image address `0x4860`, store it at `0x604B9C`. Ghidra and m2c agree on operations; stripped global names/types remain provisional. **UNVERIFIED**; compile **BLOCKED**. | Verify global types/relocations with the original compiler. |
-| `func_000004B8` | `0x4B8–0x508`, `0x50` bytes, 20 instructions | `decomp/src/func_000004B8.c` | One pointer-like argument, a `0x20`-byte stack buffer, and four ordered helper calls. Ghidra and assembly show the first helper receives both the original argument and `/PSP/SAVEDATA/`; m2c omitted the first argument. C follows Ghidra/instructions and flags helper prototypes as provisional. **UNVERIFIED**; compile **BLOCKED**. | Confirm helper prototypes and compile/match when `mwccpsp` is supplied. |
+| `func_00000244` | `0x244–0x278`, `0x34` bytes, 13 instructions | `decomp/src/func_00000244.c` (existing C retained) | Ghidra, splat, `seto disasm`, m2c and the real compile-match agree. Four import identities are proven. **MATCHED**, 13/13. | Keep the verified source/object provenance; historical compiler version differs. |
+| `func_000006E4` | `0x6E4–0x704`, `0x20` bytes, 8 instructions | `decomp/src/func_000006E4.c` | Three distinct module-relative addresses; register flow proves the pairs, while variable identities/types remain provisional. **INCONCLUSIVE**, 2/8, 0 differences. | Find independent object identity for the destinations. |
+| `func_000004B8` | `0x4B8–0x508`, `0x50` bytes, 20 instructions | `decomp/src/func_000004B8.c` | Ghidra/assembly show the original argument and `/PSP/SAVEDATA/` passed in the delay slot; register flow proves the pair. **INCONCLUSIVE**, 18/20, 0 differences; candidate symbol identity is unlinked. | Confirm helper prototypes and obtain independent data-symbol linkage evidence. |
 
 For `func_00000244`, the body has no explicit setup of `$a0`–`$a3`, does not read
 `$v0` after any of its four calls, and m2c/Ghidra both render a no-argument,
 no-return C body. Ghidra reports compiler-spec ID `default` for
 `Allegrex:LE:32:default`; the actual PRX `.comment` identifies the MW MIPS
-compiler. These are the observed ABI cues, not proof of the imported functions'
-SDK prototypes: the stripped import table carries only `(library, NID)`. Exact
-Metrowerks ABI/code-generation equivalence remains unverified until compilation.
+compiler. The real 3.0.1 build 219 compile-match now reproduces these bytes and
+proves the four call targets for this function. It does not establish that 3.0.1
+is the historical compiler (the PRX says 2.4.1.01) or prove all four imported
+functions' SDK prototypes: the stripped import table carries only `(library,
+NID)`.
 
 The 8-byte candidate at `0x84` disassembles as `jr $ra; nop`, but Ghidra's
 automatic analysis did not define a function there. It was excluded rather than
@@ -170,7 +183,10 @@ listing/decompilation for review; it does not change the input program.
 Re-run the media-backed inspection with
 `py -3.12 -m pytest tests/integration/test_toolchain_real.py -q -m integration`.
 
-### Progress metrics
+### Progress metrics at SETO-DECOMP-005
+
+These numbers describe the state before a compiler was supplied; they are a
+historical checkpoint, not the current status.
 
 | Metric | Count |
 | --- | ---: |
@@ -180,8 +196,9 @@ Re-run the media-backed inspection with
 | Proven `MATCHED` | 0 |
 | Compilation-blocked reconstructions | 3 |
 
-`UNVERIFIED` here means a C reconstruction exists but no real compile/match has
-been performed. The earlier self-comparison of original bytes does not count.
+At that historical checkpoint `UNVERIFIED` meant a C reconstruction existed but
+no real compile/match had been performed. The earlier self-comparison of original
+bytes did not count.
 
 ## SETO-DECOMP-006 — symbol recovery, data relocations and matching readiness
 
@@ -193,46 +210,49 @@ semantically equivalent data references apart from wrong or inconclusive ones.
 
 `seto datarefs` replays the module's own relocation table and reports every data
 reference of the three reconstructions. `R_MIPS_26` (calls) is left to the import
-resolver; only HI16/LO16 pairs and `R_MIPS_32` are recovered here. Three
-confidences are reported separately, and the overall `Status` is `PROVEN` only
-when the pairing **and** the location are:
+resolver; only HI16/LO16 pairs and `R_MIPS_32` are recovered here. Pairing and
+numeric location are distinct confidence axes. A standalone report marks
+cross-artifact object identity `NOT_APPLICABLE`; compile matching must prove that
+third axis independently.
 
 | Function | Site | Relocations | Combined addend | Destination | Location | Pairing | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `func_00000244` | — | — | — | — | — | — | no data reference (calls only) |
-| `func_000004B8` | `0x4D0` | `R_MIPS_HI16@0x4C4` + `R_MIPS_LO16@0x4D0` | `0x00004830` | `.data + 0xC8` | PROVEN | INFERRED | INFERRED |
-| `func_000006E4` | `0x6EC` | `R_MIPS_HI16@0x6E8` + `R_MIPS_LO16@0x6EC` | `0x00604860` | load segment `0 + 0x604860` (zero-filled) | INFERRED | INFERRED | INFERRED |
-| `func_000006E4` | `0x6F4` | `R_MIPS_HI16@0x6F0` + `R_MIPS_LO16@0x6F4` | `0x00004860` | load segment `0 + 0x4860` (zero-filled) | INFERRED | INFERRED | INFERRED |
-| `func_000006E4` | `0x700` | `R_MIPS_HI16@0x6F8` + `R_MIPS_LO16@0x700` | `0x00604B9C` | load segment `0 + 0x604B9C` (zero-filled) | INFERRED | INFERRED | INFERRED |
+| `func_000004B8` | `0x4D0` | `R_MIPS_HI16@0x4C4` + `R_MIPS_LO16@0x4D0` | `0x00004830` | `.data + 0xC8` | PROVEN | PROVEN | PROVEN locally; cross-artifact identity unresolved |
+| `func_000006E4` | `0x6EC` | `R_MIPS_HI16@0x6E8` + `R_MIPS_LO16@0x6EC` | `0x00604860` | load segment `0 + 0x604860` (zero-filled) | INFERRED | PROVEN | INFERRED |
+| `func_000006E4` | `0x6F4` | `R_MIPS_HI16@0x6F0` + `R_MIPS_LO16@0x6F4` | `0x00004860` | load segment `0 + 0x4860` (zero-filled) | INFERRED | PROVEN | INFERRED |
+| `func_000006E4` | `0x700` | `R_MIPS_HI16@0x6F8` + `R_MIPS_LO16@0x700` | `0x00604B9C` | load segment `0 + 0x604B9C` (zero-filled) | INFERRED | PROVEN | INFERRED |
 
 `Location` is `PROVEN` when the combined addend lands in exactly one allocated ELF
 section, `INFERRED` when no named section covers it but exactly one `PT_LOAD` span
 does (so only its offset in that segment, and whether it is past `p_filesz`, can be
-stated), and `UNKNOWN` when neither. `Pairing` is `PROVEN` only when the HI16 and
-its LO16 expose a matching symbol (name or symbol-table index); a stripped module
-exposes none, so every pair here is associated by relocation order alone and is
-recorded as `INFERRED`. An unpaired `R_MIPS_LO16` is reported too (never dropped),
-as an incomplete reference with its address, type, addend and reason.
+stated), and `UNKNOWN` when neither. `Pairing` is `PROVEN` when shared symbol
+identity or a bounded LUI-to-LO16 register-flow check establishes the association;
+otherwise relocation order is an `INFERRED` fallback. Register flow does not
+prove cross-artifact object identity. An unpaired `R_MIPS_LO16` is reported too
+(never dropped), as an incomplete reference with its address, type, addend and
+reason.
 
-A location inside `.data` therefore does **not** make an order-only pair complete:
-the `.data + 0xC8` destination is proven, but the reference that reaches it is not.
-The positive information is kept, and the limitation is recorded in `unresolved`.
+A location inside `.data` and a register-proven pair make the reference locally
+resolvable. They do **not** prove that a separately compiled candidate symbol
+names that original object; that is a distinct cross-artifact identity axis.
 
 ### The `/PSP/SAVEDATA/` string is proven
 
 The pair at `0x4C4`/`0x4D0` combines to `0x4830`. `.data` is at address `0x4768`
 with size `0xE8`, so `0x4830` is `.data + 0xC8` (file offset `0x4890`), and the
-fourteen bytes at that file offset really are `/PSP/SAVEDATA/`. This is the one
-destination the stripped module proves outright — the *location* is proven, even
-though the reference that reaches it is only `INFERRED` because its HI16/LO16 pair
-rests on relocation order.
+fourteen bytes at that file offset really are `/PSP/SAVEDATA/`. The *location* and
+the HI16/LO16 pairing are proven (register flow includes the `jal` delay slot).
+The compiled object's undefined `D_00004830` symbol is still not linked to this
+original object, so its actual compile comparison remains `INCONCLUSIVE`.
 
 ### The `0x600000` discrepancy is documented, not assumed away
 
 `func_000006E4` stores `1` at `0x604860`, forms `0x4860`, and stores that at
 `0x604B9C`. The two store targets and the value differ by exactly `0x600000`
-(= the HI16 addend `0x60` shifted left 16 bits), and that constant is **not** the
-module's ELF base — every section is based at `0` and `.data` ends at `0x4850`.
+(= the HI16 addend `0x60` shifted left 16 bits), which is **not** evidence of a
+load base — every relocation receives the same runtime base, and `.data` ends at
+`0x4850`.
 The ELF `.bss` section is empty (size `0`), so `0x604860`, `0x604B9C` and `0x4860`
 all fall in the zero-filled tail of the single `PT_LOAD` segment and in no named
 section. The report keeps them distinct and marks all three `INFERRED`: it never
@@ -260,21 +280,22 @@ HI16/LO16 pair (with the *combined* pair addend, never one half):
 * either side cannot be resolved → `INCONCLUSIVE` (equal numeric addends never
   prove identity);
 * a destination difference on an order-only HI16/LO16 association stays
-  `INCONCLUSIVE`, because the wrong LO16 could be closing the HI16.
+  `INCONCLUSIVE`, because the wrong LO16 could be closing the HI16; when bounded
+  register flow proves the pair, a proven destination difference is
+  `NONMATCHING`.
 
-`seto match` builds the original resolver from the module itself. The candidate
-side is only wired when `--data-map` supplies an explicit, evidence-backed
-`SymbolLink` from a candidate symbol to an original `(section, offset)`; the link
-is what translates the candidate's coordinates into the original's, and it is
-validated against the original's own sections. With no link every candidate data
-reference stays unresolved, so `func_000006E4` (and any function that reaches a
-global) is `INCONCLUSIVE` rather than falsely `MATCHED` or `NONMATCHING`.
+`seto match` builds the original resolver from the module itself. `--data-map`
+can record a candidate-symbol-to-location hypothesis, but the JSON assertion or
+evidence string is not independent validation and never resolves identity by
+itself. Without an independently validated link, candidate data references stay
+unresolved, so `func_000004B8` and `func_000006E4` remain `INCONCLUSIVE`, never
+falsely `MATCHED`.
 
 `MATCHED` still requires zero differences, zero errors and zero limitations, so a
 byte-equal candidate whose references cannot be identified is never promoted. The
-PRX is stripped (no symbol table), so its HI16/LO16 associations rest on
-relocation order and a real comparison of `func_000006E4` remains
-`INCONCLUSIVE` — exactly as before.
+PRX is stripped (no symbol table), but the local register-flow analyzer proves
+the HI16/LO16 associations in `func_000006E4`. A real comparison remains
+`INCONCLUSIVE` because pairing evidence does not identify the original variables.
 
 `scripts/match_function.py` forwards an optional `--data-map` and records it in the
 provenance block of its JSON record, so a verified decompilation can name the
@@ -303,10 +324,64 @@ not `PROVEN`, which is the case here.
 | Destinations proven (exactly one allocated section) | 1 |
 | Destinations inferred (load segment only) | 3 |
 | Destinations unknown | 0 |
-| References proven (pairing *and* location) | 0 |
-| References with an order-only HI16/LO16 pairing | 4 |
-| Compiled with `mwccpsp` | 0 |
-| Proven `MATCHED` | 0 |
+| HI16/LO16 references with a proven pairing | 4 |
+| References whose numeric destination is a named section | 1 |
+| References whose destination is only in a load segment | 3 |
+| Cross-artifact data identities proven for compiled candidates | 0 |
+| Real compilations | 3 |
+| Proven `MATCHED` | 1 |
+
+### Real compile-and-match baseline
+
+The three current C files were compiled in WSL2 Ubuntu 3.12.3 with licensed
+Metrowerks **3.0.1 build 219**, `wibo 1.2.0`, and:
+
+```text
+-O4,p -sdatathreshold 0
+```
+
+Persistent config: ignored `config/wsl/seto.toml` (template:
+`config/wsl/seto.example.toml`). Run from the repository root in WSL2; the script
+selects the configured wibo automatically:
+
+```bash
+PYTHONPATH=src python3 -m seto --config config/wsl/seto.toml \
+  toolchain --smoke --tool mwccpsp --json
+
+PYTHONPATH=src python3 scripts/match_function.py --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --function 0x244 --source decomp/src/func_00000244.c \
+  --out build/match/func_00000244 --json
+```
+
+Repeat with `--function 0x4b8 --source decomp/src/func_000004B8.c` and
+`--function 0x6e4 --source decomp/src/func_000006E4.c`. The local configuration,
+compiler, original PRX, reports and ELF objects are not versioned; reports and
+objects live under git-ignored `build/`.
+
+| Function | Compile | Compared words | Differences | Status | Object SHA-256 | Source SHA-256 |
+| --- | --- | ---: | ---: | --- | --- | --- |
+| `func_00000244` | OK | 13/13 | 0 | **MATCHED**, verified decompilation | `5e7f5473890f18215341253125daafada03c43271e8760cc2d3c3744beff88b2` | `c463c8c4eb9aa16d7dc83057b668b97173c7fd989edfb9e5c44e65eccd91f7eb` |
+| `func_000004B8` | OK | 18/20 | 0 | **INCONCLUSIVE** | `17cce92e8424bfded12b9ee4a26363ec7ac19c36f8bf795af02d05a22904425f` | `acc26a43f711f5cb2db2a1999851ff001afe1344302c97212c897c6e14bcd87c` |
+| `func_000006E4` | OK | 2/8 | 0 | **INCONCLUSIVE** | `bf50e17cb96392886ad483b6383a05cb3d9b93639974cb00322f26b1b228fee3` | `4ddbde75b52c6c2359497b43bfebd93290139b3a844e35f86fbfecf11d8cc37a` |
+
+For `func_00000244`, all four calls were resolved by `(library, NID)`:
+`sceHttp/0x76D1363B`, `sceHttp/0xF9D8EB63`, `sceHttp/0xD1C8945E`, and
+`sceSsl/0x191CDEFF`; there are no limitations. For `func_000004B8`, register
+flow proves the HI16/LO16 pair (including the call delay slot), but the compiled
+object's `D_00004830` symbol is `SHN_UNDEF` (index 0); both relocations name
+candidate symbol-table index 3, but the object has no definition or link metadata
+connecting it to original `.data+0xC8`. A JSON map cannot supply that missing
+evidence. For `func_000006E4`, all three pairs are register-proven but the
+three data-object identities are unresolved. The uncounted words are therefore
+**not** proven divergences: both functions have zero byte differences and zero
+relocation issues, but cannot be promoted to `MATCHED`.
+
+The compiler prints `Environment variable 'MWCIncludes' not found` while compiling;
+the exit code is zero and the expected ELF32 MIPS objects are produced. No dummy
+environment variable is set to suppress the warning. The original PRX identifies
+`MW MIPS C Compiler (2.4.1.01)`: these are real equivalences for the supplied 3.0.1
+build and flags, not a claim that this is the historical compiler.
 
 ## SETO-DECOMP-007 — PSP relocation semantics and runtime memory mapping
 
@@ -328,11 +403,13 @@ meaning. No system is emulated and nothing is written into an image.
 | Entries | 181 (132 in `.rel.text`, 49 in the six data tables) |
 | Types | `R_MIPS_26` x72, `R_MIPS_32` x49, `R_MIPS_HI16` x30, `R_MIPS_LO16` x30 |
 | Unknown types | none |
+| Known but unsupported relocation types | none |
 | Compressed `SHT_PSPREL2` tables | none |
 | `PT_PSPREL1`/`PT_PSPREL2` payload segments | none |
 
 `r_info` is **not** a symbol index in this format. It packs three fields, which
-PPSSPP's `ElfReader::LoadRelocations` masks exactly this way:
+PPSSPP's `ElfReader::LoadRelocations` masks exactly this way; `seto.elf` and
+`seto.psp_reloc.decode_info` share one decoder:
 
 ```
 bits  0..3    relocation type (R_MIPS_*)
@@ -349,6 +426,19 @@ absolute address, would misread both fields. `seto.elf` therefore records
 `Relocation`, and `seto.psp_reloc` decodes them. A relocation naming a segment the
 file cannot back, or a non-`PT_LOAD` one, is reported as an observation instead of
 being patched at an invented address.
+
+The PSP type is the **low nibble**, not the low byte: `r_info = 0x112` decodes to
+`R_MIPS_32`, segment `1`, relative segment `0`, with the other set bit reported
+as reserved. HI16 arithmetic sign-extends the LO16, wraps the combined value to
+32 bits, then rounds before extracting the high half:
+`((combined + 0x8000) >> 16) & 0xffff`. This preserves LUI/opcode/register bits and
+is tested at signed-low boundaries, with nonzero bases and wraparound.
+
+If the application segment index is absent, non-`PT_LOAD`, out of its memory
+range, or would overflow 32 bits, the raw `r_offset` remains diagnostic data only:
+`application_valid` is false, no target/file offset or addend is resolved, and the
+entry is listed as incomplete. It cannot become a location merely because that
+raw number happens to land inside `.text`.
 
 ### The `0x600000` difference is the high half of a different address
 
@@ -375,10 +465,12 @@ Four hypotheses were tested against the format:
   is `0x60 << 16`, the high half of `0x604860`; the other pair has HI16 `0x0000`.
   It is the difference between two addresses, not a base.
 * **D — the two spaces differ by a base.** *Rejected.* The loader adds the same
-  `segmentVAddr[relative]` to every relocation, and for this module that value is
-  `p_vaddr[0] == 0`, so applying the real HI16/LO16 entries to the real
-  instruction words is an identity. A difference between two addends therefore
-  survives relocation: the three addresses cannot collapse onto each other.
+  runtime `segmentVAddr[relative]` (`load_base + p_vaddr[relative]`) to every
+  relocation. For this module `p_vaddr[0] == 0`; evaluating with explicit
+  `load_base=0` reproduces the stored module-relative words, but that does **not**
+  establish the PRX's real runtime base. Any common runtime base preserves
+  differences between the three addresses, so they cannot collapse onto each
+  other.
 
 So `0x604860`, `0x4860` and `0x604B9C` are **three distinct module-relative
 addresses**. What is *not* proven is their section identity — no named section
@@ -393,6 +485,9 @@ A report never conflates:
 * the **file offset** of a byte (`section.offset + section_offset`);
 * the **section offset** (`section_offset`, what `seto` compares);
 * the **ELF virtual address** (`section.addr + section_offset`);
+* the **PSP module-relative address** (`p_vaddr + segment-relative r_offset`);
+* the **runtime load address** (`load_base + ELF virtual address`, where
+  `load_base` is an explicit caller input and is not inferred from this ELF);
 * the **PT_LOAD offset** (`address - segment.vaddr`, plus whether it is past
   `p_filesz` — the zero-filled tail);
 * the **relocation destination** (the symbol/addend or the combined HI16/LO16
@@ -408,11 +503,14 @@ py -3.12 -m seto datarefs --prx <libhtml_view.prx> --function 0x6e4 --out build/
 ```
 
 The JSON now carries `relocation_inventory` (formats, per-section counts, types,
-unknown types, segment indices, compressed/segment payloads) and, for every
+unknown/unsupported types, segment indices, invalid application locations,
+reserved fields, compressed/segment payloads, and an overall `complete` flag) and, for every
 reference, the raw `r_offset`/`r_info`, the segment fields, the application
-location, the combined addend, the destination, the pairing evidence, the three
-confidences and the unresolved reason. The command still exits `5` while any
-reference is not `PROVEN`.
+location, the combined addend, the destination, the pairing evidence, pairing and
+numeric-location confidence, cross-artifact identity applicability, and the
+unresolved reason. Unsupported or malformed relocation inventory also makes the
+command exit `5`; the report never claims complete resolution merely because no
+reference happened to land in a selected function.
 
 ## Matching semantics
 
@@ -424,15 +522,20 @@ Two instruction streams are compared word by word:
   same in-place *addend* on both sides, and must agree outside the bits the
   relocation can change (`R_MIPS_26` → `0x03FFFFFF`, `R_MIPS_HI16`/`LO16` →
   `0x0000FFFF`, `R_MIPS_32` → all bits);
-* `R_MIPS_HI16`/`R_MIPS_LO16` are associated from the **relocation table**, never
-  from adjacency: relocations are consumed in table order, a LO16 may sit far from
-  its HI16 and may resolve several pending HI16 that name the same symbol, a HI16
-  with no LO16 stays unresolved, and a LO16 that names a different symbol does not
-  close it. The pair is compared as the combined 32-bit value it encodes, and its
-  symbols are checked on **both** halves. It counts as matching only once every
-  check has passed, so `percent` never reports a pair with a proven divergence;
+* `R_MIPS_HI16`/`R_MIPS_LO16` are associated from relocation evidence, never
+  adjacency alone. Shared symbol identity can pair several pending HI16 entries;
+  when symbols are stripped, a bounded straight-line register-flow check can prove
+  a relocated `lui` reaches the LO16-consuming instruction. It respects writes and
+  unconditional control-transfer delay slots; a conditional transfer, unknown
+  effect, or intermediate redefinition prevents that proof. Relocation-order
+  fallback remains `INCONCLUSIVE`. A HI16 with no LO16 and an isolated LO16 both
+  remain unresolved. Register flow proves *which instructions pair*, not the
+  cross-artifact identity of the object they address;
 * when both sides expose a symbol name, the names must match; when only one side
   does, the result is downgraded to `INCONCLUSIVE` — never silently accepted;
+* `R_MIPS_32` and HI16/LO16 data references need artifact-qualified data
+  resolvers. Without them they stay `INCONCLUSIVE`, even when the encoded
+  addends or candidate symbol spellings happen to match;
 * a HI16/LO16 association that can only be inferred from relocation order (the
   stripped PRX exposes no symbol identity) is a limitation, not a proof: it
   downgrades the result to `INCONCLUSIVE` instead of fabricating a pair;
@@ -580,24 +683,26 @@ real match.
 
 ### Compiler-flag hypothesis
 
-The exact Metrowerks flags are a *hypothesis* and must be settled by
-experiment, not assumption:
+The observed real matches used `-O4,p -sdatathreshold 0` with Metrowerks 3.0.1
+build 219. That exact set is verified for `func_00000244`; it is not evidence that
+the same compiler/flags reproduce the entire PRX or the historical compiler's
+output:
 
 * `-O4,p -sdatathreshold 0` — documented by `angelof-exe/ygo-tf-5-decomp`;
 * `-O4,s -sdatathreshold 0` — suggested in the task text.
 
 Both are recorded in `config/seto.toml` (`[match] flags` /
-`alternative_flags`). A reconstruction is only `MATCHED` for whichever flag set
-actually reproduces the bytes; the report should name the flag set that did.
-Neither is recorded as proven.
+`alternative_flags`). `-O4,s -sdatathreshold 0` remains untested. A source is only
+`MATCHED` for a flag set that the report records as actually reproducing the
+bytes.
 
 ## Blocked items and why
 
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
-| Any real `MATCHED` | `mwccpsp` is proprietary and absent | supply a licensed compiler, then run the command above |
+| Matching the historical compiler exactly | PRX `.comment` says 2.4.1.01; supplied compiler is 3.0.1 build 219 | obtain the historically matching licensed compiler, if available |
 | Draft C for the other 13 discovered functions | not yet iterated; m2c output is preliminary and must be reviewed against Ghidra | select small, independently bounded functions and validate each listing |
-| Compile/match for the 3 current C reconstructions | `mwccpsp` is proprietary and absent | supply a licensed compiler; compile and compare each candidate |
+| Cross-artifact data identity in `func_000004B8` and `func_000006E4` | no independent link from candidate data symbols/variables to original objects; manual JSON maps are assertions only | find original object/linker metadata or another independent artifact proving the link |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
 | Identity of the two `func_000006E4` globals | SETO-DECOMP-007 proved the `0x600000` is the high half of a different address, so the three are distinct module-relative addresses; their *section* identity is still unproven because no named section covers them | find another reference to the same offsets, or an original object/symbol table that shows a section; until then they stay `INFERRED` |
@@ -609,15 +714,14 @@ re-derived rather than trusted.
 
 ## Next steps
 
-1. Supply a licensed `mwccpsp` and run `scripts/match_function.py` for each of the
-   three C candidates; record the real status and the flag set that produced it.
-2. Review helper/global prototypes in the two new reconstructions and use the
+1. Review helper/global prototypes in the two new reconstructions and use the
    installed `m2c` as a preliminary aid for the remaining `.text` functions.
-3. Recover real *names* for the `(library, NID)` pairs from a module or firmware
+2. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
    in `decomp/include/`.
-4. Move `func_000006E4`'s three globals from `INFERRED` to `PROVEN` by finding a
-   named section (or an original symbol table) that covers `0x4860`, `0x604860`
+3. Move `func_000006E4`'s three destinations from segment-only to section-backed
+   resolution by finding a named section (or an original symbol table) that covers
+   `0x4860`, `0x604860`
    and `0x604B9C`; SETO-DECOMP-007 showed they are distinct module-relative
    addresses, so the open question is their section, not their relationship. The
    `seto datarefs` report is the regression check for that change.

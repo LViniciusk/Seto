@@ -6,6 +6,7 @@ import struct
 
 import pytest
 
+from seto import psp_reloc
 from seto.binio import ParseError
 from seto.elf import (
     ET_MIPS_PSP_PRX,
@@ -171,6 +172,7 @@ def test_prx_sections_and_relocations() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": len(code), "memsz": len(code)}],
             sections=[
                 _text_section(code),
                 {"name": ".comment", "type": SHT_PROGBITS, "data": b"MW MIPS C Compiler\x00"},
@@ -200,6 +202,7 @@ def test_prx_shstrtab_with_address_zero_does_not_shadow_text() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": len(code), "memsz": len(code)}],
             sections=[
                 _text_section(code),
                 {
@@ -248,6 +251,42 @@ def test_psp_r_info_is_a_segment_not_a_symbol_index() -> None:
     assert relocation.raw_offset == 0x00
     assert relocation.offset == 0x1000
     assert relocation.section_offset == 0x00
+
+
+def test_psp_r_info_uses_low_nibble_for_type_and_reports_reserved_bits() -> None:
+    code = struct.pack("<I", 0x00000000) * 2
+    relocation_bytes = bytearray(build_relocations([(0x00, R_MIPS_32, 1)]))
+    # PSP loader sees type 2 in the low nibble and segment 1 in bits 8..15;
+    # bit 4 is reserved, not part of an invented type 0x12.
+    struct.pack_into("<I", relocation_bytes, 4, 0x00000112)
+    parsed = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[
+                {"type": 1, "vaddr": 0, "filesz": len(code), "memsz": len(code)},
+                {"type": 1, "vaddr": 0x1000, "filesz": len(code), "memsz": len(code)},
+            ],
+            sections=[
+                _text_section(code, addr=0x1000),
+                {
+                    "name": ".rel.text",
+                    "type": SHT_MIPS_PSPREL,
+                    "data": bytes(relocation_bytes),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    (relocation,) = parsed.relocations
+    assert relocation.type == R_MIPS_32
+    assert relocation.segment_index == 1
+    assert relocation.relative_index == 0
+    assert relocation.info == 0x112
+    assert relocation.application_valid
+    inventory = psp_reloc.psp_inventory(parsed)
+    assert inventory["reserved_field_entries"]
+    assert inventory["complete"] is False
+    assert any("reserved bits set (0x00000010)" in item for item in parsed.observations)
 
 
 def test_standard_rel_r_info_is_a_symbol_index() -> None:
@@ -329,6 +368,7 @@ def test_data_relocations_use_the_data_section() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": 16, "memsz": 0x2000}],
             sections=[
                 _text_section(b"\x00" * 8),
                 {
