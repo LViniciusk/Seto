@@ -31,20 +31,23 @@
  * NUL-terminated ASCII paths (`.data+0x3c` and `.data+0x68` begin with
  * "http://www.konami.jp/..."), so the second argument is a string pointer; the
  * first is passed through from the caller. The 0x414-0x4B8 boundary is the next
- * function's start and Ghidra's exact body. There is no return-value handling:
+ * function's start, and Ghidra recognises the whole body there as a single region
+ * of 164 bytes (`SETO_BOUNDARY_STATUS=EXACT`, 41 instructions). There is no
+ * return-value handling:
  * the epilogue leaves `$v0` as the last call's result, so the function is
  * modelled as `void` (a return type would not change the emitted words).
  *
  * REAL COMPILE + MATCH: Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`.
- * INCONCLUSIVE, 31/41 words, 0 differences, 0 relocation issues. The five import
- * calls resolve by `(libehsys, NID 0x476FD94A)` and
- * `(libehsys, NID 0x1F190478)`. The ten uncounted words are five HI16/LO16 pairs
+ * INCONCLUSIVE, 31/41 words certified, 0 proven differences, 0 relocation issues.
+ * The five import calls resolve by `(libehsys, NID 0x476FD94A)` and
+ * `(libehsys, NID 0x1F190478)`. The ten uncertified words are five HI16/LO16 pairs
  * (the jump table plus the three path arguments): each original destination is
  * proven in `.data`, but the object exposes only undefined `D_...` symbols and no
- * independent artifact links them to those objects, so the comparator stays
- * INCONCLUSIVE. The `D_...` names and the pointer types are provisional address
- * labels, not recovered source names. The PRX records compiler 2.4.1.01; no
- * equivalence with that historical version is claimed.
+ * independent artifact links them to those objects, so relocation equivalence for
+ * those words remains unproven and the comparator stays INCONCLUSIVE. The `D_...`
+ * names and the pointer types are provisional address labels, not recovered source
+ * names. The PRX records compiler 2.4.1.01; no equivalence with that historical
+ * version is claimed.
  */
 
 #include "sce_stubs.h"

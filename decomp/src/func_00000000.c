@@ -39,13 +39,15 @@
  * address relocations.
  *
  * REAL COMPILE + MATCH: Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`.
- * INCONCLUSIVE, 7/13 words, 0 differences, 0 relocation issues. The call resolves
- * by `(libehsys, NID 0xB4471B5E)` and all 13 words are byte-identical to the
- * original; the six uncounted words are the three HI16/LO16 address pairs, which
- * the comparator will not certify without an artifact-qualified object identity
- * (the first two name `.text` code, the third a segment-only address). The PRX
- * records compiler 2.4.1.01; equivalence with that historical version is not
- * claimed. The import name func_00001F04 stays an address-derived label.
+ * INCONCLUSIVE, 7/13 words certified, 0 proven differences, 0 relocation issues.
+ * The call resolves by `(libehsys, NID 0xB4471B5E)`. The six uncertified words are
+ * the three HI16/LO16 address pairs: the comparator compares their encoding but
+ * will not treat them as equivalent without an artifact-qualified object identity
+ * (the first two name `.text` code, the third a segment-only address), so
+ * relocation equivalence for those words remains unproven and the function stays
+ * INCONCLUSIVE rather than MATCHED. The PRX records compiler 2.4.1.01;
+ * equivalence with that historical version is not claimed. The import name
+ * func_00001F04 stays an address-derived label.
  */
 
 #include "sce_stubs.h"
