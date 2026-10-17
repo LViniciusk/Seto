@@ -633,7 +633,20 @@ def call_references(
         )
 
     for relocation in parsed.relocations_for(section):
-        if relocation.type not in JUMP_RELOCATION_TYPES or relocation.section_offset is None:
+        if relocation.type not in JUMP_RELOCATION_TYPES:
+            continue
+        if relocation.section_offset is None:
+            # The parser preserves the raw relocation but no longer invents a
+            # section offset when all four application bytes do not belong to
+            # the declared target. Report an unresolved call without reading
+            # instruction bytes at a diagnostic/fallback address.
+            unresolved(
+                relocation.offset,
+                relocation.addend,
+                relocation.type_name,
+                f"the relocation at 0x{relocation.offset:x} points outside {section} "
+                "or has no validated four-byte application location",
+            )
             continue
         offset = relocation.section_offset
         address = code_section.addr + offset
