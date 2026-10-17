@@ -38,6 +38,10 @@ Status vocabulary, used strictly:
 | `func_0000008C` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 42/42 words |
 | `func_00000178` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 51/51 words |
 | `func_00000278` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 56/56 words |
+| `func_0000039C` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 28/30; jump-table object identity unproven |
+| `func_00000414` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 31/41; string-object identities unproven |
+| `func_00000000` reconstruction | real compile + `scripts/match_function.py` | **INCONCLUSIVE**, 7/13; code/data address identities unproven |
+| Global data-reference aggregation | `seto.datarefs.build_global_usage` / `scripts/global_usage.py` | **OK** (15 demonstrated locations, 6 order-only references kept visible) |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
 | Ghidra native MIPS32 / Allegrex language | headless forced-language imports | **READY** (`MIPS:LE:32:default`, `Allegrex:LE:32:default`) |
@@ -704,6 +708,181 @@ Resumo versionado do que ainda falta (a matriz completa da 008 ficou em
 | `func_00000634` (`0x634`) | 176 bytes | idem |
 | `func_00000704` (`0x704`) | 240 bytes | idem; chama os locais `0x278`, `0x508`, `0x634` e `0x358` |
 
+## SETO-DECOMP-010 — dados globais e reconstruções dependentes de dados
+
+Esta rodada não adiciona abstrações: consolida o inventário de referências
+globais das funções restantes, reconstrói as três funções cujo fluxo ficou
+suficientemente compreendido e registra, sem forçar nada, por que nenhuma delas
+pode ser `MATCHED` hoje.
+
+### Inventário de referências globais
+
+O relatório por função já existia (`seto datarefs`). A rodada acrescentou apenas a
+agregação **pura** do próprio relatório,
+`seto.datarefs.build_global_usage` (exposta pelo script fino
+`scripts/global_usage.py`), que agrupa referências por **localização demonstrada
+no módulo**. A chave de agrupamento só é produzida quando o par HI16/LO16 é
+provado (ou não se aplica) *e* o addend combinado é recuperável; um par que
+depende apenas da ordem das relocations nunca entra num grupo e fica em
+`unresolved`. O agrupamento não promove localização a identidade de objeto, não
+funde `section` com `segment` e preserva cada acesso individual — não inventa
+tipo global, tamanho nem direção.
+
+Resultado em `build/seto010/global-usage.json` (artefato local, 16 funções
+`.text`): **15 localizações demonstradas, 6 referências mantidas fora dos grupos**.
+
+| Localização | Funções | Acesso observado |
+|---|---|---|
+| `.data+0x3c` / `+0x68` / `+0x98` | `func_00000414` (`0x68` duas vezes: caso 1 e default) | base de string (`$a1`) passada a `libehsys/0x476FD94A` |
+| `.data+0xc8` | `func_000004B8` | base de string (`$a1`) |
+| `.data+0x8` / `+0x20` | `func_0000039C` / `func_00000414` | base de jump table (`lw` indexado) |
+| `.text+0x34` / `.text+0x84` | `func_00000000` | endereços de código (`$a0`/`$a1`) |
+| `segment 0 +0x4850` | `func_00000000` | início do tail zero-filled (`$a2`) |
+| `segment 0 +0x4860` | `func_000006E4` | store de ponteiro (o objeto apontado) |
+| `segment 0 +0x604860` | `func_000006E4`, `func_00000704` | palavra de estado lida/escrita |
+| `segment 0 +0x604864` | `func_00000508`, `func_00000634` | base de um buffer de `0xa4` bytes |
+| `segment 0 +0x604918` | `func_00000508` | segundo buffer de `0xa4` bytes |
+| `segment 0 +0x604b18` | `func_00000508` | terceiro buffer (consumido por `func_000004B8`) |
+| `segment 0 +0x604b9c` | `func_000006E4` | ponteiro de contexto |
+
+As sete localizações `segment 0` estão no tail zero-filled (além de
+`p_filesz = 0x4850`), então sua localização é `INFERRED`, não `PROVEN`; um mapa
+manual não as promoveria. Três relações entre funções ficam visíveis sem serem
+presumidas além dos bytes: `func_00000508` inicializa a base `+0x604864` (memset
+de `0xa4` bytes seguido de stores em offsets `+0x0`…`+0x78`, incluindo o store de
+`+0x604b18` no campo `+0x50`) e `func_00000634` lê o campo `+0x1c` da mesma base;
+`func_000006E4` inicializa `+0x604860` e `+0x604b9c`, e `func_00000704` é uma
+máquina de estados sobre eles. O conteúdo dos campos não é recuperável a partir do
+PRX, então nenhum struct global foi declarado.
+
+### Reconstruções
+
+| Prioridade | Função | Tamanho | Chamadas | Resultado |
+|---:|---|---:|---|---|
+| 1 | `func_0000039C` (`0x39c–0x414`) | 30 instruções | `libehsys/0x31454993` | **INCONCLUSIVE**, 28/30 |
+| 2 | `func_00000414` (`0x414–0x4b8`) | 41 instruções | `libehsys/0x1F190478`; `libehsys/0x476FD94A` (×4) | **INCONCLUSIVE**, 31/41 |
+| 3 | `func_00000000` (`0x0–0x34`) | 13 instruções | `libehsys/0xB4471B5E` | **INCONCLUSIVE**, 7/13 |
+
+* **`func_0000039C`** — `switch (func_00002364())` com `sltiu $v0,6`. A tabela
+  está em `.data+0x8` (`0x4770`) e seus 6 words são exatamente
+  `[0x3d4,0x3dc,0x3e4,0x3ec,0x3f4,0x3fc]`, ou seja, os casos `0..5` retornam
+  `0,1,6,2,5,3` e o `default` retorna `1`. O comparador certifica 28 das 30
+  palavras e não encontra nenhuma divergência comprovada; as 2 palavras não
+  certificadas são o par HI16/LO16 que codifica o endereço da tabela. O intervalo
+  usado pelo Seto é `[0x39C, 0x414)` (30 instruções, fim exclusivo = início da
+  função seguinte). Ghidra, com o fluxo que ela mesma inferiu, reconhece um corpo
+  de 116 bytes em **duas** regiões (`SETO_BOUNDARY_STATUS=MISMATCH`,
+  `SETO_DECOMP_STATUS=NOT_RUN`) e não define a palavra `0x404`. Isso é
+  **consistente** com o braço `default` ser código morto, mas não é confirmação de
+  corpo `EXACT` nem prova isolada da intenção do código-fonte original.
+* **`func_00000414`** — `switch (func_00002354())` com `sltiu $v0,7`; a tabela em
+  `.data+0x20` (`0x4788`) é `[0x450,0x468,0x480,0x480,0x480,0x480,0x480]`. Cada
+  caso chama `func_00008A4($s0, <destino>)`: caso 0 → `.data+0x3c`, caso 1 →
+  `.data+0x68`, casos 2–6 → `.data+0x98`, `default` → `.data+0x68`. Ghidra
+  reconhece o corpo exato (`0x414–0x4B8` como **uma** região de 164 bytes,
+  `SETO_BOUNDARY_STATUS=EXACT`, 41 instruções). O comparador certifica 31 das 41
+  palavras e não encontra divergência comprovada; as 10 não certificadas são cinco
+  pares HI16/LO16 (a tabela e as três strings, com `0x68` repetido). As strings
+  são URLs ASCII terminadas em NUL.
+* **`func_00000000`** — `func_00001F04(func_00000034, func_00000084,
+  D_00004850); return 0;`. Três pares HI16/LO16: `.text+0x34` e `.text+0x84`
+  provados, `0x4850` apenas `segment 0`. O comparador certifica 7 das 13 palavras
+  (0 divergências comprovadas); as 6 não certificadas são os três pares HI16/LO16.
+  Ghidra não cria função em `0x0` (`SETO_BOUNDARY_STATUS=NOT_FOUND`): é o entry
+  point e a auto-análise não o modela como função, de modo que o intervalo
+  `[0x0, 0x34)` é do Seto e a listagem das 13 instruções nele confere — o que **não**
+  é uma confirmação de corpo por Ghidra. Sobre o significado:
+  o PRX mostra dois endereços de código e o início do tail zero-filled passados a
+  um import. `0x84` contém apenas `jr $ra; nop` e nenhum outro ponto toma seu
+  endereço, o que é compatível com o *fim exclusivo* `[0x34, 0x84)`; a rodada
+  registra isso como leitura possível e **não** presume registro de handler,
+  thread ou exit — a reconstrução fixa a chamada e o retorno, nada além.
+
+### Por que nenhum `MATCHED` novo
+
+Toda função `.text` ainda sem reconstrução depende de pelo menos uma referência de
+dados, e o comparador recusa certificar um destino de dados sem identidade
+qualificada pelo artefato: o objeto candidato expõe apenas símbolos `D_...`
+indefinidos e o PRX é stripped (`symbols: 0`). Um `--data-map` é uma **asserção**,
+não uma prova, e não converte um resultado em `MATCHED`. Por isso as três
+reconstruções ficam `INCONCLUSIVE`: o comparador certifica **66 das 84 palavras**
+e não encontra nenhuma divergência comprovada nem issue de relocation; as 18
+palavras restantes são pares HI16/LO16 cuja equivalência de relocação dependeria de
+uma identidade de objeto qualificada pelo artefato que não existe aqui, portanto
+permanece **não comprovada**. O número 66/84 descreve apenas as palavras que o
+comparador consegue certificar: **não** afirma igualdade bruta dos bytes das 84
+palavras nem equivalência semântica de relocations. Nenhum caminho foi forçado
+(sem `extern` enganoso, sem global inventado, sem `--data-map`, sem assembly
+inline, sem `volatile`).
+
+### Proveniência das três compilações (wibo 1.2.0, `-O4,p -sdatathreshold 0`)
+
+`Source SHA-256` sobre o conteúdo normalizado para LF (blob do Git); `Object
+SHA-256` do `.o` produzido pela execução.
+
+| Função | Fonte C | Compilação | Instruções | Status | Object SHA-256 | Source SHA-256 |
+|---|---|---|---:|---|---|---|---|
+| `func_00000000` | `decomp/src/func_00000000.c` | OK | 7/13 | **INCONCLUSIVE** | `e5aa6a69ed1fd6ceb01c3445bace376e841fcdfde497735ccb7f883ed8bfa543` | `6873203e1a24bc84bf4aee310cfb524386907486608f99f80ca4881086f8dbb7` |
+| `func_0000039C` | `decomp/src/func_0000039C.c` | OK | 28/30 | **INCONCLUSIVE** | `776f161be72d985a3eef836141d45263ede9a991867a74699c9ac56cffbc09fd` | `231657872547cb99956ab015f99cbe529045a970f31d1e29cc0e02be2576b2d6` |
+| `func_00000414` | `decomp/src/func_00000414.c` | OK | 31/41 | **INCONCLUSIVE** | `31ccca3915dd0339ebc9afe9579e6c313d4f406238cb70ea19364401ffc73e2a` | `98a58db171c55fb2e2696017b1d60d06ea3d93d21dde55a13ff5980734be0986` |
+
+Os `Source SHA-256` acima são a revisão atual dos três arquivos (o endurecimento
+de auditoria ajustou apenas comentários). As três fontes foram **recompiladas**
+depois desses ajustes: os `Object SHA-256` permaneceram exatamente os mesmos, o
+que confirma que a alteração foi inerte para o código gerado.
+
+### Validação desta rodada
+
+| Ambiente/gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 495 passou, 15 ignorados (endurecimento: +5 testes em `tests/test_datarefs.py`) |
+| Windows / `pytest -m integration -q` | 22 passou, 13 ignorados |
+| WSL2 / `pytest -m integration -q` | 32 passou, 3 ignorados |
+| Determinismo da agregação (64 permutações do relatório real) | 1 payload canônico idêntico (15 localizações, 6 `unresolved`) |
+| Recompilação das 3 fontes após ajuste de comentários | `Object SHA-256` inalterados |
+| Ghidra real (`test_toolchain_real.py`) | 1 passou, 12 faixas, saída `0` |
+| Compilações reais 010 via wibo | 3 `INCONCLUSIVE`, 66/84 palavras certificadas, 7 calls resolvidas, 0 divergências comprovadas/issues |
+| Baselines reconferidos (as 9 anteriores) | inalteradas: 7 `MATCHED`, 2 `INCONCLUSIVE` |
+| `compileall -q src scripts` / `git diff --check` | clean / clean |
+
+| Métrica acumulada | Contagem |
+|---|---:|
+| Reconstruções C com compilação real | 12 |
+| `MATCHED` comprovados | 7 |
+| `INCONCLUSIVE` (sem diferenças comprovadas) | 5 |
+| `NONMATCHING` | 0 |
+| Funções `.text` ainda sem reconstrução C | 4 |
+
+As quatro que faltam são `func_00000084` (só `jr $ra; nop`, usado como *fim* de
+faixa por `func_00000000`), `func_00000508` (constrói o buffer de `0xa4` bytes),
+`func_00000634` e `func_00000704` (leitura do campo `+0x1c` e máquina de estados
+sobre os buffers zero-filled). Elas permanecem para a próxima rodada; nenhuma foi
+decompilada aqui.
+
+### Endurecimento de auditoria (revisão do PR #9)
+
+* `build_global_usage()` passa a ordenar as referências de cada grupo e as não
+  resolvidas por `(função, endereço *numérico* da instrução, tipo, pairing,
+  location, status, unresolved)`, sem descartar duplicatas e sem ordenar
+  endereços lexicograficamente. Cinco testes novos em `tests/test_datarefs.py`
+  cobrem: referências no mesmo grupo recebidas em ordens invertidas, o mesmo
+  para `unresolved`, a ordem `0x8 < 0x10 < 0x100`, tipos distintos no mesmo
+  sítio e igualdade de `json.dumps(..., sort_keys=True)` sob permutações. O
+  relatório real foi agregado sob 64 permutações (funções e referências
+  embaralhadas) e produziu **um único** payload canônico.
+* As afirmações de equivalência foram reescritas. Nenhum arquivo afirma
+  igualdade bruta das 84 palavras nem equivalência semântica das relocations; o
+  texto reporta **66/84 certificadas** e 18 não certificadas, mantendo 0
+  divergências comprovadas, 0 relocation issues e o status `INCONCLUSIVE`.
+* A descrição do Ghidra em `func_0000039C.c` agora distingue o intervalo do Seto
+  `[0x39C, 0x414)` (30 instruções) do corpo de 116 bytes em **duas** regiões que
+  Ghidra reconhece (`SETO_BOUNDARY_STATUS=MISMATCH`) e não apresenta a ausência
+  de `0x404` como confirmação de corpo `EXACT` nem como prova isolada da intenção
+  do código-fonte. As três classificações — `0x414=EXACT`, `0x39C=MISMATCH`,
+  `0x0=NOT_FOUND` — permanecem explícitas e distintas.
+* O endurecimento não tocou código executável: as três fontes foram
+  recompiladas e os `Object SHA-256` permaneceram idênticos (ver acima).
+
 ## Matching semantics
 
 Four outcomes are possible: `MATCHED`, `NONMATCHING`, `INCONCLUSIVE`, `BLOCKED`.
@@ -894,8 +1073,8 @@ bytes.
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
 | Matching the historical compiler exactly | PRX `.comment` says 2.4.1.01; supplied compiler is 3.0.1 build 219 | obtain the historically matching licensed compiler, if available |
-| Draft C for the remaining seven discovered functions | not yet iterated; m2c output is preliminary and must be reviewed against Ghidra/verified listings | select small, independently bounded functions and validate each listing; `build/seto008/selection.json` is the triage starting point |
-| Cross-artifact data identity in `func_000004B8` and `func_000006E4` | no independent link from candidate data symbols/variables to original objects; manual JSON maps are assertions only | find original object/linker metadata or another independent artifact proving the link |
+| Draft C for the remaining four discovered functions | not yet iterated; `func_00000508`/`func_00000634`/`func_00000704` share a `0xa4`-byte zero-filled buffer whose fields are not recoverable from the PRX, and `func_00000084` has no body | keep iterating the small, independently bounded listings; `build/seto008/selection.json` and `build/seto010/global-usage.json` are the triage starting points |
+| Cross-artifact data identity in every data-dependent reconstruction (`func_000004B8`, `func_000006E4`, and the SETO-DECOMP-010 `func_00000000`, `func_0000039C`, `func_00000414`) | no independent link from candidate data symbols to original objects; the PRX is stripped (`symbols: 0`) and manual JSON maps are assertions only | find original object/linker metadata or another independent artifact proving the link; until then every such function stays `INCONCLUSIVE` with 0 differences |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
 | Identity of the two `func_000006E4` globals | SETO-DECOMP-007 proved the `0x600000` is the high half of a different address, so the three are distinct module-relative addresses; their *section* identity is still unproven because no named section covers them | find another reference to the same offsets, or an original object/symbol table that shows a section; until then they stay `INFERRED` |
@@ -908,8 +1087,10 @@ re-derived rather than trusted.
 ## Next steps
 
 1. Review helper/global prototypes in the reconstructed functions and use the
-   installed `m2c` as a preliminary aid for the seven remaining `.text`
-   functions (`0x0`, `0x84`, `0x39C`, `0x414`, `0x508`, `0x634`, `0x704`).
+   installed `m2c` as a preliminary aid for the four remaining `.text` functions
+   (`0x84`, `0x508`, `0x634`, `0x704`); `build/seto010/global-usage.json` already
+   records that `func_00000508`/`func_00000634` share `segment 0 +0x604864` and
+   that `func_000006E4`/`func_00000704` share `segment 0 +0x604860`.
 2. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
    in `decomp/include/`.
@@ -919,3 +1100,7 @@ re-derived rather than trusted.
    and `0x604B9C`; SETO-DECOMP-007 showed they are distinct module-relative
    addresses, so the open question is their section, not their relationship. The
    `seto datarefs` report is the regression check for that change.
+4. Reproduce the SETO-DECOMP-010 global usage map with
+   `seto datarefs --out build/datarefs.json` followed by
+   `scripts/global_usage.py --report build/datarefs.json --out build/global-usage.json`;
+   `tests/test_datarefs.py` exercises the grouping without a PRX.
