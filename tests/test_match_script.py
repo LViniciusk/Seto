@@ -136,6 +136,23 @@ def test_config_is_omitted_when_not_given(script, tmp_path) -> None:
     assert "--config" not in argv
     assert argv[3] == "match"
     assert "--candidate-symbol" not in argv
+    assert "--data-map" not in argv
+
+
+def test_a_data_map_is_forwarded_to_seto_match(script, tmp_path) -> None:
+    data_map = tmp_path / "data-map.json"
+    argv = script.build_match_argv(
+        python="python",
+        prx=tmp_path / "m.prx",
+        section=".text",
+        function=0x0,
+        candidate=tmp_path / "m.o",
+        symbol=None,
+        config=None,
+        data_map=data_map,
+    )
+    assert argv[argv.index("--data-map") + 1] == str(data_map)
+    assert argv[-1] == "--json"
 
 
 def test_resolve_flags_prefers_explicit_flags(script) -> None:

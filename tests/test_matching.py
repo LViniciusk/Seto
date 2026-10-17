@@ -6,10 +6,12 @@ import pytest
 
 from seto.binio import ParseError
 from seto.elf import R_MIPS_26, R_MIPS_HI16, R_MIPS_LO16, R_MIPS_32, Relocation
+from seto.datarefs import DataIdentity, DataTarget
 from seto.matching import (
     BLOCKED,
     EVIDENCE_BINARY_RANGE,
     EVIDENCE_COMPILED_OBJECT,
+    EQUIVALENCE_RESOLVED_RELOCATIONS,
     INCONCLUSIVE,
     MATCHED,
     NONMATCHING,
@@ -40,11 +42,12 @@ def rel(
     *,
     addend: int = 0,
     symbol: str | None = None,
+    symbol_index: int = 0,
 ) -> Relocation:
     return Relocation(
         offset=section_offset,
         type=rel_type,
-        symbol_index=0,
+        symbol_index=symbol_index,
         addend=addend,
         symbol=symbol,
         target_section=".text",
@@ -497,6 +500,46 @@ def test_hi16_lo16_association_without_symbols_is_inconclusive() -> None:
     assert result.matching_words == 2
 
 
+def test_unnamed_section_symbols_pair_by_their_shared_symbol_table_index() -> None:
+    code = _code(0x3C040000, 0x24840000)
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=1, symbol_index=3),
+        rel(4, R_MIPS_LO16, addend=2, symbol_index=3),
+    ]
+
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites)
+    result = compare(
+        code,
+        code,
+        name="f",
+        original_relocations=relocations,
+        candidate_relocations=relocations,
+    )
+
+    assert pairing.hi_to_lo == {0: 1}
+    assert pairing.limitations == ()
+    assert result.status == MATCHED
+
+
+def test_unnamed_hi16_lo16_with_different_symbol_indices_stays_inconclusive() -> None:
+    code = _code(0x3C040000, 0x24840000)
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=1, symbol_index=3),
+        rel(4, R_MIPS_LO16, addend=2, symbol_index=4),
+    ]
+
+    result = compare(
+        code,
+        code,
+        name="f",
+        original_relocations=relocations,
+        candidate_relocations=relocations,
+    )
+
+    assert result.status == INCONCLUSIVE
+    assert any("HI16 relocation has no LO16" in item for item in result.limitations)
+
+
 def test_ambiguous_hi16_lo16_association_is_inconclusive() -> None:
     # Two pending HI16 with unknown symbols closed by one unknown LO16: which
     # HI16 the LO16 resolves cannot be shown, so no artificial pair is claimed.
@@ -671,3 +714,179 @@ def test_summary_is_json_serialisable() -> None:
     json.dumps(payload)
     assert payload["status"] == NONMATCHING
     assert payload["percent"] == 0.0
+
+
+# ------------------------------------------------------- canonical data targets
+
+
+def _identity(target: DataTarget, artifact: str = "original"):
+    """A resolver that answers with one artifact-qualified location."""
+    return lambda site, addend: DataIdentity(artifact, target)
+
+
+def test_r_mips_32_resolved_to_the_same_section_offset_matches() -> None:
+    target = DataTarget(".rodata", 0x10)
+    result = compare(
+        _code(0x00000100, 0x00000200),
+        _code(0x00009000, 0x00000200),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+        candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
+    )
+    assert result.status == MATCHED
+    assert result.resolved_data
+    assert result.equivalence == EQUIVALENCE_RESOLVED_RELOCATIONS
+
+
+def test_r_mips_32_proven_different_targets_are_nonmatching() -> None:
+    result = compare(
+        _code(0x00000100),
+        _code(0x00009000),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+        candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
+        original_data_resolver=_identity(DataTarget(".rodata", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".rodata", 0x20)),
+    )
+    assert result.status == NONMATCHING
+    assert "R_MIPS_32 data target differs" in result.differences[0].reason
+
+
+def test_r_mips_32_without_a_proven_target_is_inconclusive() -> None:
+    result = compare(
+        _code(0x00000100),
+        _code(0x00009000),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+        candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
+        original_data_resolver=lambda site, addend: None,
+        candidate_data_resolver=_identity(DataTarget(".rodata", 0x10)),
+    )
+    assert result.status == INCONCLUSIVE
+    assert any("cannot be proven" in item for item in result.limitations)
+
+
+def test_two_artifacts_answering_the_same_offset_are_not_equal() -> None:
+    # ``(.data, 0x20)`` is a location, not an identity.  Two independent ELF files
+    # that each resolve their reference to it must never be treated as naming the
+    # same object - the answers belong to different artifacts.
+    result = compare(
+        _code(0x00000100),
+        _code(0x00009000),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+        candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
+        original_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-a"),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-b"),
+    )
+    assert result.status == INCONCLUSIVE
+    assert not result.resolved_data
+    assert any("different artifacts" in item for item in result.limitations)
+
+
+def test_two_artifacts_answering_the_same_pair_offset_are_not_equal() -> None:
+    result = compare(
+        _code(0x3C040001, 0x24840002),
+        _code(0x3C040000, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x2, symbol="value"),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-a"),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-b"),
+    )
+    assert result.status == INCONCLUSIVE
+    assert not result.resolved_data
+    assert any("different artifacts" in item for item in result.limitations)
+
+
+def test_hi16_lo16_data_resolver_bridges_a_different_encoding() -> None:
+    target = DataTarget(".data", 0x20)
+    result = compare(
+        _code(0x3C040001, 0x24840002),
+        _code(0x3C040000, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x2, symbol="value"),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
+        ],
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
+    )
+    assert result.status == MATCHED
+    assert any(".data+0x20" in item for item in result.resolved_data)
+
+
+def test_hi16_lo16_with_proven_symbols_and_different_targets_is_nonmatching() -> None:
+    result = compare(
+        _code(0x3C040001, 0x24840002),
+        _code(0x3C040000, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x2, symbol="value"),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
+    assert result.status == NONMATCHING
+    assert "data target differs" in result.differences[0].reason
+
+
+def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
+    # The PRX is stripped, so a HI16/LO16 association can rest on relocation
+    # order alone.  A destination difference then cannot be attributed to the
+    # code: it may be the wrong LO16 closing the HI16.
+    result = compare(
+        _code(0x3C040001, 0x24840002),
+        _code(0x3C040000, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1),
+            rel(4, R_MIPS_LO16, addend=0x2),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0),
+            rel(4, R_MIPS_LO16, addend=0x3),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
+    assert result.status == INCONCLUSIVE
+    assert not result.differences
+
+
+def test_data_resolution_never_hides_a_non_relocatable_difference() -> None:
+    target = DataTarget(".rodata", 0x10)
+    result = compare(
+        _code(0x3C040001, 0x24840002),
+        _code(0x3C050001, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x2, symbol="value"),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
+        ],
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
+    )
+    assert result.status == NONMATCHING
+    assert "outside the relocation field" in result.differences[0].reason
