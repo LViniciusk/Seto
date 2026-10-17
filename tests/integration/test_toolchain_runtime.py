@@ -35,12 +35,76 @@ REAL_MATCH_CASES = (
     (0x8C, "func_0000008C.c", "MATCHED", 42, 42),
     (0x178, "func_00000178.c", "MATCHED", 51, 51),
     (0x278, "func_00000278.c", "MATCHED", 56, 56),
-    # SETO-DECOMP-010: all three compile byte-identically (0 differences, 0
-    # relocation issues) and stay INCONCLUSIVE only on data-object identity.
+    # SETO-DECOMP-010: 66/84 words certified, zero proven differences;
+    # data relocations remain INCONCLUSIVE without cross-artifact identity.
     (0x0, "func_00000000.c", "INCONCLUSIVE", 7, 13),
     (0x39C, "func_0000039C.c", "INCONCLUSIVE", 28, 30),
     (0x414, "func_00000414.c", "INCONCLUSIVE", 31, 41),
+    # SETO-DECOMP-011: zero proven differences and zero relocation issues; the
+    # uncertified words are HI16/LO16 pairs whose data identity is unprovable.
+    # func_00000634 reads the word at +0x1c of the 0xa4-byte buffer;
+    # func_00000508 fills that buffer through the typed SetoObservedBlock;
+    # func_00000704 is the state machine over the word at 0x604860.
+    (0x634, "func_00000634.c", "INCONCLUSIVE", 42, 44),
+    # Audit hardening: typing the block's members removed the four-word
+    # scheduling difference the previous revision recorded, so this source now
+    # certifies 63 of 75 words with zero proven differences.
+    (0x508, "func_00000508.c", "INCONCLUSIVE", 63, 75),
+    (0x704, "func_00000704.c", "INCONCLUSIVE", 40, 60),
 )
+
+
+def _real_match_report(tmp_path, function: int, source: str):
+    """Compile one decomp source and compare it against the original PRX."""
+    if os.name != "posix":
+        pytest.skip("real PE compiler integration uses WSL2+wibo, not native Windows")
+    if not MODULE.is_file():
+        pytest.skip("original PRX is absent; real matching is not run in public CI")
+
+    profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
+    if not profile.is_file():
+        pytest.skip("git-ignored config/wsl/seto.toml is not configured")
+    settings = load_settings(profile)
+    detected = {status.name: status for status in detect_all(settings)}
+    compiler = detected["mwccpsp"]
+    loader = detected["wibo"]
+    if not compiler.found:
+        pytest.skip("licensed mwccpsp is not configured in the WSL profile")
+    if not loader.found:
+        pytest.skip("wibo is not configured or discoverable in WSL")
+
+    source_path = REPO_ROOT / "decomp" / "src" / source
+    output = tmp_path / f"func_{function:08X}"
+    argv = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "match_function.py"),
+        "--config",
+        str(profile),
+        "--prx",
+        str(MODULE),
+        "--function",
+        hex(function),
+        "--source",
+        str(source_path),
+        "--out",
+        str(output),
+        "--json",
+    ]
+    result = subprocess.run(
+        argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=False
+    )
+    report = json.loads(result.stdout)
+    return result, report
+
+
+def _assert_provenance(report, source: str) -> None:
+    provenance = report["provenance"]
+    assert provenance["object_sha256"]
+    assert provenance["source_sha256"]
+    assert Path(provenance["source"]).name == source
+    assert Path(provenance["object"]).is_file()
+    assert provenance["flags"] == ["-O4,p", "-sdatathreshold", "0"]
+    assert provenance["compiler"], "the report must name the compiler it used"
 
 
 def test_wibo_executes_the_psp_compiler_and_produces_an_elf32_mips_object(tmp_path) -> None:
@@ -97,44 +161,7 @@ def test_real_mwccpsp_function_baselines(
     tmp_path, function, source, expected_status, matching_words, total_words
 ) -> None:
     """Compile+compare the real baselines only in the local WSL2/media environment."""
-    if os.name != "posix":
-        pytest.skip("real PE compiler integration uses WSL2+wibo, not native Windows")
-    if not MODULE.is_file():
-        pytest.skip("original PRX is absent; real matching is not run in public CI")
-
-    profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
-    if not profile.is_file():
-        pytest.skip("git-ignored config/wsl/seto.toml is not configured")
-    settings = load_settings(profile)
-    detected = {status.name: status for status in detect_all(settings)}
-    compiler = detected["mwccpsp"]
-    loader = detected["wibo"]
-    if not compiler.found:
-        pytest.skip("licensed mwccpsp is not configured in the WSL profile")
-    if not loader.found:
-        pytest.skip("wibo is not configured or discoverable in WSL")
-
-    source_path = REPO_ROOT / "decomp" / "src" / source
-    output = tmp_path / f"func_{function:08X}"
-    argv = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "match_function.py"),
-        "--config",
-        str(profile),
-        "--prx",
-        str(MODULE),
-        "--function",
-        hex(function),
-        "--source",
-        str(source_path),
-        "--out",
-        str(output),
-        "--json",
-    ]
-    result = subprocess.run(
-        argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=False
-    )
-    report = json.loads(result.stdout)
+    result, report = _real_match_report(tmp_path, function, source)
     match = report["match"]
     expected_exit = 0 if expected_status == "MATCHED" else 5
     assert result.returncode == expected_exit, result.stderr
@@ -149,10 +176,41 @@ def test_real_mwccpsp_function_baselines(
         assert match["matching_words"] == match["total_words"]
     else:
         assert match["limitations"], "an inconclusive result must state its limitation"
-    provenance = report["provenance"]
-    assert provenance["object_sha256"]
-    assert provenance["source_sha256"]
-    assert Path(provenance["source"]).name == source
-    assert Path(provenance["object"]).is_file()
-    assert provenance["flags"] == ["-O4,p", "-sdatathreshold", "0"]
-    assert provenance["compiler"]
+    _assert_provenance(report, source)
+
+
+def test_real_mwccpsp_func_00000508_certifies_every_word_but_relocation_identity(
+    tmp_path,
+) -> None:
+    """func_00000508 reproduces every word; only data identity stays unproven.
+
+    The audit hardening replaced the byte-typed view of the block with the
+    ``SetoObservedBlock`` record in ``decomp/include/seto_shared_state.h``.  With
+    the block's members typed, this build emits the closing block exactly as the
+    module does - ``move $a0, $s0`` before the three zero stores, then the call
+    with ``sw $zero, 0x78($s0)`` in its delay slot - so the four-word scheduling
+    difference the previous revision recorded is gone.  The result is
+    ``INCONCLUSIVE`` because twelve words are the six HI16/LO16 pairs whose data
+    identity cannot be proven from the stripped module.  The test pins that shape
+    instead of the old ``NONMATCHING`` one.
+    """
+    result, report = _real_match_report(tmp_path, 0x508, "func_00000508.c")
+    match = report["match"]
+
+    assert result.returncode == 5, result.stderr
+    assert report["status"] == "INCONCLUSIVE"
+    assert report["verified_decompilation"] is False
+    assert match["total_words"] == 75
+    assert match["matching_words"] == 63
+    assert match["difference_count"] == 0
+    assert match["differences"] == []
+    # 63 certified + 12 uncertified = 75.  The twelve are six HI16/LO16 pairs:
+    # one for 0x604864, three for 0x604918 (the 0x414 argument and the +0x40 and
+    # +0x68 stores) and two for 0x604b18 (the 0x4b8 argument and the +0x50 store).
+    assert match["total_words"] - match["matching_words"] == 12
+    assert len(match["limitations"]) == 6
+    for limitation in match["limitations"]:
+        assert "HI16/LO16" in limitation
+        assert "data identity cannot be proven" in limitation
+    assert match["relocation_issues"] == []
+    _assert_provenance(report, "func_00000508.c")
