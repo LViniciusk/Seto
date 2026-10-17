@@ -43,8 +43,13 @@ REAL_MATCH_CASES = (
     # SETO-DECOMP-011: zero proven differences and zero relocation issues; the
     # uncertified words are HI16/LO16 pairs whose data identity is unprovable.
     # func_00000634 reads the word at +0x1c of the 0xa4-byte buffer;
+    # func_00000508 fills that buffer through the typed SetoObservedBlock;
     # func_00000704 is the state machine over the word at 0x604860.
     (0x634, "func_00000634.c", "INCONCLUSIVE", 42, 44),
+    # Audit hardening: typing the block's members removed the four-word
+    # scheduling difference the previous revision recorded, so this source now
+    # certifies 63 of 75 words with zero proven differences.
+    (0x508, "func_00000508.c", "INCONCLUSIVE", 63, 75),
     (0x704, "func_00000704.c", "INCONCLUSIVE", 40, 60),
 )
 
@@ -174,29 +179,38 @@ def test_real_mwccpsp_function_baselines(
     _assert_provenance(report, source)
 
 
-def test_real_mwccpsp_func_00000508_records_its_one_slot_difference(tmp_path) -> None:
-    """func_00000508 reproduces every word but one scheduling slot (SETO-DECOMP-011).
+def test_real_mwccpsp_func_00000508_certifies_every_word_but_relocation_identity(
+    tmp_path,
+) -> None:
+    """func_00000508 reproduces every word; only data identity stays unproven.
 
-    The reconstruction describes the whole instruction stream: the only four words
-    that differ are one slot of the last call's argument setup (`move $a0, $s0`),
-    which the original emits before the three zero stores and this compiler emits
-    immediately before the call; the remaining uncertified words are six HI16/LO16
-    pairs whose data identity cannot be proven from the stripped module.  The test
-    pins the documented difference as ``NONMATCHING`` rather than hiding it.
+    The audit hardening replaced the byte-typed view of the block with the
+    ``SetoObservedBlock`` record in ``decomp/include/seto_shared_state.h``.  With
+    the block's members typed, this build emits the closing block exactly as the
+    module does - ``move $a0, $s0`` before the three zero stores, then the call
+    with ``sw $zero, 0x78($s0)`` in its delay slot - so the four-word scheduling
+    difference the previous revision recorded is gone.  The result is
+    ``INCONCLUSIVE`` because twelve words are the six HI16/LO16 pairs whose data
+    identity cannot be proven from the stripped module.  The test pins that shape
+    instead of the old ``NONMATCHING`` one.
     """
     result, report = _real_match_report(tmp_path, 0x508, "func_00000508.c")
     match = report["match"]
 
-    assert result.returncode == 3, result.stderr
-    assert report["status"] == "NONMATCHING"
+    assert result.returncode == 5, result.stderr
+    assert report["status"] == "INCONCLUSIVE"
     assert report["verified_decompilation"] is False
     assert match["total_words"] == 75
-    assert match["difference_count"] == 4
-    assert [item["word_index"] for item in match["differences"]] == [64, 65, 66, 67]
-    # `0x02002021` is `move $a0, $s0`: the original has it first, the candidate
-    # has it last, and the three stores in between shift by one slot.
-    assert match["differences"][0]["original"] == "0x02002021"
-    assert match["differences"][-1]["candidate"] == "0x02002021"
+    assert match["matching_words"] == 63
+    assert match["difference_count"] == 0
+    assert match["differences"] == []
+    # 63 certified + 12 uncertified = 75.  The twelve are six HI16/LO16 pairs:
+    # one for 0x604864, three for 0x604918 (the 0x414 argument and the +0x40 and
+    # +0x68 stores) and two for 0x604b18 (the 0x4b8 argument and the +0x50 store).
+    assert match["total_words"] - match["matching_words"] == 12
+    assert len(match["limitations"]) == 6
+    for limitation in match["limitations"]:
+        assert "HI16/LO16" in limitation
+        assert "data identity cannot be proven" in limitation
     assert match["relocation_issues"] == []
-    assert match["limitations"], "an inconclusive result must state its limitation"
     _assert_provenance(report, "func_00000508.c")

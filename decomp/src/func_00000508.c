@@ -67,18 +67,38 @@
  * segment, so `seto datarefs` can only mark it INFERRED: no named ELF section
  * covers it and the object it names is not identified.
  *
+ * STORAGE. The block is described by `SetoObservedBlock` in
+ * `decomp/include/seto_shared_state.h`, a provisional record of the offsets
+ * observed here and read by `func_00000634`. The mapping is
+ *
+ *   +0x00..+0x2F  words_00_2c[0..11]   (words; +0x1C is 0x634's read)
+ *   +0x30         field_30             (the incoming argument)
+ *   +0x34..+0x3C  words_34_3c[0..2]    (+0x34 holds the literal 0x00600000)
+ *   +0x40         field_40             (0x604918)
+ *   +0x44..+0x4C  words_44_4c[0..2]
+ *   +0x50         field_50             (0x604B18)
+ *   +0x54..+0x64  words_54_64[0..4]
+ *   +0x68         field_68             (0x604918)
+ *   +0x6C..+0x78  words_6c_78[0..3]
+ *   +0x7C..+0xA3  reserved             (cleared, never field-accessed)
+ *
+ * The header's compile-time layout checks pin every one of those offsets and the
+ * 0xA4 size, so a wrong description fails the build rather than shifting a store
+ * silently. This replaces the earlier `unsigned char` view of the object plus
+ * `int`/`void` casts: the object was declared one byte wide while the function
+ * wrote 0xA4 bytes through it.
+ *
  * SOURCE FORMS FORCED BY THE WORDS. Three details cannot be written the obvious
  * way and still reproduce the emitted instructions:
  *
- *  * the first two stores. `*(int *)(base + 0x00)` / `*(int *)(base + 0x04)`
- *    with a `unsigned char *` base makes the compiler materialise the constant
- *    address a second time (`lui` + in-place `lo`) instead of reusing `$s0`,
- *    which adds two instructions. Only an additional word-typed view of the
- *    same address (`int *words = (int *)base;` used for those two stores)
- *    reproduces the `sw $v0, ($s0)` / `sw $v0, 4($s0)` pair; every other store
- *    keeps the plain `base + offset` form, which is what the remaining words
- *    show. `(int *)base` casts alone (`((int *)base)[0]`) and struct-typed
- *    pointers fold the same way as the byte form and do not reproduce the words.
+ *  * the first two stores need a named, word-typed pointer to the block
+ *    (`unsigned int *words = (unsigned int *)base;`, the explicit form of
+ *    `base->words_00_2c`, the struct's `unsigned int[12]` first member at offset
+ *    0). Writing them as `base->words_00_2c[0]` / `[1]`, or binding the pointer by
+ *    array decay (`= base->words_00_2c`), makes this build materialise the
+ *    constant address a second time for the store (`lui` + in-place `lo`) instead
+ *    of reusing `$s0`, which adds two instructions (77 words, not 75). Every
+ *    other store uses the plain member form.
  *  * the ternary's sense: `== 0x2000` selects 0 and the fall-through selects 1,
  *    which is `... == 0x2000 ? 0 : 1`: the `bnel` is taken on inequality and the
  *    `1` is materialised in its delay slot.
@@ -86,37 +106,33 @@
  *    0x588 carries no relocation at all, while the surrounding addresses do.
  *
  * REAL COMPILE + MATCH: Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`.
- * NONMATCHING, 4 of 75 words differ. The whole word stream is identical except
- * for one scheduling slot: the original emits the last call's argument setup
- * `move $a0, $s0` at 0x608, before the three `sw $zero, 0x54/0x5c/0x58($s0)`
- * stores, then the `jal` and the `sw $zero, 0x78($s0)` delay slot; this build
- * emits the same five instructions with the `move` one slot later, immediately
- * before the `jal` (words 64-67, both orderings otherwise byte-identical):
+ * INCONCLUSIVE, 63/75 words certified, 0 proven differences, 0 relocation
+ * issues. The three call sites resolve by (libehsys, NID 0x10F3BB61), (libehsys,
+ * NID 0x8171F765) and (sceUtility, NID 0xCDC3AA41), and the three module-local
+ * calls by address (0x39c, 0x414, 0x4b8). Six HI16/LO16 pairs (0x604864; three
+ * pairs for 0x604918 at +0x40, +0x68 and the call argument to 0x414; two pairs
+ * for 0x604b18 at +0x50 and the call argument to 0x4b8) name objects whose
+ * identity is unprovable from the stripped module, so relocation equivalence for
+ * those 12 words stays unproven and the comparator remains INCONCLUSIVE. The
+ * PRX records compiler 2.4.1.01; no equivalence with that historical version is
+ * claimed.
  *
- *   original : move $a0,$s0 | sw 0x54 | sw 0x5c | sw 0x58 | jal | sw 0x78
- *   candidate: sw 0x54 | sw 0x5c | sw 0x58 | move $a0,$s0 | jal | sw 0x78
- *
- * All 120 statement orders of the final block (the four zero stores plus the
- * call) and all 120 orders that also move the `+0x68` store among them were
- * compiled; none makes this build hoist the argument setup, so the difference is
- * recorded instead of hidden. 59 of the 75 words are certified; 12 more are the
- * six HI16/LO16 pairs below, whose data identity cannot be proven from the
- * stripped module; the last 4 are the scheduling difference itself. The three call
- * sites resolve by (libehsys, NID 0x10F3BB61), (libehsys, NID 0x8171F765) and
- * (sceUtility, NID 0xCDC3AA41), and the three module-local calls by address
- * (0x39c, 0x414, 0x4b8). Six HI16/LO16 pairs (0x604864; three pairs for
- * 0x604918 at +0x40, +0x68 and the call argument to 0x414; two pairs for
- * 0x604b18 at +0x50 and the call argument to 0x4b8) name objects whose identity
- * is unprovable from the stripped module, so relocation equivalence for those
- * words stays unproven as well. The PRX records compiler 2.4.1.01; no equivalence
- * with that historical version is claimed, and the slot difference above is
- * consistent with a scheduling change between that build and the one available
- * here.
+ * Note on the previous revision: with the byte-typed object and casts, this
+ * build emitted the last call's argument setup one slot later than the module
+ * does (`sw 0x54 | sw 0x5c | sw 0x58 | move $a0,$s0 | jal | sw 0x78` instead of
+ * `move $a0,$s0 | sw 0x54 | sw 0x5c | sw 0x58 | jal | sw 0x78`), which cost four
+ * words. Exhaustive sweeps of all 120 statements orders of the closing block -
+ * and all 120 that also moved the `+0x68` store among them - never hoisted it,
+ * and the difference was attributed to a scheduling change between the PRX's
+ * 2.4.1.01 and this build. Typing the block's members removes it: the five
+ * instructions now sit exactly where the module puts them, and the four words
+ * are certified. The attribution to the compiler version was wrong and the
+ * round records the correction.
  */
 
 #include "sce_stubs.h"
+#include "seto_shared_state.h"
 
-extern unsigned char D_00604864; /* first byte of the block addressed at 0x604864 */
 extern unsigned char D_00604918; /* first byte of the block addressed at 0x604918 */
 extern unsigned char D_00604B18; /* first byte of the block addressed at 0x604b18 */
 
@@ -127,39 +143,39 @@ extern void func_000004B8(void *arg0);
 
 int func_00000508(void *arg0)
 {
-    unsigned char *base = &D_00604864;
-    int *words = (int *)base;
+    SetoObservedBlock *base = &D_00604864;
+    unsigned int *words = (unsigned int *)base;
 
-    func_00000854(base, 0, 0xa4);
-    words[0] = 0xa4;
+    func_00000854(base, 0, 0xA4);
+    words[0] = 0xA4;
     words[1] = func_0000039C();
-    if ((func_0000235C(0) & 0xffff) == 0x2000) {
-        *(int *)(base + 0x08) = 0;
+    if ((func_0000235C(0) & 0xFFFF) == 0x2000) {
+        base->words_00_2c[2] = 0;
     } else {
-        *(int *)(base + 0x08) = 1;
+        base->words_00_2c[2] = 1;
     }
-    *(int *)(base + 0x18) = 0x10;
-    *(int *)(base + 0x0c) = 0x11;
-    *(int *)(base + 0x14) = 0x12;
-    *(int *)(base + 0x10) = 0x13;
-    *(int *)(base + 0x34) = 0x600000;
-    *(void **)(base + 0x30) = arg0;
+    base->words_00_2c[6] = 0x10;
+    base->words_00_2c[3] = 0x11;
+    base->words_00_2c[5] = 0x12;
+    base->words_00_2c[4] = 0x13;
+    base->words_34_3c[0] = 0x600000;
+    base->field_30 = arg0;
     func_00000414(&D_00604918);
-    *(void **)(base + 0x40) = &D_00604918;
-    *(int *)(base + 0x44) = 3;
-    *(int *)(base + 0x48) = 2;
-    *(int *)(base + 0x4c) = 0x2ba;
+    base->field_40 = &D_00604918;
+    base->words_44_4c[0] = 3;
+    base->words_44_4c[1] = 2;
+    base->words_44_4c[2] = 0x2BA;
     func_000004B8(&D_00604B18);
-    *(void **)(base + 0x50) = &D_00604B18;
-    *(int *)(base + 0x60) = 3;
-    *(int *)(base + 0x64) = 0x200;
-    *(int *)(base + 0x6c) = 1;
-    *(int *)(base + 0x70) = 1;
-    *(int *)(base + 0x74) = 1;
-    *(void **)(base + 0x68) = &D_00604918;
-    *(int *)(base + 0x54) = 0;
-    *(int *)(base + 0x5c) = 0;
-    *(int *)(base + 0x58) = 0;
-    *(int *)(base + 0x78) = 0;
+    base->field_50 = &D_00604B18;
+    base->words_54_64[3] = 3;
+    base->words_54_64[4] = 0x200;
+    base->words_6c_78[0] = 1;
+    base->words_6c_78[1] = 1;
+    base->words_6c_78[2] = 1;
+    base->field_68 = &D_00604918;
+    base->words_54_64[0] = 0;
+    base->words_54_64[2] = 0;
+    base->words_54_64[1] = 0;
+    base->words_6c_78[3] = 0;
     return func_00002F84(base);
 }

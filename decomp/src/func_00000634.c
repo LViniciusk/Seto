@@ -37,15 +37,28 @@
  * in load segment 0, past `p_filesz = 0x4850`: no named ELF section covers it
  * (location INFERRED), so the object it names is not identified.
  *
- * CASES. Cases 2 and 3 call the two sceUtility entries; case 0 reads the word at
- * `0x604864 + 0x1c` (the load sits in the `beql` delay slot) and returns `1` or
- * `2`; cases 1 and 4 and the default reach the shared `move $v0, $zero` block.
- * The dispatched value in `$v0` survives the delay-slot load because a MIPS
- * "branch likely" nullifies its delay slot when the branch is not taken.
+ * STORAGE. The word read here is `+0x1C` of the block that `func_00000508`
+ * clears and fills, described provisionally by `SetoObservedBlock` in
+ * `decomp/include/seto_shared_state.h` - the struct is a record of the observed
+ * offsets, not a recovered type, and the layout checks in that header make the
+ * compile fail if a field moves. `+0x1C` is the eighth `unsigned int`, i.e.
+ * `words_00_2c[7]`.
  *
- * Two source-level choices are forced by the emitted words and are recorded here
- * rather than guessed away:
+ * CASES. Cases 2 and 3 call the two sceUtility entries; case 0 reads that word
+ * (the load sits in the `beql` delay slot) and returns `1` or `2`; cases 1 and 4
+ * and the default reach the shared `move $v0, $zero` block. The dispatched value
+ * in `$v0` survives the delay-slot load because a MIPS "branch likely" nullifies
+ * its delay slot when the branch is not taken.
  *
+ * Three source-level choices are forced by the emitted words and are recorded
+ * here rather than guessed away:
+ *
+ *  * the block address is hoisted into `$s0` before the calls and kept live
+ *    across them. Writing the read as `D_00604864.words_00_2c[7]` (a direct
+ *    member access at offset 0 of the object) lets this compiler materialise the
+ *    address at the point of use instead - the result is 41 instructions, with
+ *    no `$s0` save and the `lui` moved into the `beql` delay slot. A struct-
+ *    typed *local pointer* reproduces the original scheduling exactly.
  *  * the argument of the case-2 call. The constant `2` is materialised exactly
  *    once, in `$a0`, at 0x670, and is shared by the case-2 comparison and the
  *    call, so that call passes a value equal to the case constant. The same case
@@ -74,12 +87,11 @@
  */
 
 #include "sce_stubs.h"
-
-extern unsigned char D_00604864; /* first byte of the block addressed at 0x604864 */
+#include "seto_shared_state.h"
 
 int func_00000634(void)
 {
-    unsigned char *base = &D_00604864;
+    SetoObservedBlock *base = &D_00604864;
     int state;
 
     func_00000B1C(0, 0);
@@ -97,7 +109,7 @@ int func_00000634(void)
         func_00002F8C();
         break;
     case 0:
-        return *(int *)(base + 0x1c) == 0 ? 1 : 2;
+        return base->words_00_2c[7] == 0 ? 1 : 2;
     }
     return 0;
 }
