@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from seto import smoke
+from seto.hashing import sha256_file
 from seto.toolchain import NOT_APPLICABLE, detect_all, load_settings
+from scripts.match_baselines import REAL_MATCH_CASES, match_tag
 
 pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,35 +26,6 @@ MODULE = (
     / "gmodule"
     / "libhtml_view.prx"
 )
-
-REAL_MATCH_CASES = (
-    (0x244, "func_00000244.c", "MATCHED", 13, 13),
-    (0x4B8, "func_000004B8.c", "INCONCLUSIVE", 18, 20),
-    (0x6E4, "func_000006E4.c", "INCONCLUSIVE", 2, 8),
-    (0x34, "func_00000034.c", "MATCHED", 20, 20),
-    (0x134, "func_00000134.c", "MATCHED", 17, 17),
-    (0x358, "func_00000358.c", "MATCHED", 17, 17),
-    (0x8C, "func_0000008C.c", "MATCHED", 42, 42),
-    (0x178, "func_00000178.c", "MATCHED", 51, 51),
-    (0x278, "func_00000278.c", "MATCHED", 56, 56),
-    # SETO-DECOMP-010: 66/84 words certified, zero proven differences;
-    # data relocations remain INCONCLUSIVE without cross-artifact identity.
-    (0x0, "func_00000000.c", "INCONCLUSIVE", 7, 13),
-    (0x39C, "func_0000039C.c", "INCONCLUSIVE", 28, 30),
-    (0x414, "func_00000414.c", "INCONCLUSIVE", 31, 41),
-    # SETO-DECOMP-011: zero proven differences and zero relocation issues; the
-    # uncertified words are HI16/LO16 pairs whose data identity is unprovable.
-    # func_00000634 reads the word at +0x1c of the 0xa4-byte buffer;
-    # func_00000508 fills that buffer through the typed SetoObservedBlock;
-    # func_00000704 is the state machine over the word at 0x604860.
-    (0x634, "func_00000634.c", "INCONCLUSIVE", 42, 44),
-    # Audit hardening: typing the block's members removed the four-word
-    # scheduling difference the previous revision recorded, so this source now
-    # certifies 63 of 75 words with zero proven differences.
-    (0x508, "func_00000508.c", "INCONCLUSIVE", 63, 75),
-    (0x704, "func_00000704.c", "INCONCLUSIVE", 40, 60),
-)
-
 
 def _real_match_report(tmp_path, function: int, source: str):
     """Compile one decomp source and compare it against the original PRX."""
@@ -74,7 +47,13 @@ def _real_match_report(tmp_path, function: int, source: str):
         pytest.skip("wibo is not configured or discoverable in WSL")
 
     source_path = REPO_ROOT / "decomp" / "src" / source
-    output = tmp_path / f"func_{function:08X}"
+    report_root = os.environ.get("SETO_MATCH_REPORT_DIR")
+    output = (
+        Path(report_root) / match_tag(function)
+        if report_root
+        else tmp_path / f"func_{function:08X}"
+    )
+    output.mkdir(parents=True, exist_ok=True)
     argv = [
         sys.executable,
         str(REPO_ROOT / "scripts" / "match_function.py"),
@@ -94,6 +73,16 @@ def _real_match_report(tmp_path, function: int, source: str):
         argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=False
     )
     report = json.loads(result.stdout)
+    report["module_sha256"] = sha256_file(MODULE)
+    if report_root and isinstance(report.get("match"), dict):
+        # The full module audit can reuse the exact objects produced by this
+        # baseline test instead of compiling the same functions a second time.
+        # Persist the stamped report: the module SHA-256 binds the reused
+        # object to this PRX version.
+        (output / "report.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        (output / "audit-stderr.txt").write_text(result.stderr, encoding="utf-8")
     return result, report
 
 

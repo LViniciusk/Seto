@@ -7,11 +7,15 @@ original module and writes its Ghidra project beneath pytest's temporary path.
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from seto import smoke
+from seto.hashing import sha256_file
 from seto.toolchain import BLOCKED, detect_all, load_settings, run
 
 pytestmark = pytest.mark.integration
@@ -274,3 +278,62 @@ def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
         "0x00002edc", "0x00002f0c", "0x00002ef4", "0x00002f54"
     ]
     assert "SETO_DECOMP_C_BEGIN" in function_244
+
+    evidence_dir = os.environ.get("SETO013_EVIDENCE_DIR")
+    if evidence_dir:
+        def marker(block: str, name: str) -> str | None:
+            prefix = f"{name}="
+            for line in block.splitlines():
+                position = line.find(prefix)
+                if position >= 0:
+                    return line[position + len(prefix) :].split()[0]
+            return None
+
+        range_evidence = []
+        for start in ordered:
+            block = blocks[start]
+            range_evidence.append(
+                {
+                    "start": start,
+                    "end": marker(block, "SETO_FUNCTION_END"),
+                    "body_start": marker(block, "SETO_FUNCTION_BODY_START"),
+                    "body_end": marker(block, "SETO_FUNCTION_BODY_END"),
+                    "body_addresses": marker(block, "SETO_FUNCTION_BODY_ADDRESSES"),
+                    "body_ranges": marker(block, "SETO_FUNCTION_BODY_RANGES"),
+                    "boundary_status": marker(block, "SETO_BOUNDARY_STATUS"),
+                    "decomp_status": marker(block, "SETO_DECOMP_STATUS"),
+                    "instruction_count": insn_count(block),
+                    "address_maps": sorted(
+                        line.split("SETO_ADDRESS_MAP=", 1)[1]
+                        for line in block.splitlines()
+                        if "SETO_ADDRESS_MAP=" in line
+                    ),
+                }
+            )
+        evidence_path = Path(evidence_dir)
+        evidence_path.mkdir(parents=True, exist_ok=True)
+        (evidence_path / "ghidra.json").write_text(
+            json.dumps(
+                {
+                    "module_sha256": sha256_file(MODULE),
+                    "test_source": "tests/integration/test_toolchain_real.py",
+                    "test_source_sha256": sha256_file(Path(__file__)),
+                    "platform": sys.platform,
+                    "tool_version": ghidra.version,
+                    "test": "tests/integration/test_toolchain_real.py::test_ghidra_inspects_the_real_prx_and_selected_functions",
+                    "status": "PASS",
+                    "language": smoke.ALLEGREX_LANGUAGE,
+                    "language_selections": output.count(f"SETO_LANGUAGE={smoke.ALLEGREX_LANGUAGE}"),
+                    "ranges": range_evidence,
+                    "known_classifications": {
+                        "0x0": marker(blocks["0x0"], "SETO_BOUNDARY_STATUS"),
+                        "0x39c": marker(blocks["0x39c"], "SETO_BOUNDARY_STATUS"),
+                        "0x84": marker(blocks["0x84"], "SETO_BOUNDARY_STATUS"),
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )

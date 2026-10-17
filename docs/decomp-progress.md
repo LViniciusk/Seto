@@ -1677,3 +1677,143 @@ Na busca real desta execução, `evidence_search_status = NO_CANDIDATES` e
 `independent_identity_verified = false` e zero `verified_symbol_links_created`.
 Nenhum desses arquivos é tratado como `VERIFIED_EVIDENCE` por sua extensão ou
 presença.
+
+## SETO-DECOMP-013 — Auditoria de cobertura integral e reprodutibilidade
+
+### Baseline reproduzido
+
+A branch 013 parte da `main` com a SETO-DECOMP-012 (`c586ad4`). Nenhum novo
+`MATCHED` foi buscado, nenhuma reconstrução nova foi escrita e a investigação de
+símbolos da 012 não foi repetida. O baseline permanece: 15 fontes C compiladas, 7
+`MATCHED`, 8 `INCONCLUSIVE`, 0 `NONMATCHING`, `func_00000084` classificada sem
+identidade funcional provada, e 231/291 palavras certificadas com 60 pendentes.
+
+A auditoria é uma projeção somente-leitura montada sobre as mesmas APIs públicas já
+existentes: `mips.find_functions`, `imports.build_import_table`/`call_references`,
+`psp_reloc.psp_inventory`, `split.build_layout`/`validate_layout` e os relatórios de
+`datarefs`. Não foi criado parser, matcher, disassembler nem verificador de
+identidade. O relatório fica em `build/seto013/module-audit.json` (ignorado pelo
+Git).
+
+### Cobertura das 509 palavras
+
+`scripts/audit_module_coverage.py` fatia `.text` em intervalos de função e prova,
+por tiling, que são contíguos, alinhados e cobrem exatamente `[0x0, 0x7F4)` =
+509 palavras em 16 intervalos. Cada intervalo recebe no máximo uma fonte C canônica
+(`decomp/src/func_XXXXYYYY.c`) ou uma classificação explícita.
+
+- `text.total_words = 509`, `text.interval_count = 16`, `text.c_sources = 15`,
+  `coverage_status = PASS`.
+- 1 fragmento classificado sem fonte: `func_00000084` (`0x84`–`0x8C`, 2 palavras),
+  `CLASSIFIED_WITHOUT_C_SOURCE`, `functional_identity = UNKNOWN`. Essas são as 2
+  palavras não reconstruídas.
+
+### Status de matching preservado
+
+| Resultado | Funções | Palavras |
+|---|---:|---:|
+| `MATCHED` | 7 | 216 |
+| `INCONCLUSIVE` | 8 | 291 (231 certificadas + 60 pendentes) |
+| `NONMATCHING` | 0 | 0 |
+| Classificado sem fonte | 1 | 2 |
+| **Total** | **16** | **509** |
+
+Nenhuma palavra `INCONCLUSIVE` foi promovida. Os 60 índices pendentes vêm da
+projeção da 012 (`scripts/audit_data_identity.py`), não de
+`total_words - matching_words`; a auditoria confere, palavra por palavra, que os 15
+relatórios recompilados continuam casando com `REAL_MATCH_CASES`.
+
+### Imports, chamadas, stubs e relocations
+
+- 72 call sites dentro de `.text`: 50 resolvem para imports (libehsys, sceHttp,
+  sceSsl, sceUtility, sceNet, sceNetInet, sceNetResolver, sceNetApctl), 22 para
+  funções locais do módulo e 0 sem identidade.
+- 1268 imports em 8 bibliotecas; `.sceStub.text` tem 2536 palavras = 1268
+  trampolins de 8 bytes.
+- 181 relocations PSP: 72 `R_MIPS_26`, 49 `R_MIPS_32`, 30 `R_MIPS_HI16` e 30
+  `R_MIPS_LO16`. A soma dos grupos por seção-alvo reconcilia com 181 e cada
+  registro individual é preservado (inclusive duplicatas). `psp_inventory` marca
+  `complete = true`, sem tipos desconhecidos ou omitidos.
+
+### Layout do PRX: dados inicializados e zero-fill
+
+- 25 seções, 14 alocadas; as 13 arquivo-suportadas mapeiam para o único `PT_LOAD`
+  como `FILE_BACKED`.
+- `.bss` é `SHT_NOBITS` com tamanho 0 — **não** cobre os globais zero-filled.
+- O `PT_LOAD` tem `p_filesz = 0x4850` e `p_memsz = 0x604C10`: `[0x0, 0x4850)` é
+  arquivo-suportado e `[0x4850, 0x604C10)` é zero-fill. Os spans são calculados
+  diretamente de `p_filesz`/`p_memsz`; nenhum byte `SHT_NOBITS` é lido.
+- As 21 referências de dados em zero-fill ocorrem em 7 endereços distintos
+  (`0x4850`, `0x4860`, `0x604860`, `0x604864`, `0x604918`, `0x604B18`, `0x604B9C`),
+  consistente com a 012.
+- `seto split` + `seto check-layout` terminam com código 0 (`layout_issues = []`).
+- As classificações do Ghidra seguem `{'0x0': NOT_FOUND, '0x39c': MISMATCH,
+  '0x84': NOT_FOUND}`, sem conversão em identidade.
+
+### Reprodutibilidade
+
+Executado a partir da raiz do repositório, em WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/audit_module_coverage.py \
+  --reproduce \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --build-dir build/seto013/full \
+  --out build/seto013/module-audit.json
+```
+
+Saída: `audit=PASS text_words=509`. Duas execuções consecutivas produziram
+`build/seto013/module-audit.json` byte a byte idêntico, SHA-256
+`108ae293355bf9ed84302a0e754461bfe6c2cd4227fe0b8cb359d389d8c1e653`.
+
+`--reproduce` reaproveita os testes reais existentes em vez de recompilar por fora:
+
+- os 15 `REAL_MATCH_CASES` são compilados uma única vez; cada `report.json` recebe
+  `module_sha256` e é conferido contra `REAL_MATCH_CASES` (7/8/0 preservados);
+- `seto imports`, `seto split` e `seto check-layout` regeneram os inventários;
+- Splat e Ghidra rodam pelos testes de integração existentes. Como só passam no
+  Windows, a tentativa WSL2 registra `BLOCKED` com o motivo (`splat is not
+  installed` / `Ghidra is not configured`) e as evidências `PASS` `win32`
+  persistidas por `SETO013_EVIDENCE_DIR` são mescladas: cada ferramenta externa
+  fica `PASS` com **as duas** tentativas registradas. Um `FAIL` nunca é
+  sobrescrito para `PASS`.
+
+| Verificação externa | Resultado | Plataforma |
+|---|---|---|
+| `real_matches` (15 casos) | PASS | WSL2 (linux) |
+| `splat` (`.text`/`.sceStub.text`) | PASS | win32 |
+| `ghidra` (boundaries/decompilação) | PASS | win32 |
+| `seto check-layout` | PASS | WSL2 |
+
+Módulo auditado: SHA-256
+`319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26`.
+
+### Testes e gates
+
+`tests/test_audit_module_coverage.py` tem **23 casos**, todos com dados sintéticos
+(nunca `private/`): tiling contíguo; gap, overlap, intervalo vazio/desalinhado e
+intervalo fora de `.text`; fonte C sem intervalo e intervalo sem fonte/classificação;
+fragmento `0x84` aceito como classificação; reconciliação de contagens; relocation
+agrupada não pode sumir nem deixar registro sem grupo; relatório consistente aceito;
+relatório de outra versão de módulo rejeitado; `skip` vira `BLOCKED` e `failure`
+vira `FAIL`; entrada ausente vira `BLOCKED`; JSON canônico não depende da ordem de
+inserção. `tests/test_audit_data_identity.py` passa a 17 casos.
+
+| Gate | Resultado |
+|---|---|
+| `compileall -q` (scripts/tests alterados) | clean |
+| `tests/test_audit_module_coverage.py` | 23 passaram |
+| `tests/test_audit_data_identity.py` | 17 passaram |
+| Windows / `pytest -q` | 544 passaram, 19 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 17 ignorados |
+| WSL2 / `pytest -m integration -q` | 37 passaram, 3 ignorados |
+| Auditoria `--reproduce` WSL2 | `PASS`, 509 palavras, idêntica em duas execuções |
+
+### Bloqueios mantidos
+
+A 013 não cria identidade nova. Sem mapa de linker, objetos ou metadados de debug
+originais autenticados e sem correspondência inequívoca símbolo↔objeto, os 60
+índices pendentes continuam pendentes e os 8 resultados seguem `INCONCLUSIVE`.
+Nenhum nome, addend, endereço ou byte coincidente promove `SymbolLink` ou identidade
+cross-artifact; o estado anterior é preservado exatamente.

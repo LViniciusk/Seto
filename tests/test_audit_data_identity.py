@@ -76,6 +76,7 @@ def _baseline_fixture(tmp_path: Path, monkeypatch):
     report = {
         "function": function,
         "symbol": function,
+        "module_sha256": "a" * 64,
         "address": "0x508",
         "section": ".text",
         "status": "INCONCLUSIVE",
@@ -117,6 +118,7 @@ def _check_baseline(report, build_dir, *, tag="f508", function="func_00000508"):
         tag=tag,
         function=function,
         address=0x508,
+        module_sha256="a" * 64,
         expected_pending_words=12,
         expected_total_words=75,
         build_dir=build_dir,
@@ -176,6 +178,15 @@ def test_checked_baseline_rejects_report_for_another_function(tmp_path, monkeypa
     _repo, build_dir, _source, _obj, report = _baseline_fixture(tmp_path, monkeypatch)
     report["function"] = "func_000004B8"
     with pytest.raises(ParseError, match="belongs to another function"):
+        _check_baseline(report, build_dir)
+
+
+def test_checked_baseline_rejects_report_for_another_module_version(
+    tmp_path, monkeypatch
+) -> None:
+    _repo, build_dir, _source, _obj, report = _baseline_fixture(tmp_path, monkeypatch)
+    report["module_sha256"] = "b" * 64
+    with pytest.raises(ParseError, match="another module version"):
         _check_baseline(report, build_dir)
 
 
