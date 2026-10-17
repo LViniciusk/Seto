@@ -28,13 +28,15 @@ Status vocabulary, used strictly:
 | Call classification of `.text` (72 `R_MIPS_26`) | `seto imports` | **OK** (50 imported, 22 local, 0 unresolved) |
 | The four `jal`s of `func_00000244` | `seto imports --function 0x244` | **PROVEN** — `(library, NID)` recovered for each |
 | Comparator sanity check (`func_00000244` vs itself) | `seto match` | **MATCHED** (`evidence: binary-range`, *not* a decompiled function) |
-| `func_00000244` reconstructed C vs original | `scripts/match_function.py` | **BLOCKED** (no `mwccpsp`) |
+| `func_00000244` reconstructed C vs original | `scripts/match_function.py` | **UNVERIFIED** (compilation/matching **BLOCKED**; no `mwccpsp`) |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
 | Ghidra native MIPS32 / Allegrex language | headless forced-language imports | **READY** (`MIPS:LE:32:default`, `Allegrex:LE:32:default`) |
 | Ghidra automatic selection of the synthetic ELF32 ET_REL | `seto toolchain --smoke --tool ghidra` | **INCOMPATIBLE** (Ghidra selected `MIPS:LE:64:64-32R6addr`; this is not accepted as ELF32 proof) |
 | Ghidra automatic selection of the real PSP PRX | `tests/integration/test_toolchain_real.py` | **PROVEN** (`libhtml_view.prx` selected `Allegrex:LE:32:default`) |
 | REA MCP transport | initialize + `tools/list` handshake | **READY** (207 tools); native-provider analysis and REA PRX support remain unproven |
+| `func_000006E4` reconstruction | m2c + verified splat + Ghidra | **UNVERIFIED** (global types provisional; no compiler) |
+| `func_000004B8` reconstruction | m2c + verified splat + Ghidra | **UNVERIFIED** (m2c missed an argument; Ghidra/assembly resolved it; no compiler) |
 
 ## What is actually proven
 
@@ -99,9 +101,79 @@ Status vocabulary, used strictly:
      evidence: binary-range
    ```
 
-   This proves the relocation-aware pipeline is self-consistent. It is **not** a
-   claim that the reconstruction in `decomp/src/` matches — that still requires a
-   compile, and it does not increase the count of decompiled functions.
+    This proves the relocation-aware pipeline is self-consistent. It is **not** a
+    claim that the reconstruction in `decomp/src/` matches — that still requires a
+    compile, and it does not increase the count of decompiled functions.
+
+## SETO-DECOMP-005 — first function analysis and two new reconstructions
+
+The real PRX was split with `splat64[mips]` and the emitted `.text` listing was
+verified against all original words. Ghidra 12.1.3 with `ghidra-allegrex` v21.4
+automatically selected `PSP Executable (ELF)` and
+`Allegrex:LE:32:default`. `scripts/ghidra/SetoAnalyzeFunction.java` was run as a
+Ghidra post-script for each selected range. It checks the requested entry point,
+body minimum/maximum, addressable-unit size, byte count and address-range count
+before emitting `SETO_BOUNDARY_STATUS=EXACT`; decompilation is marked `OK` only
+when that exact function decompiles successfully. The integration test checks
+those markers per function, as well as the real instruction listing. m2c's
+output was reviewed against the listing rather than accepted blindly.
+
+| Function | Interval / size | C source | Evidence and status | Next action |
+| --- | --- | --- | --- | --- |
+| `func_00000244` | `0x244–0x278`, `0x34` bytes, 13 instructions | `decomp/src/func_00000244.c` (existing C retained) | Ghidra, splat, `seto disasm`, and m2c agree on the four calls and delay slots. Import identities are proven. **UNVERIFIED**; compile **BLOCKED**. | Compile with licensed `mwccpsp`; compare both existing flag hypotheses. |
+| `func_000006E4` | `0x6E4–0x704`, `0x20` bytes, 8 instructions | `decomp/src/func_000006E4.c` | Straight-line initialization: store `1` at `0x604860`, form image address `0x4860`, store it at `0x604B9C`. Ghidra and m2c agree on operations; stripped global names/types remain provisional. **UNVERIFIED**; compile **BLOCKED**. | Verify global types/relocations with the original compiler. |
+| `func_000004B8` | `0x4B8–0x508`, `0x50` bytes, 20 instructions | `decomp/src/func_000004B8.c` | One pointer-like argument, a `0x20`-byte stack buffer, and four ordered helper calls. Ghidra and assembly show the first helper receives both the original argument and `/PSP/SAVEDATA/`; m2c omitted the first argument. C follows Ghidra/instructions and flags helper prototypes as provisional. **UNVERIFIED**; compile **BLOCKED**. | Confirm helper prototypes and compile/match when `mwccpsp` is supplied. |
+
+For `func_00000244`, the body has no explicit setup of `$a0`–`$a3`, does not read
+`$v0` after any of its four calls, and m2c/Ghidra both render a no-argument,
+no-return C body. Ghidra reports compiler-spec ID `default` for
+`Allegrex:LE:32:default`; the actual PRX `.comment` identifies the MW MIPS
+compiler. These are the observed ABI cues, not proof of the imported functions'
+SDK prototypes: the stripped import table carries only `(library, NID)`. Exact
+Metrowerks ABI/code-generation equivalence remains unverified until compilation.
+
+The 8-byte candidate at `0x84` disassembles as `jr $ra; nop`, but Ghidra's
+automatic analysis did not define a function there. It was excluded rather than
+counted as a reconstruction without independent boundary evidence.
+
+Reproduce the original listing and preliminary C with:
+
+```powershell
+py -3.12 -m seto split `
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
+  --out build/seto005-split --run-splat
+
+# Set this to the m2c executable reported by `seto toolchain`.
+& $env:SETO_M2C -t mips-ido-c -f func_00000244 asm/libhtml_view/text.s
+& $env:SETO_M2C -t mips-ido-c -f func_000006E4 asm/libhtml_view/text.s
+& $env:SETO_M2C -t mips-ido-c -f func_000004B8 asm/libhtml_view/text.s
+
+py -3.12 -m seto disasm `
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx `
+  --function 0x244
+```
+
+The Ghidra integration test exercises the post-script on all three ranges and
+checks each range independently: entry, body min/max, byte count, addressable
+unit size, exact-boundary status, completed decompilation, and per-range
+instruction count. A discontinuous/out-of-range body reports `MISMATCH` and is
+not decompiled as if it were exact. The script prints an Allegrex
+listing/decompilation for review; it does not change the input program.
+Re-run the media-backed inspection with
+`py -3.12 -m pytest tests/integration/test_toolchain_real.py -q -m integration`.
+
+### Progress metrics
+
+| Metric | Count |
+| --- | ---: |
+| Functions discovered in `.text` | 16 |
+| C reconstructions proposed (including the existing `func_00000244`) | 3 |
+| Compiled with `mwccpsp` | 0 |
+| Proven `MATCHED` | 0 |
+| Compilation-blocked reconstructions | 3 |
+
+`UNVERIFIED` here means a C reconstruction exists but no real compile/match has
+been performed. The earlier self-comparison of original bytes does not count.
 
 ## Matching semantics
 
@@ -285,7 +357,8 @@ Neither is recorded as proven.
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
 | Any real `MATCHED` | `mwccpsp` is proprietary and absent | supply a licensed compiler, then run the command above |
-| Draft C for the other 15 functions | not yet iterated; m2c smoke only proves the tool on a synthetic function | use m2c and review/refine each function |
+| Draft C for the other 13 discovered functions | not yet iterated; m2c output is preliminary and must be reviewed against Ghidra | select small, independently bounded functions and validate each listing |
+| Compile/match for the 3 current C reconstructions | `mwccpsp` is proprietary and absent | supply a licensed compiler; compile and compare each candidate |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
 | Python 3.11 run of the suite | no 3.11 interpreter in the development environment (`py -3.11` is unavailable); the suite was run on 3.12 | run `python -m pytest` on 3.11 (CI does, on Ubuntu and Windows) |
@@ -296,10 +369,10 @@ re-derived rather than trusted.
 
 ## Next steps
 
-1. Supply a licensed `mwccpsp` and run `scripts/match_function.py` for `func_00000244`;
-   record the real status and the flag set that produced it.
-2. Iterate with the installed `m2c` over the remaining functions in `.text`, using the
-   recovered import identities (they are already resolvable by `seto match`).
+1. Supply a licensed `mwccpsp` and run `scripts/match_function.py` for each of the
+   three C candidates; record the real status and the flag set that produced it.
+2. Review helper/global prototypes in the two new reconstructions and use the
+   installed `m2c` as a preliminary aid for the remaining `.text` functions.
 3. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
    in `decomp/include/`.

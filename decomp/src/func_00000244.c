@@ -24,13 +24,20 @@
  * back-to-back calls with no data flow between them, so the reconstruction is
  * unambiguous: a non-leaf function with a 0x10-byte frame.
  *
- * STATUS: BLOCKED
+ * EVIDENCE:
+ *   The emitted splat `text.s` was checked against the original bytes, Ghidra
+ *   12.1.3 automatically loaded the real PRX with Allegrex and independently
+ *   disassembled this 13-instruction range, and m2c produced the same four-call
+ *   C body below.  These checks confirm the reconstruction is a plausible,
+ *   minimal representation; they do not replace a real compile-and-match.
+ *
+ * STATUS: UNVERIFIED (compilation/matching BLOCKED)
  *   The four imported identities are PROVEN (library + NID, cross-checked
  *   against the trampoline bytes), but `seto match` can only prove this file
  *   byte-for-byte once it is compiled with the original toolchain (mwccpsp,
  *   `MW MIPS C Compiler (2.4.1.01)`).  mwccpsp is proprietary and is not present
- *   in the reference environment, so the candidate below is an unverified
- *   hypothesis.  Run `python scripts/match_function.py ...` once it is installed.
+ *   in the reference environment. Run `python scripts/match_function.py ...`
+ *   once a licensed copy is supplied.
  *
  * See docs/decomp-progress.md for the full report.
  */
