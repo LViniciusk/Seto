@@ -8,8 +8,10 @@ import pytest
 
 from seto import psp_reloc
 from seto.binio import ParseError
+from seto.matching import INCONCLUSIVE, compare
 from seto.elf import (
     ET_MIPS_PSP_PRX,
+    ET_REL,
     R_MIPS_32,
     R_MIPS_HI16,
     R_MIPS_26,
@@ -146,6 +148,99 @@ def test_parse_rejects_relocation_size_not_multiple_of_eight() -> None:
     )
     with pytest.raises(ParseError, match="not a multiple"):
         parse(payload)
+
+
+def test_relocation_reads_require_all_four_bytes_inside_the_explicit_target() -> None:
+    code = b"abcdefgh"
+    data = b"WXYZ"
+    relocations = build_relocations(
+        [(0, R_MIPS_32, 0), (4, R_MIPS_32, 0), (6, R_MIPS_32, 0), (8, R_MIPS_32, 0)]
+    )
+    parsed = parse(
+        build_elf32(
+            e_type=ET_REL,
+            sections=[
+                _text_section(code),
+                {"name": ".data", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 8, "data": data},
+                {"name": ".rel.text", "type": SHT_REL, "data": relocations, "info": 1, "entsize": 8},
+            ],
+        )
+    )
+    entries = {item.raw_offset: item for item in parsed.relocations_for(".text")}
+    assert entries[0].file_offset == parsed.require_section(".text").offset
+    assert entries[4].file_offset == parsed.require_section(".text").offset + 4
+    assert entries[4].section_offset == 4  # final complete word is valid
+    for offset in (6, 8):
+        entry = entries[offset]
+        assert entry.file_offset is None
+        assert entry.section_offset is None
+        assert entry.addend == 0
+    # Offset 8 numerically starts at .data, but .rel.text explicitly targets
+    # .text; bytes from the neighboring section must not be read as its addend.
+    assert entries[8].target_section == ".text"
+    assert psp_reloc.psp_inventory(parsed)["complete"] is False
+    result = compare(
+        code,
+        code,
+        name="boundary",
+        original_relocations=[entries[8]],
+    )
+    assert result.status == INCONCLUSIVE
+
+
+def test_fallback_relocation_needs_one_allocated_section_containing_the_word() -> None:
+    # The table has no resolvable target name. A unique section can back a full
+    # word, but a word crossing the section end (or overlapping two sections)
+    # cannot borrow bytes from a neighbor or be selected arbitrarily.
+    payload = build_elf32(
+        e_type=ET_REL,
+        sections=[
+            _text_section(b"abcdefgh"),
+            {"name": ".data", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 0x20, "data": b"\x01\x02\x03\x04\x05\x06\x07\x08"},
+            {"name": ".overlap", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 0x22, "data": b"\x05\x06\x07\x08"},
+            {
+                "name": ".rel.unknown",
+                "type": SHT_REL,
+                "data": build_relocations([(0x20, R_MIPS_32, 0), (0x22, R_MIPS_32, 0)]),
+                "entsize": 8,
+            },
+        ],
+    )
+    parsed = parse(payload)
+    first, overlap = parsed.relocations
+    # At 0x20, .data uniquely contains four bytes; .overlap starts at 0x22.
+    # This does not invent a target section, but it may read the unique word.
+    assert first.target_section is None
+    assert first.file_offset == parsed.require_section(".data").offset
+    assert first.addend == 0x04030201
+    # 0x22 is fully contained by both overlapping sections, so the fallback
+    # cannot select an arbitrary section.
+    assert overlap.file_offset is None
+    assert overlap.addend == 0
+
+
+def test_nobits_relocation_keeps_its_memory_location_without_file_bytes() -> None:
+    parsed = parse(
+        build_elf32(
+            e_type=ET_REL,
+            sections=[
+                _text_section(b"\x00" * 4),
+                {"name": ".bss", "type": SHT_NOBITS, "flags": SHF_ALLOC, "addr": 8, "size": 4},
+                {
+                    "name": ".rel.bss",
+                    "type": SHT_REL,
+                    "data": build_relocations([(8, R_MIPS_32, 0)]),
+                    "info": 2,
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    (entry,) = parsed.relocations
+    assert entry.target_section == ".bss"
+    assert entry.section_offset == 0
+    assert entry.file_offset is None
+    assert entry.addend == 0
 
 
 def test_comment_signature_is_extracted() -> None:

@@ -51,6 +51,7 @@ SECTION_HEADER_SIZE = 0x28
 PROGRAM_HEADER_SIZE = 0x20
 SYMBOL_SIZE = 0x10
 REL_ENTRY_SIZE = 0x08
+WORD_SIZE = 4
 
 STT_NOTYPE = 0
 STT_OBJECT = 1
@@ -726,13 +727,13 @@ def _parse_relocations(
             if not application_valid:
                 section_offset = None
                 file_offset = None
-            elif target is not None and offset < target.addr:
-                # The address sits below the section the table names, so there is
-                # no byte to read there.  The entry is reported instead of being
-                # patched at a negative offset.
+            elif target is not None and not _section_contains_word(target, offset):
+                # The full word must belong to the named target section. Otherwise
+                # using its file offset could read bytes from the adjacent section.
                 observations.append(
-                    f"relocation section {section.name!r}: entry at 0x{offset:x} is below "
-                    f"its target section {target.name!r} (addr 0x{target.addr:x})"
+                    f"relocation section {section.name!r}: four-byte application at "
+                    f"0x{offset:x} falls outside target section {target.name!r} "
+                    f"[0x{target.addr:x}, 0x{target.end:x})"
                 )
                 section_offset = None
                 file_offset = None
@@ -846,18 +847,31 @@ def _resolve_file_offset(
     offset: int,
 ) -> int | None:
     if target is not None:
-        if target.is_nobits:
+        if target.is_nobits or not _section_contains_word(target, offset):
             return None
         return target.offset + (offset - target.addr)
-    # No declared target: fall back to the smallest allocated section that
-    # contains the address. Non-allocated sections (.shstrtab, .comment) often
-    # carry addr == 0 and must not shadow .text.
+    # No declared target: fall back only when the entire word belongs to exactly
+    # one allocated file-backed section. Non-allocated sections (.shstrtab,
+    # .comment) often carry addr == 0 and must not shadow .text.
     candidates = [
         section
         for section in sections
-        if section.is_allocated and not section.is_nobits and section.contains_address(offset)
+        if section.is_allocated
+        and not section.is_nobits
+        and _section_contains_word(section, offset)
     ]
-    if not candidates:
+    if len(candidates) != 1:
         return None
-    section = min(candidates, key=lambda item: item.size)
+    section = candidates[0]
     return section.offset + (offset - section.addr)
+
+
+def _section_contains_word(section: Section, address: int) -> bool:
+    """Whether all four bytes at ``address`` belong to ``section`` and ELF32."""
+    end = address + WORD_SIZE
+    return (
+        0 <= address <= 0xFFFFFFFF
+        and end <= 0x100000000
+        and section.addr <= address
+        and end <= section.end
+    )
