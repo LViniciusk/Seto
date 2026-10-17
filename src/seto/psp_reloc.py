@@ -42,6 +42,7 @@ from seto.elf import (
     SHT_MIPS_PSPREL,
     SHT_MIPS_PSPREL2,
     SHT_REL,
+    WORD_SIZE,
     ElfFile,
     Relocation,
     Segment,
@@ -287,13 +288,33 @@ def psp_inventory(module: ElfFile) -> dict[str, object]:
             "reason": (
                 "application segment is invalid"
                 if not item.application_valid
+                else "in-place addend is not recoverable from the file/zero-fill mapping"
+                if not item.addend_valid
                 else "target section or section-relative application location is unresolved"
             ),
         }
         for item in module.relocations
         if not item.application_valid
+        or not item.addend_valid
         or item.target_section is None
         or item.section_offset is None
+    ]
+    zero_fill_entries = [
+        {
+            "source_section": item.source_section,
+            "type": item.type_name,
+            "raw_offset": f"0x{item.raw_offset:x}",
+            "segment_index": item.segment_index,
+            "p_filesz": f"0x{module.segments[item.segment_index].filesz:x}",
+            "p_memsz": f"0x{module.segments[item.segment_index].memsz:x}",
+            "addend": f"0x{item.addend & 0xFFFFFFFF:08x}",
+        }
+        for item in psp
+        if item.application_valid
+        and item.addend_valid
+        and item.segment_index < len(module.segments)
+        and item.raw_offset >= module.segments[item.segment_index].filesz
+        and item.raw_offset + WORD_SIZE <= module.segments[item.segment_index].memsz
     ]
     complete = not (
         unknown
@@ -320,6 +341,7 @@ def psp_inventory(module: ElfFile) -> dict[str, object]:
         "relative_segments_with_nonzero_vaddr": sorted(set(relative_vaddrs)),
         "runtime_addressing": "load_base + p_vaddr; load_base is not inferred from the ELF",
         "invalid_entries": invalid_entries,
+        "zero_fill_entries": zero_fill_entries,
         "reserved_field_entries": reserved_entries,
         "incomplete_entries": incomplete_entries,
         "complete": complete,

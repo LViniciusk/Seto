@@ -306,6 +306,7 @@ class Relocation:
     source_section: str | None = None
     raw_offset: int = 0
     application_valid: bool = True
+    addend_valid: bool = True
 
     @property
     def type_name(self) -> str:
@@ -331,6 +332,7 @@ class Relocation:
             "section_offset": self.section_offset,
             "source_section": self.source_section,
             "application_valid": self.application_valid,
+            "addend_valid": self.addend_valid,
         }
 
 
@@ -700,6 +702,7 @@ def _parse_relocations(
             base = section.offset + index * REL_ENTRY_SIZE
             raw_offset = reader.u32(base)
             info = reader.u32(base + 0x04)
+            addend_valid = True
             if psp:
                 # PSP r_info is (relative << 16) | (segment << 8) | type.  It is
                 # not a symbol index, and r_offset is an offset *inside* the named
@@ -727,6 +730,7 @@ def _parse_relocations(
             if not application_valid:
                 section_offset = None
                 file_offset = None
+                addend_valid = False
             elif target is not None and not _section_contains_word(target, offset):
                 # The full word must belong to the named target section. Otherwise
                 # using its file offset could read bytes from the adjacent section.
@@ -737,9 +741,37 @@ def _parse_relocations(
                 )
                 section_offset = None
                 file_offset = None
+                addend_valid = False
             else:
                 section_offset = offset - target.addr if target is not None else None
-                file_offset = _resolve_file_offset(header, sections, target, offset)
+                if psp:
+                    segment = segments[segment_index]
+                    word_end = raw_offset + WORD_SIZE
+                    if raw_offset < segment.filesz < word_end:
+                        observations.append(
+                            f"relocation section {section.name!r}: four-byte word at "
+                            f"r_offset 0x{raw_offset:x} straddles p_filesz "
+                            f"0x{segment.filesz:x}; in-place addend is unresolved"
+                        )
+                        file_offset = None
+                        addend_valid = False
+                    elif raw_offset >= segment.filesz:
+                        # A complete word in the PT_LOAD zero-fill tail starts at
+                        # zero, but it has no file offset and must not borrow bytes
+                        # from a section's unrelated file-backed data.
+                        file_offset = None
+                        observations.append(
+                            f"relocation section {section.name!r}: four-byte word at "
+                            f"r_offset 0x{raw_offset:x} is in the zero-filled PT_LOAD tail"
+                        )
+                    else:
+                        file_offset = _resolve_file_offset(header, sections, target, offset)
+                        if file_offset is None:
+                            addend_valid = False
+                else:
+                    file_offset = _resolve_file_offset(header, sections, target, offset)
+                    if file_offset is None and (target is None or not target.is_nobits):
+                        addend_valid = False
             word = reader.u32(file_offset) if file_offset is not None else 0
             relocations.append(
                 Relocation(
@@ -758,6 +790,7 @@ def _parse_relocations(
                     source_section=section.name or None,
                     raw_offset=raw_offset,
                     application_valid=application_valid,
+                    addend_valid=addend_valid,
                 )
             )
     return tuple(relocations)
@@ -790,10 +823,19 @@ def _psp_address(
             f"which is not PT_LOAD"
         )
         return raw_offset & 0xFFFFFFFF, False
-    if raw_offset >= segment.memsz:
+    word_end = raw_offset + WORD_SIZE
+    if word_end > segment.memsz:
         observations.append(
-            f"relocation section {section_name!r}: r_offset 0x{raw_offset:x} "
-            f"is outside segment {segment_index} p_memsz 0x{segment.memsz:x}"
+            f"relocation section {section_name!r}: four-byte application at "
+            f"r_offset 0x{raw_offset:x} exceeds segment {segment_index} "
+            f"p_memsz 0x{segment.memsz:x}"
+        )
+        return raw_offset & 0xFFFFFFFF, False
+    segment_end = segment.vaddr + word_end
+    if segment_end > 0x100000000:
+        observations.append(
+            f"relocation section {section_name!r}: four-byte application at "
+            f"r_offset 0x{raw_offset:x} exceeds the 32-bit address space"
         )
         return raw_offset & 0xFFFFFFFF, False
     if segment.vaddr:
@@ -802,12 +844,6 @@ def _psp_address(
             f"0x{segment.vaddr:x}; r_offset is segment-relative and was rebased"
         )
     address = segment.vaddr + raw_offset
-    if address > 0xFFFFFFFF:
-        observations.append(
-            f"relocation section {section_name!r}: segment {segment_index} address "
-            f"0x{segment.vaddr:x} + r_offset 0x{raw_offset:x} overflows 32 bits"
-        )
-        return raw_offset & 0xFFFFFFFF, False
     return address, True
 
 

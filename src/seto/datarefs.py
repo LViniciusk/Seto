@@ -335,6 +335,7 @@ class RelocationEvidence:
     relative_index: int
     source_section: str | None
     addend: int
+    addend_valid: bool
 
     @property
     def application(self) -> str | None:
@@ -354,6 +355,7 @@ class RelocationEvidence:
             "segment_index": self.segment_index,
             "relative_index": self.relative_index,
             "addend": f"0x{self.addend & 0xFFFFFFFF:08x}",
+            "addend_valid": self.addend_valid,
         }
 
 
@@ -371,6 +373,7 @@ def relocation_evidence(relocation: Relocation) -> RelocationEvidence:
         relative_index=relocation.relative_index,
         source_section=relocation.source_section,
         addend=relocation.addend,
+        addend_valid=relocation.addend_valid,
     )
 
 
@@ -405,6 +408,7 @@ class DataReference:
             "relocations": [item.summary() for item in self.relocations],
             "raw_addends": [f"0x{value & 0xFFFFFFFF:08x}" for value in self.addends],
             "combined_addend": f"0x{self.combined & 0xFFFFFFFF:08x}",
+            "combined_addend_valid": all(item.addend_valid for item in self.relocations),
             "target": None if self.target is None else self.target.summary(),
             "pairing": self.pairing,
             "location": self.location,
@@ -476,11 +480,15 @@ def recover_references(
         if site.type == R_MIPS_HI16:
             low_index = pairing.hi_to_lo.get(word_index)
             if low_index is None:
+                evidence = evidence_for(word_index)
+                unresolved = "no LO16 partner closes this HI16"
+                if not evidence.addend_valid:
+                    unresolved += "; in-place word does not have a recoverable addend"
                 references.append(
                     DataReference(
                         instruction=instruction,
                         kind="hi16",
-                        relocations=(evidence_for(word_index),),
+                        relocations=(evidence,),
                         addends=(site.addend,),
                         combined=site.addend,
                         target=None,
@@ -489,16 +497,40 @@ def recover_references(
                         location=UNKNOWN,
                         status=UNKNOWN,
                         evidence=f"ELF {site.type_name} has no LO16 to resolve it",
-                        unresolved="no LO16 partner closes this HI16",
+                        unresolved=unresolved,
                     )
                 )
                 continue
             low = sites[low_index]
             low_instruction = region_offset + low_index * 4
-            combined = combine_hi16_lo16(site.addend, low.addend)
-            target, load, location = _classify(module, combined)
             pairing_evidence = pairing.evidence.get(word_index, "relocation-order")
             pairing_status = INFERRED if pairing_evidence == "relocation-order" else PROVEN
+            hi_evidence = evidence_for(word_index)
+            lo_evidence = evidence_for(low_index)
+            if not hi_evidence.addend_valid or not lo_evidence.addend_valid:
+                note = (
+                    "pairing established, but one or both in-place words cross the "
+                    "initialized/zero-fill boundary and the combined addend is unresolved"
+                )
+                references.append(
+                    DataReference(
+                        instruction=low_instruction,
+                        kind="hi16-lo16",
+                        relocations=(hi_evidence, lo_evidence),
+                        addends=(site.addend, low.addend),
+                        combined=0,
+                        target=None,
+                        load=None,
+                        pairing=pairing_status,
+                        location=UNKNOWN,
+                        status=UNKNOWN,
+                        evidence=f"ELF {site.type_name}+{low.type_name} pair; {note}",
+                        unresolved=note,
+                    )
+                )
+                continue
+            combined = combine_hi16_lo16(site.addend, low.addend)
+            target, load, location = _classify(module, combined)
             status = _overall_status(pairing_status, location)
             note = (
                 {
@@ -511,10 +543,7 @@ def recover_references(
                 DataReference(
                     instruction=low_instruction,
                     kind="hi16-lo16",
-                    relocations=(
-                        evidence_for(word_index),
-                        evidence_for(low_index),
-                    ),
+                    relocations=(hi_evidence, lo_evidence),
                     addends=(site.addend, low.addend),
                     combined=combined,
                     target=target,
@@ -535,11 +564,15 @@ def recover_references(
         if site.type == R_MIPS_LO16:
             if word_index in paired_low:
                 continue  # already reported as part of its HI16/LO16 pair
+            evidence = evidence_for(word_index)
+            unresolved = "no HI16 is associated with this LO16"
+            if not evidence.addend_valid:
+                unresolved += "; in-place word does not have a recoverable addend"
             references.append(
                 DataReference(
                     instruction=instruction,
                     kind="lo16",
-                    relocations=(evidence_for(word_index),),
+                    relocations=(evidence,),
                     addends=(site.addend,),
                     combined=site.addend,
                     target=None,
@@ -548,11 +581,31 @@ def recover_references(
                     location=UNKNOWN,
                     status=UNKNOWN,
                     evidence=f"ELF {site.type_name} has no HI16 to complete it",
-                    unresolved="no HI16 is associated with this LO16",
+                    unresolved=unresolved,
                 )
             )
             continue
         if site.type == R_MIPS_32:
+            evidence = evidence_for(word_index)
+            if not evidence.addend_valid:
+                unresolved = "R_MIPS_32 in-place addend is not fully file-backed or zero-filled"
+                references.append(
+                    DataReference(
+                        instruction=instruction,
+                        kind="r_mips_32",
+                        relocations=(evidence,),
+                        addends=(site.addend,),
+                        combined=0,
+                        target=None,
+                        load=None,
+                        pairing=NOT_APPLICABLE,
+                        location=UNKNOWN,
+                        status=UNKNOWN,
+                        evidence=unresolved,
+                        unresolved=unresolved,
+                    )
+                )
+                continue
             target = resolve_data_target(
                 site,
                 symbols,
@@ -571,7 +624,7 @@ def recover_references(
                 DataReference(
                     instruction=instruction,
                     kind="r_mips_32",
-                    relocations=(evidence_for(word_index),),
+                    relocations=(evidence,),
                     addends=(site.addend,),
                     combined=site.addend,
                     target=target,
