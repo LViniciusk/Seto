@@ -1437,3 +1437,199 @@ re-derived rather than trusted.
 4. Keep `func_00000084` classified until a second code reference or linker
    metadata appears; the single argument reference that `func_00000000` makes is
    now pinned by `test_func_00000084_is_referenced_as_an_argument_by_func_00000000`.
+
+## SETO-DECOMP-012 — Cross-Artifact Evidence and Matching Gap Audit
+
+### Baseline reproduzido
+
+A branch 012 parte da `main` que contém a SETO-DECOMP-011 (`92e6369`). O baseline
+continua com **15 reconstruções C compiladas**, 7 `MATCHED`, 8 `INCONCLUSIVE`, 0
+`NONMATCHING`; `func_00000084` continua classificada, sem identidade funcional
+comprovada. As oito funções inconclusivas foram recompiladas em WSL2 com
+Metrowerks `mwccpsp 3.0.1 build 219`, wibo `1.2.0`, flags `-O4,p
+-sdatathreshold 0` e o perfil local `config/wsl/seto.toml`. As 15 entradas de
+`REAL_MATCH_CASES` também passaram pela compilação real em WSL2.
+
+`seto functions` terminou com código 0. `seto datarefs` terminou com código **5**,
+o resultado esperado para as seis referências inconclusivas; o JSON foi
+preservado e parseado, sem ignorar erro de leitura/parsing. `scripts/global_usage.py`
+reproduziu **15 localizações e 6 referências não agrupadas**; as seis são os
+pareamentos dependentes de ordem em `func_00000704`.
+
+### Matriz das 60 palavras
+
+`build/seto012/matching-gaps.json` é o relatório detalhado ignorado pelo Git,
+gerado por `scripts/audit_data_identity.py` a partir dos relatórios frescos de
+`scripts/match_function.py`, `relocation_sites()`, `pair_hi16_lo16()`,
+`recover_references()`, `DataTarget`, `DataIdentity` e `build_global_usage()`.
+Cada par contém dois registros de palavra com endereço, bytes original/candidato,
+relocation, campo afetado, símbolo do candidato (incluindo `shndx`/offset quando
+definido), addends, destino/confiança original, limitação exata e resultado da
+busca de identidade. Os índices vêm das limitações por palavra do comparador e
+dos pares efetivamente localizados — **não** de `total_words - matching_words`.
+
+| Função | Resultado reproduzido | Pares HI16→LO16 (índices de palavra) | Palavras pendentes |
+|---|---:|---|---:|
+| `0x0` | 7/13, `INCONCLUSIVE` | `1→5`, `2→6`, `3→8` | 6 |
+| `0x39C` | 28/30, `INCONCLUSIVE` | `7→9` | 2 |
+| `0x414` | 31/41, `INCONCLUSIVE` | `8→10`, `15→18`, `21→24`, `27→30`, `33→36` | 10 |
+| `0x4B8` | 18/20, `INCONCLUSIVE` | `3→6` | 2 |
+| `0x508` | 63/75, `INCONCLUSIVE` | `4→6`, `33→35`, `38→39`, `46→49`, `50→51`, `61→62` | 12 |
+| `0x634` | 42/44, `INCONCLUSIVE` | `3→7` | 2 |
+| `0x6E4` | 2/8, `INCONCLUSIVE` | `1→2`, `3→4`, `5→7` | 6 |
+| `0x704` | 40/60, `INCONCLUSIVE` | `2→3`, `21→27`, `23→25`, `29→34`, `31→33`, `35→38`, `43→44`, `45→48`, `51→52`, `53→55` | 20 |
+| **Total** | **231/291** | **30 pares distintos** | **60** |
+
+Reconciliação: 231 palavras certificadas + 60 pendentes = 291; 8 funções
+`INCONCLUSIVE`; zero divergências comprovadas e zero `relocation_issues`. São 24
+pareamentos originais demonstrados por fluxo de registradores e **6**
+`relocation-order` apenas em `0x704`; esses seis continuam `INFERRED`. A confiança
+de pareamento não promove localização nem identidade: 9 destinos estão em seção
+nomeada (`.text`/`.data`, localização `PROVEN`), 21 ficam apenas no segmento 0
+zero-filled (localização `INFERRED`), e **nenhum** dos 30 pares tem identidade
+entre os artefatos comprovada. A identidade candidata dos destinos de dados
+continua ausente porque os símbolos `D_...` são indefinidos (`SHN_UNDEF`,
+`shndx=0`) nos objetos compilados.
+
+### Investigação de evidência independente
+
+**`.data`, na ordem pedida.**
+
+* `func_0000039C` referencia `.data+0x8`, uma tabela original de seis entradas
+  `R_MIPS_32` que apontam para `.text+0x3D4`, `+0x3DC`, `+0x3E4`, `+0x3EC`,
+  `+0x3F4`, `+0x3FC`. O objeto candidato tem uma tabela local em `.rodata+0`,
+  seis relocations para `func_0000039C+0x38..+0x60`; todos os seis destinos
+  relativos à função coincidem. As representações cruas não são iguais (uma é
+  PRX linkado, a outra `ET_REL`) e não há símbolo original/mapa que ligue os
+  objetos: **correlação estrutural e de conteúdo, não identidade**.
+* `func_00000414` referencia `.data+0x20`; as sete entradas originais apontam
+  para `.text+0x450`, `+0x468` e `+0x480` cinco vezes. O `.rodata+0` candidato tem
+  as relocations correspondentes para `func_00000414+0x3C`, `+0x54`, `+0x6C` ×5.
+  Também é uma correspondência de destinos relativos, não uma prova independente
+  de que as duas tabelas são o mesmo objeto.
+* As strings originais em `.data+0x3C`, `+0x68` e `+0x98` começam com `http`; o
+  candidato usa símbolos externos `D_000047A4`, `D_000047D0` e `D_00004800` sem
+  dados correspondentes. `func_000004B8` referencia `.data+0xC8`, cujo conteúdo
+  original é `/PSP/SAVEDATA/\0`; `D_00004830` também é indefinido no objeto. O
+  conteúdo original é verificável, mas não há bytes candidatos/link independente.
+
+**Código e início do zero-fill.** `.text+0x34` e `.text+0x84` têm localização
+`PROVEN`, mas os símbolos candidatos correspondentes estão indefinidos em
+`func_00000000.o`. `func_00000034` ter seu próprio baseline `MATCHED` 20/20 é
+evidência da comparação daquele corpo, não de um vínculo independente da
+relocation indefinida em `func_00000000.o`; não foi convertido em `SymbolLink`.
+`0x84` é passado como argumento, não chamado diretamente, e sua classificação
+não prova identidade funcional. `segment 0 +0x4850` continua apenas `INFERRED`,
+sem seção nomeada.
+
+**Globais zero-filled.** `0x4860`, `0x604860`, `0x604864`, `0x604918`, `0x604B18`
+e `0x604B9C` não pertencem a seção ELF nomeada. Os `D_...` candidatos são
+indefinidos. `SetoObservedBlock` documenta uma representação C alinhada
+consistente com os acessos a `0x604864`; não prova o objeto original nem cria uma
+seção `.bss`.
+
+**Artefatos locais delimitados.** `PARAM.SFO` identifica a extração como
+`ULUS10136`, versão 1.03, *Yu-Gi-Oh!  GX Tag Force*; seu SHA-256 é
+`ffabd23c4c6cc5a2be094cd28a4ab1b603cbb8551e60992637ce4c3b6495fc42`. Isso
+contextualiza o pacote, mas não relaciona símbolos de objeto candidato aos
+originais. `libhtml_view.prx`
+tem SHA-256 `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26`,
+`.comment` `MW MIPS C Compiler (2.4.1.01)`, zero símbolos e nenhuma seção debug.
+O PRX irmão `libtutoriallist.prx` tem SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`, o mesmo
+`.comment`, zero símbolos/debug; seu único import table expõe `libehsys`/NIDs,
+não símbolos de dados. `libadler.prx` (SHA-256
+`dcb2765c0e99f18a326b62b7b1cbcf960d5e970c8b587e100cbf4d1457a841d1`) não tem
+magic ELF e não foi decodificado. `EBOOT.BIN` (SHA-256
+`9a5bbf89419b6ba13494318fce4adb6279d099bda54fbf40b9c2dc178b96809a`, assinatura
+`~PSP`) não foi executado nem descriptografado. Não há mapa de linker, objeto
+original ou arquivo de símbolos/debug nas entradas imediatas inspecionadas de
+`PSP_GAME`, `USRDIR`, `gmodule`, `module` e `SYSDIR`.
+
+`config/splat/libhtml_view.yaml` se declara gerado por `seto split`, e
+`build/libhtml_view.ld` referencia `build/asm`/`build/assets`; ambos foram
+descartados como outputs gerados, não como mapa original. Os relatórios `datarefs`
+e de estado compartilhado também são projeções do mesmo PRX, não uma terceira
+fonte independente. Busca delimitada: nenhum artefato local autenticado foi
+encontrado que prove o vínculo candidato↔original. Não foi criada associação
+verificada, resolução manual ou `verified=True`.
+
+### Status individual e hashes das compilações
+
+Os estados e resultados não mudaram: as oito funções continuam
+`INCONCLUSIVE`, sem diferenças comprovadas. SHA-256 completos das compilações
+frescas em WSL2 (Source / Object):
+
+| Função | Source SHA-256 | Object SHA-256 |
+|---|---|---|
+| `func_00000000` | `f6cf2a5fef789d48360302af89c24638eee9c28db8c9320499da50d8c30965fb` | `e5aa6a69ed1fd6ceb01c3445bace376e841fcdfde497735ccb7f883ed8bfa543` |
+| `func_0000039C` | `7d00c468822426f875ea366c9bc89714b20740e72a0c6e78eff3645695e69b89` | `776f161be72d985a3eef836141d45263ede9a991867a74699c9ac56cffbc09fd` |
+| `func_00000414` | `90dd395c4bf06d01f21bcafe0cc8985774b9b6f05b9bf9c97eb19b34526832af` | `31ccca3915dd0339ebc9afe9579e6c313d4f406238cb70ea19364401ffc73e2a` |
+| `func_000004B8` | `71b84bca92e2f2fd084e0a4a18849a6c7bc169e07faf856d9d808068bf52e9a8` | `17cce92e8424bfded12b9ee4a26363ec7ac19c36f8bf795af02d05a22904425f` |
+| `func_00000508` | `1395bb35360c75cd0ea41373036f781b164ee8ad3d77d6ce0075d7c746e7fe08` | `870d430533321b28541dcce4ad859515362ba693225348f177d206996adae791` |
+| `func_00000634` | `f784efc3d772ad54df6128cfdfa4e8248b11f6533a8aac52a9db0de6fd79782e` | `1505c2cf3756867f0a0448dbcf6db5c7b1bf3c06606e8458753ef9ab3aedda0a` |
+| `func_000006E4` | `b2bf0dd2231cb5e5b08e7d4f2228a173d17235b75bd3c4e8f1df120acd11fd92` | `bf50e17cb96392886ad483b6383a05cb3d9b93639974cb00322f26b1b228fee3` |
+| `func_00000704` | `d541eedf6a206f96c30869697c2e089987c4c0d0580c68a6da9f9069796623d5` | `f3d36449bf372d194197e6b4d7f31ca8b6317fa0232d502c04fabad7984df65f` |
+
+### Implementação, regressões e bloqueios para a 013
+
+`scripts/audit_data_identity.py` é uma projeção somente-leitura dos relatórios e
+APIs atuais; não muda `matching.py`, `elf.py`, `psp_reloc.py`, `datarefs.py`, as
+fontes C ou a semântica de `SymbolLink`. A opção `--reproduce` regenera os dados,
+chama `scripts/match_function.py` para compilar objetos novos (o script remove
+qualquer `.o` anterior), e então constrói o JSON determinístico. Quatro testes
+unitários em `tests/test_audit_data_identity.py` garantem que índices vêm das
+limitações exatas, e rejeitam duplicatas/índices fora da função. Os testes
+existentes continuam cobrindo links não verificados, destinos zero-filled e
+pareamento por ordem; nenhum verificador de identidade foi criado porque nenhuma
+evidência elegível foi encontrada.
+
+Bloqueios concretos para a SETO-DECOMP-013: obter mapa de linker, objetos ou
+metadados de debug originais autenticados e compatíveis com a versão, além de
+provar a correspondência inequívoca de cada símbolo candidato (incluindo seção,
+offset, intervalo e relocations). Para zero-fill, também é necessário evidenciar
+qual seção/objeto cobre os endereços, sem fabricar `.bss`. Até isso existir,
+**manter 231/291 certificados e 60 pendentes; os oito resultados continuam
+`INCONCLUSIVE`**. Não promover por nome, addend, endereço numérico ou bytes de
+tabela coincidentes.
+
+### Testes, gates e reprodutibilidade
+
+`tests/test_audit_data_identity.py` acrescenta quatro testes puros: usa somente
+limitações sintéticas, não lê `private/`, e verifica que a projeção seleciona
+índices reais, ignora limitações de pareamento que não são de identidade e rejeita
+duplicatas/índices fora do intervalo. Os testes existentes que protegem a decisão
+de identidade foram reutilizados: `test_equal_numeric_pairs_without_object_identity_stay_inconclusive`,
+`test_two_artifacts_answering_the_same_offset_are_not_equal`,
+`test_two_artifacts_answering_the_same_pair_offset_are_not_equal`,
+`test_an_unverified_symbol_link_is_an_assertion_not_a_proof` e
+`test_match_data_reference_with_an_unverified_map_stays_inconclusive`. Nenhum
+verificador novo ou framework ABI foi criado.
+
+| Gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 508 passou, 19 ignorados |
+| Windows / `pytest -m integration -q` | 23 passou, 17 ignorados |
+| WSL2 / `pytest -m integration -q` | 37 passou, 3 ignorados; os 15 `REAL_MATCH_CASES` foram compilados de novo |
+| `compileall -q src scripts tests` | clean |
+| `seto verify` | ISO status OK |
+| `git diff --check` | clean (aviso LF→CRLF do checkout Windows, sem whitespace error) |
+| Regeração independente de `matching-gaps.json` | bytes idênticos; SHA-256 `5eda104eccef7b77b7b1e550432d45f21fc612f417d1720694642510eef1492c` |
+
+Executado a partir da raiz do repositório no WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/audit_data_identity.py \
+  --reproduce \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --build-dir build/seto012 \
+  --out build/seto012/matching-gaps.json
+```
+
+Isso regenera o inventário, os relatórios, as oito compilações frescas e a
+matriz. A opção chama os scripts versionados já existentes, sem `shell=True`;
+`match_function.py` remove cada objeto anterior antes de compilar. `build/seto012/`
+continua ignorado, sem PRX, ISO ou objetos no commit. Nenhum código de
+`src/seto/matching.py`, `src/seto/datarefs.py`, `src/seto/elf.py` ou
+`src/seto/psp_reloc.py` foi alterado.
