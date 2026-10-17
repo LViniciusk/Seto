@@ -1554,6 +1554,19 @@ fonte independente. Busca delimitada: nenhum artefato local autenticado foi
 encontrado que prove o vínculo candidato↔original. Não foi criada associação
 verificada, resolução manual ou `verified=True`.
 
+O campo `evidence_search_status` separa a classificação da execução em
+`NO_CANDIDATES`, `CANDIDATES_UNVERIFIED` e `VERIFIED_EVIDENCE`. Este último é
+somente um estado conceitual: o script não implementa verificador independente e
+**nunca** o emite. Na busca delimitada efetivamente executada para este PR, o
+resultado é `NO_CANDIDATES` (`candidate_count = 0`) nas entradas imediatas
+inspecionadas. Se um `.map`, `.o`, `.elf`, `.sym`, `.dbg`, `.pdb` ou `.dwo` surgir
+ali, a saída passa a `CANDIDATES_UNVERIFIED`, lista diretório/nome em ordem
+determinística e informa que presença/extensão não autentica origem, versão ou
+identidade. Outputs Seto/Splat são listados separadamente como gerados e não
+entram como candidatos independentes. Em ambos os estados,
+`independent_identity_verified` e `independent_cross_artifact_link_found` ficam
+`false`, e nenhum vínculo é promovido.
+
 ### Status individual e hashes das compilações
 
 Os estados e resultados não mudaram: as oito funções continuam
@@ -1575,14 +1588,26 @@ frescas em WSL2 (Source / Object):
 
 `scripts/audit_data_identity.py` é uma projeção somente-leitura dos relatórios e
 APIs atuais; não muda `matching.py`, `elf.py`, `psp_reloc.py`, `datarefs.py`, as
-fontes C ou a semântica de `SymbolLink`. A opção `--reproduce` regenera os dados,
-chama `scripts/match_function.py` para compilar objetos novos (o script remove
-qualquer `.o` anterior), e então constrói o JSON determinístico. Quatro testes
-unitários em `tests/test_audit_data_identity.py` garantem que índices vêm das
-limitações exatas, e rejeitam duplicatas/índices fora da função. Os testes
-existentes continuam cobrindo links não verificados, destinos zero-filled e
-pareamento por ordem; nenhum verificador de identidade foi criado porque nenhuma
-evidência elegível foi encontrada.
+fontes C ou a semântica de `SymbolLink`. Antes de consumir cada relatório, valida
+função/endereço/status, propriedades do baseline, os caminhos esperados de fonte
+e objeto e ambos os SHA-256 gravados. Arquivo ausente, caminho de outra função,
+hash inválido ou fonte/objeto alterado interrompe a auditoria com `ParseError`;
+`elf.parse()` só recebe o objeto depois dessas verificações. As observações das
+jump tables reutilizam os mesmos objetos ELF já validados, sem segunda leitura.
+Esses hashes verificam consistência local relatório↔arquivo; **não autenticam** o
+relatório, o compilador nem a relação com o artefato original. A opção
+`--reproduce` continua chamando `scripts/match_function.py`, que remove qualquer
+`.o` anterior antes de compilar, e os relatórios recém-gerados passam pelas
+mesmas verificações.
+
+`tests/test_audit_data_identity.py` tem **16 casos**: os quatro testes existentes
+de índices, mais 12 casos para fonte/objeto corretos, adulteração dos dois
+arquivos detectada antes do parse, arquivos ausentes, hash ausente/malformado,
+relatório de outra função e busca vazia/com um ou vários candidatos. Os testes de
+candidatos afirmam ordenação, mensagem coerente, classificação sempre não
+verificada e exclusão dos outputs Seto gerados. Os testes existentes continuam
+cobrindo links não verificados, destinos zero-filled e pareamento por ordem;
+nenhum verificador de identidade foi criado.
 
 Bloqueios concretos para a SETO-DECOMP-013: obter mapa de linker, objetos ou
 metadados de debug originais autenticados e compatíveis com a versão, além de
@@ -1608,13 +1633,14 @@ verificador novo ou framework ABI foi criado.
 
 | Gate | Resultado |
 |---|---|
-| Windows / `pytest -q` | 508 passou, 19 ignorados |
+| Auditoria unitária (`tests/test_audit_data_identity.py`) | 16 passaram |
+| Windows / `pytest -q` | 520 passaram, 19 ignorados |
 | Windows / `pytest -m integration -q` | 23 passou, 17 ignorados |
-| WSL2 / `pytest -m integration -q` | 37 passou, 3 ignorados; os 15 `REAL_MATCH_CASES` foram compilados de novo |
+| WSL2 / `pytest -m integration -q` | 37 passou, 3 ignorados; 15 `REAL_MATCH_CASES` preservados |
 | `compileall -q src scripts tests` | clean |
-| `seto verify` | ISO status OK |
+| `seto verify` | ISO status OK (SHA-256 `FB22D0F06BB9F45A2D0EFF0EF66D541E61210599105037063DB60421E1A3C906`) |
 | `git diff --check` | clean (aviso LF→CRLF do checkout Windows, sem whitespace error) |
-| Regeração independente de `matching-gaps.json` | bytes idênticos; SHA-256 `5eda104eccef7b77b7b1e550432d45f21fc612f417d1720694642510eef1492c` |
+| Regeração independente da matriz | 231/291, 60 palavras, 30 pares e hashes source/object idênticos |
 
 Executado a partir da raiz do repositório no WSL2:
 
@@ -1633,3 +1659,21 @@ matriz. A opção chama os scripts versionados já existentes, sem `shell=True`;
 continua ignorado, sem PRX, ISO ou objetos no commit. Nenhum código de
 `src/seto/matching.py`, `src/seto/datarefs.py`, `src/seto/elf.py` ou
 `src/seto/psp_reloc.py` foi alterado.
+
+**Validação de integridade.** A execução sem `--reproduce` sobre os relatórios
+existentes aceitou os oito pares fonte/objeto e preservou os 30 pares e as 60
+palavras. `--reproduce`, em diretório novo, compilou as mesmas oito fontes e
+produziu os mesmos Source/Object SHA-256. Em uma cópia temporária dos relatórios e
+objetos, o objeto de `func_00000000` foi alterado sem atualizar o registro; a CLI
+falhou explicitamente antes de `elf.parse()` com `object SHA-256 mismatch` (exit
+1; expected `e5aa6a69…`, actual `80c23d24…`). Os testes também cobrem alteração
+da fonte, arquivo ausente, hash inválido e relatório de outra função. O hash do
+JSON não é prova externa de autenticidade; a verificação só garante consistência
+entre o relatório local e os arquivos que serão consumidos.
+
+Na busca real desta execução, `evidence_search_status = NO_CANDIDATES` e
+`candidate_count = 0`. A árvore sintética com `symbols.map`/objetos dá
+`CANDIDATES_UNVERIFIED`, lista os nomes de forma determinística e continua com
+`independent_identity_verified = false` e zero `verified_symbol_links_created`.
+Nenhum desses arquivos é tratado como `VERIFIED_EVIDENCE` por sua extensão ou
+presença.
