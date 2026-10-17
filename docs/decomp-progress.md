@@ -35,6 +35,9 @@ Status vocabulary, used strictly:
 | `func_00000034` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 20/20 words |
 | `func_00000134` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 17/17 words |
 | `func_00000358` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 17/17 words |
+| `func_0000008C` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 42/42 words |
+| `func_00000178` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 51/51 words |
+| `func_00000278` reconstruction | real compile + `scripts/match_function.py` | **MATCHED**, 56/56 words |
 | Open-tool bootstrap | `scripts/bootstrap_toolchain.ps1` / `.sh` | **VERIFIED** (pinned installs, hashes, safe ZIP extraction, isolated Python/npm environments) |
 | `splat`, `m2c`, MIPS `objdump` | synthetic functional smoke tests | **READY** (splat 0.50.1, m2c pinned commit, LLVM 21.1.8) |
 | Ghidra native MIPS32 / Allegrex language | headless forced-language imports | **READY** (`MIPS:LE:32:default`, `Allegrex:LE:32:default`) |
@@ -133,6 +136,16 @@ Status vocabulary, used strictly:
    differences and limitations. There are now six real compilations, four
    `MATCHED`, two `INCONCLUSIVE`, zero `NONMATCHING`; the detailed selection and
    per-function hashes are in the SETO-DECOMP-008 section below.
+
+8. **SETO-DECOMP-009 adds three more proven functions with real control flow.**
+   The three intermediate-control-flow candidates `func_0000008C`,
+   `func_00000178` and `func_00000278` were revalidated (boundaries, calls and
+   relocations) and reconstructed with explicit error paths; each compiled and
+   returned `MATCHED` with zero differences and zero limitations. There are now
+   nine real compilations, seven `MATCHED`, two `INCONCLUSIVE` and zero
+   `NONMATCHING`; the selection and per-function hashes are in the SETO-DECOMP-009
+   section below, and a versioned summary of the seven remaining functions follows
+   there too.
 
 ## SETO-DECOMP-005 — first function analysis and two new reconstructions
 
@@ -604,6 +617,93 @@ Os artefatos/transcrições permanecem em `build/seto008/` e não são versionad
 | `NONMATCHING` | 0 |
 | Funções `.text` ainda sem reconstrução C | 10 |
 
+## SETO-DECOMP-009 — reconstrução de fluxo de controle intermediário
+
+### Seleção e revalidação
+
+As três candidatas foram revalidadas antes de escrever C, como exige a tarefa:
+`seto functions`, `seto imports --function <addr>` (para resolver cada `jal` a um
+par `(library, NID)` ou a um endereço local) e o disassembly verificado. Os limites
+`0x8c–0x134`, `0x178–0x244` e `0x278–0x358` vêm da mesma checagem Ghidra
+`SetoAnalyzeFunction` usada na 008, agora com as três funções incluídas no teste de
+integração. Nenhuma das três possui relocations de dados.
+
+| Prioridade | Função | Tamanho | Chamadas | Fluxo | Resultado |
+|---:|---|---:|---|---|---|
+| 1 | `func_0000008C` (`0x8c–0x134`) | 42 instruções | seis `sceUtility/0x1579A159`; local `0x134` | seis `bltz` para um único bloco de limpeza | **MATCHED** |
+| 2 | `func_00000178` (`0x178–0x244`) | 51 instruções | `sceSsl/0x957ECBE2` e quatro `sceHttp` (`0xAB1ABE07`, `0xE4D21302`, `0x87797BDD`, `0xF1657B22`); local `0x244` | cadeia de `bgez`/`bgezl`, um retorno direto e quatro limpezas | **MATCHED** |
+| 3 | `func_00000278` (`0x278–0x358`) | 56 instruções | `sceNet/0x39AF39A6`, `sceNetInet/0x17943399`, `sceNetResolver/0xF3370E61`, `sceNetApctl/0xE2F91F9B`; locais `0x8c`, `0x178`, `0x358` | dois retornos diretos e quatro limpezas | **MATCHED** |
+
+`func_00000278` chama duas reconstruções desta mesma rodada (`0x8c` e `0x178`) e a
+`func_00000358` da 008; os destinos locais foram confirmados nos limites das
+funções. Os imports novos foram declarados em `decomp/include/sce_stubs.h`
+mantendo o nome derivado do endereço e o par `(library, NID)` no comentário — os
+nomes reais continuam desconhecidos (o módulo guarda NIDs, não nomes).
+
+### Resultados reais das novas funções
+
+Metrowerks 3.0.1 build 219, `-O4,p -sdatathreshold 0`, perfil local WSL2 + wibo
+1.2.0. Zero diferenças, zero relocation issues e zero limitações por função; as 26
+chamadas (15 imports + 11 locais) foram resolvidas pelo comparador.
+
+| Função | Fonte C | Compilação | Instruções | Status | Object SHA-256 | Source SHA-256 |
+|---|---|---:|---|---|---|---|
+| `func_0000008C` | `decomp/src/func_0000008C.c` | OK | 42/42 | **MATCHED** | `1bfb6ff695b201d8e657ac86a6a2b17b2e6b77d89fcbd7e3a164f1cc37d30439` | `4f50d83a2951cf3626ba76691a0c800cd966095750d7ccf11da134cac3cb9790` |
+| `func_00000178` | `decomp/src/func_00000178.c` | OK | 51/51 | **MATCHED** | `8cbd1f45d40f4acd51f155cdce6f6790a8a089ec3f5db9470016ffc8a213c191` | `eb15db12c2b762ae3c684599cf05ec7bb6582b2eb9361d16f680b493ceed6391` |
+| `func_00000278` | `decomp/src/func_00000278.c` | OK | 56/56 | **MATCHED** | `b157ff9e2ed1436e1a7d903f63ae27420303ba66f394c5c1ff0827438067e41f` | `9ce461da95f815150c2a83ce0e60e5b8c1ae835c19c3d33b1f23abf4840ae883` |
+
+O `Source SHA-256` é calculado sobre o conteúdo normalizado para LF (o blob do
+Git), para não depender do `core.autocrlf` do host; o `Object SHA-256` é o do `.o`
+produzido pela própria execução.
+
+### O que a reconstrução fixou
+
+* Em `func_0000008C` a limpeza é única: os seis desvios `bltz` convergem para um
+  único `jal 0x134`. Um `goto cleanup` com o bloco no fim reproduziu 42/42
+  palavras, incluindo o `b` que salta o bloco e o `lw $ra` no slot de atraso.
+* Em `func_00000178` e `func_00000278` o original **duplica** a limpeza em cada
+  caminho de erro (quatro `jal 0x244` e quatro `jal 0x358`). A primeira tentativa,
+  com um `goto` para um bloco único, gerou 8–9 instruções a menos e nem pôde ser
+  comparada (o candidato ficou menor que a função). Repetir
+  `limpeza(); return status;` dentro de cada `if` reproduziu exatamente as 51 e as
+  56 palavras.
+* Nenhuma exigiu assembly inline ou `volatile`; os valores das constantes e os
+  tipos dos stubs permanecem provisórios.
+
+### Validação desta rodada
+
+| Ambiente/gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 479 passou, 12 ignorados |
+| Windows / `pytest -m integration -q` | 22 passou, 10 ignorados |
+| WSL2 / `pytest -m integration -q` | 29 passou, 3 ignorados |
+| Compilações reais 009 via wibo | 3 `MATCHED`, 149/149 palavras, 26 calls resolvidas, 0 diferenças/issues/limitações |
+| Baselines reconferidos (`0x244`, `0x34`, `0x134`, `0x358`, `0x4b8`, `0x6e4`) | inalterados: 4 `MATCHED`, 2 `INCONCLUSIVE` |
+| `compileall -q src scripts tests` / `seto verify` / `git diff --check` | clean / OK / clean |
+
+| Métrica acumulada | Contagem |
+|---|---:|
+| Reconstruções C com compilação real | 9 |
+| `MATCHED` comprovados | 7 |
+| `INCONCLUSIVE` (sem diferenças comprovadas) | 2 |
+| `NONMATCHING` | 0 |
+| Funções `.text` ainda sem reconstrução C | 7 |
+
+### Funções `.text` restantes
+
+Resumo versionado do que ainda falta (a matriz completa da 008 ficou em
+`build/seto008/selection.json`, artefato local ignorado pelo Git):
+
+| Função | Tamanho | Bloqueio principal |
+|---|---:|---|
+| `func_00000000` (`0x0`) | 52 bytes | referências de código provadas (`.text+0x34`, `.text+0x84`) e uma store no tail zero-filled (`0x4850`) sem identidade de seção |
+| `func_00000084` (`0x84`) | 8 bytes | corpo é só `jr $ra; nop`; sem corpo reconstruível |
+| `func_0000039C` (`0x39c`) | 120 bytes | referências a jump table / destinos zero-filled sem identidade provada |
+| `func_00000414` (`0x414`) | 164 bytes | idem |
+| `func_00000508` (`0x508`) | 300 bytes | idem; maior função, chama os locais `0x39C`, `0x414` e `0x4B8` |
+| `func_00000634` (`0x634`) | 176 bytes | idem |
+| `func_00000704` (`0x704`) | 240 bytes | idem; chama os locais `0x278`, `0x508`, `0x634` e `0x358` |
+
 ## Matching semantics
 
 Four outcomes are possible: `MATCHED`, `NONMATCHING`, `INCONCLUSIVE`, `BLOCKED`.
@@ -732,13 +832,14 @@ Why this is a good first target:
 * it exercises the relocation-aware comparator on all three MIPS relocation
   types used by the module.
 
-The reconstruction is complete and readable but **unverified**: `mwccpsp` is not
-available here, so no object file exists to compare. That is reported as
-`BLOCKED`, not as a match. The *names* of the four imported functions are also
-still unknown: the module stores NIDs, not names, so a name would have to come
-from the exporting library's table in another module. The declarations in
-`decomp/include/sce_stubs.h` therefore stay keyed by address and carry the
-recovered `(library, NID)` in their comments.
+The reconstruction is complete and readable. At the SETO-DECOMP-005 checkpoint the
+licensed compiler was not yet wired in, so no object file existed to compare and
+the state was `BLOCKED` — never a match. Since the SETO-DECOMP-007 toolchain work
+it compiles through wibo and matches 13/13 words (see the real compile baseline).
+The *names* of the four imported functions are still unknown: the module stores
+NIDs, not names, so a name would have to come from the exporting library's table
+in another module. The declarations in `decomp/include/sce_stubs.h` therefore stay
+keyed by address and carry the recovered `(library, NID)` in their comments.
 
 The external-tool status is equally explicit. The bootstrap installed `splat`,
 `m2c`, LLVM `objdump`, Ghidra 12.1.3 with `ghidra-allegrex` v21.4, and the REA
@@ -793,7 +894,7 @@ bytes.
 | Item | Blocker | Unblock by |
 | --- | --- | --- |
 | Matching the historical compiler exactly | PRX `.comment` says 2.4.1.01; supplied compiler is 3.0.1 build 219 | obtain the historically matching licensed compiler, if available |
-| Draft C for the other 13 discovered functions | not yet iterated; m2c output is preliminary and must be reviewed against Ghidra | select small, independently bounded functions and validate each listing |
+| Draft C for the remaining seven discovered functions | not yet iterated; m2c output is preliminary and must be reviewed against Ghidra/verified listings | select small, independently bounded functions and validate each listing; `build/seto008/selection.json` is the triage starting point |
 | Cross-artifact data identity in `func_000004B8` and `func_000006E4` | no independent link from candidate data symbols/variables to original objects; manual JSON maps are assertions only | find original object/linker metadata or another independent artifact proving the link |
 | Ghidra automatic selection for generic ELF32 MIPS `ET_REL` | this Ghidra build selects `MIPS:LE:64:64-32R6addr` for the synthetic object | use the validated MIPS32/Allegrex languages explicitly; retain the real-PRX integration check |
 | Real *names* for the imported functions | the module stores NIDs, not names | read the exporting library's table from a module/firmware that has it |
@@ -806,8 +907,9 @@ re-derived rather than trusted.
 
 ## Next steps
 
-1. Review helper/global prototypes in the two new reconstructions and use the
-   installed `m2c` as a preliminary aid for the remaining `.text` functions.
+1. Review helper/global prototypes in the reconstructed functions and use the
+   installed `m2c` as a preliminary aid for the seven remaining `.text`
+   functions (`0x0`, `0x84`, `0x39C`, `0x414`, `0x508`, `0x634`, `0x704`).
 2. Recover real *names* for the `(library, NID)` pairs from a module or firmware
    image that carries the exporting libraries' tables, and rename the declarations
    in `decomp/include/`.
