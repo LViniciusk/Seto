@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,24 @@ from seto.toolchain import NOT_APPLICABLE, detect_all, load_settings
 
 pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
+MODULE = (
+    REPO_ROOT
+    / "private"
+    / "original"
+    / "PSP_GAME"
+    / "USRDIR"
+    / "gmodule"
+    / "libhtml_view.prx"
+)
+
+REAL_MATCH_CASES = (
+    (0x244, "func_00000244.c", "MATCHED", 13, 13),
+    (0x4B8, "func_000004B8.c", "INCONCLUSIVE", 18, 20),
+    (0x6E4, "func_000006E4.c", "INCONCLUSIVE", 2, 8),
+    (0x34, "func_00000034.c", "MATCHED", 20, 20),
+    (0x134, "func_00000134.c", "MATCHED", 17, 17),
+    (0x358, "func_00000358.c", "MATCHED", 17, 17),
+)
 
 
 def test_wibo_executes_the_psp_compiler_and_produces_an_elf32_mips_object(tmp_path) -> None:
@@ -61,3 +82,59 @@ def test_installed_rea_completes_the_stdio_mcp_handshake(tmp_path) -> None:
     # support for PSP PRX is inferred from an MCP tools/list response.
     assert capabilities["native-analysis"].state == "BLOCKED"
     assert capabilities["prx"].state == "BLOCKED"
+
+
+@pytest.mark.parametrize("function,source,expected_status,matching_words,total_words", REAL_MATCH_CASES)
+def test_real_mwccpsp_function_baselines(
+    tmp_path, function, source, expected_status, matching_words, total_words
+) -> None:
+    """Compile+compare the real baselines only in the local WSL2/media environment."""
+    if os.name != "posix":
+        pytest.skip("real PE compiler integration uses WSL2+wibo, not native Windows")
+    if not MODULE.is_file():
+        pytest.skip("original PRX is absent; real matching is not run in public CI")
+
+    profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
+    if not profile.is_file():
+        pytest.skip("git-ignored config/wsl/seto.toml is not configured")
+    settings = load_settings(profile)
+    detected = {status.name: status for status in detect_all(settings)}
+    compiler = detected["mwccpsp"]
+    loader = detected["wibo"]
+    if not compiler.found:
+        pytest.skip("licensed mwccpsp is not configured in the WSL profile")
+    if not loader.found:
+        pytest.skip("wibo is not configured or discoverable in WSL")
+
+    source_path = REPO_ROOT / "decomp" / "src" / source
+    output = tmp_path / f"func_{function:08X}"
+    argv = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "match_function.py"),
+        "--config",
+        str(profile),
+        "--prx",
+        str(MODULE),
+        "--function",
+        hex(function),
+        "--source",
+        str(source_path),
+        "--out",
+        str(output),
+        "--json",
+    ]
+    result = subprocess.run(
+        argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=False
+    )
+    report = json.loads(result.stdout)
+    match = report["match"]
+    expected_exit = 0 if expected_status == "MATCHED" else 5
+    assert result.returncode == expected_exit, result.stderr
+    assert report["status"] == expected_status
+    assert report["verified_decompilation"] is (expected_status == "MATCHED")
+    assert match["matching_words"] == matching_words
+    assert match["total_words"] == total_words
+    assert match["difference_count"] == 0
+    assert match["relocation_issues"] == []
+    assert report["provenance"]["object_sha256"]
+    assert report["provenance"]["source_sha256"]
