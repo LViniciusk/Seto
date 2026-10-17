@@ -210,12 +210,17 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     # func_00000244 only calls imports: no data reference at all.
     assert by_function["0x244"] == ()
 
-    # func_000004B8 builds the address of "/PSP/SAVEDATA/" at .data + 0xc8.
+    # func_000004B8 builds the address of "/PSP/SAVEDATA/" at .data + 0xc8.  The
+    # location is proven, but the stripped module exposes no symbol identity for
+    # the HI16/LO16 pair, so the reference itself is only INFERRED.
     (string,) = by_function["0x4b8"]
     assert string.instruction == 0x4D0
     assert string.combined == 0x4830
     assert string.target == datarefs.DataTarget(".data", 0xC8)
-    assert string.status == datarefs.PROVEN
+    assert string.location == datarefs.PROVEN
+    assert string.pairing == datarefs.INFERRED
+    assert string.status == datarefs.INFERRED
+    assert string.unresolved is not None
     assert [name for name, _ in string.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
 
     # func_000006E4 writes two globals and stores one of their addresses.  The
@@ -228,7 +233,7 @@ def test_the_reconstructions_data_references_are_recovered(parsed: elf.ElfFile) 
     for reference in references.values():
         assert reference.status == datarefs.INFERRED
         assert reference.target is None
-        assert reference.location is not None and not reference.location.initialized
+        assert reference.load is not None and not reference.load.initialized
     # The store targets and the pointer value differ by exactly 0x600000, which
     # is not the module's ELF base: the two spaces are kept separate on purpose.
     assert references[0x6EC].combined - references[0x6F4].combined == 0x600000

@@ -26,7 +26,9 @@
  * PT_LOAD segment.  The transformation between the two spaces is therefore NOT
  * proven, and the two identifiers below stay distinct on purpose - the task is
  * not allowed to assume they name the same object.  `seto datarefs` records
- * both as INFERRED (their offset inside that segment), never as a section.
+ * both as INFERRED (their offset inside that segment), never as a section, and
+ * marks the HI16/LO16 pairing as order-only too (the stripped module exposes no
+ * symbol identity), so the reference as a whole is never `PROVEN`.
  *
  * The original PRX is stripped. `D_...` names and the inferred global types are
  * provisional address-based labels, not recovered source names. No `mwccpsp` is

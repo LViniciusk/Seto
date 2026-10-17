@@ -8,6 +8,7 @@ from pathlib import Path
 from seto import elf, synthetic
 from seto.datarefs import (
     INFERRED,
+    NOT_APPLICABLE,
     PROVEN,
     UNKNOWN,
     DataTarget,
@@ -225,7 +226,7 @@ def test_load_location_reports_the_segment_offset_and_zero_fill(tmp_path: Path) 
     assert load_location(module, 0x5000) is None
 
 
-def test_recover_references_classifies_proven_inferred_and_unknown(tmp_path: Path) -> None:
+def test_recover_references_keeps_pairing_and_location_apart(tmp_path: Path) -> None:
     parsed = _object(tmp_path)
     rodata = replace(parsed.require_section(".rodata"), addr=0x4850, size=0x40)
     sections = tuple(rodata if item.name == ".rodata" else item for item in parsed.sections)
@@ -234,38 +235,60 @@ def test_recover_references_classifies_proven_inferred_and_unknown(tmp_path: Pat
         filesz=0x1000, memsz=0x2000, flags=0, align=4,
     )
     relocations = (
-        rel(0x00, elf.R_MIPS_HI16, addend=0x0),
-        rel(0x04, elf.R_MIPS_LO16, addend=0x4860),  # .rodata + 0x10 -> PROVEN
-        rel(0x08, elf.R_MIPS_HI16, addend=0x0),
-        rel(0x0C, elf.R_MIPS_LO16, addend=0x1900),  # zero-fill -> INFERRED
-        rel(0x10, elf.R_MIPS_HI16, addend=0x0),     # orphan HI16 -> UNKNOWN
-        rel(0x14, elf.R_MIPS_32, addend=0x3000),    # outside the segment -> UNKNOWN
+        rel(0x00, elf.R_MIPS_LO16, addend=0x4830),                  # orphan LO16
+        rel(0x04, elf.R_MIPS_HI16, addend=0x0, symbol="value"),     # proven pair ->
+        rel(0x08, elf.R_MIPS_LO16, addend=0x4860, symbol="value"),  #   .rodata + 0x10
+        rel(0x0C, elf.R_MIPS_HI16, addend=0x0),                     # order-only pair ->
+        rel(0x10, elf.R_MIPS_LO16, addend=0x4860),                  #   same location
+        rel(0x14, elf.R_MIPS_HI16, addend=0x0, symbol="other"),     # proven pair ->
+        rel(0x18, elf.R_MIPS_LO16, addend=0x1900, symbol="other"),  #   zero-fill
+        rel(0x1C, elf.R_MIPS_HI16, addend=0x0),                     # orphan HI16
+        rel(0x20, elf.R_MIPS_32, addend=0x3000),                    # outside -> UNKNOWN
     )
     module = _module(parsed, sections=sections, segments=(segment,), relocations=relocations)
 
-    references = recover_references(module, ".text", 0, 0x18)
+    references = recover_references(module, ".text", 0, 0x24)
     by_instruction = {reference.instruction: reference for reference in references}
 
-    proven = by_instruction[0x04]
+    proven = by_instruction[0x08]
     assert proven.status == PROVEN
+    assert proven.pairing == PROVEN
+    assert proven.location == PROVEN
     assert proven.target == DataTarget(".rodata", 0x10)
-    assert proven.kind == "hi16-lo16"
-    assert [name for name, _ in proven.relocations] == ["R_MIPS_HI16", "R_MIPS_LO16"]
+    assert proven.unresolved is None
 
-    inferred = by_instruction[0x0C]
+    # The same proven location, but the pair rests on relocation order alone, so
+    # the reference cannot be PROVEN even though its destination is a section.
+    order_only = by_instruction[0x10]
+    assert order_only.target == DataTarget(".rodata", 0x10)
+    assert order_only.location == PROVEN
+    assert order_only.pairing == INFERRED
+    assert order_only.status == INFERRED
+    assert order_only.unresolved is not None
+
+    inferred = by_instruction[0x18]
+    assert inferred.pairing == PROVEN
+    assert inferred.location == INFERRED
     assert inferred.status == INFERRED
     assert inferred.target is None
-    assert inferred.location is not None and not inferred.location.initialized
+    assert inferred.load is not None and not inferred.load.initialized
 
-    orphan = by_instruction[0x10]
-    assert orphan.status == UNKNOWN
-    assert "without a resolvable LO16" in orphan.evidence
+    orphan_hi = by_instruction[0x1C]
+    assert orphan_hi.kind == "hi16"
+    assert orphan_hi.status == UNKNOWN
+    assert "no LO16" in orphan_hi.evidence
 
-    unknown = by_instruction[0x14]
-    assert unknown.status == UNKNOWN
+    orphan_lo = by_instruction[0x00]
+    assert orphan_lo.kind == "lo16"
+    assert orphan_lo.status == UNKNOWN
+    assert "no HI16" in orphan_lo.evidence
+
+    unknown = by_instruction[0x20]
     assert unknown.kind == "r_mips_32"
+    assert unknown.pairing == NOT_APPLICABLE
+    assert unknown.status == UNKNOWN
 
-    assert set(by_instruction) == {0x04, 0x0C, 0x10, 0x14}
+    assert set(by_instruction) == {0x00, 0x08, 0x10, 0x18, 0x1C, 0x20}
 
 
 def test_reference_report_groups_by_function_deterministically(tmp_path: Path) -> None:
@@ -273,8 +296,8 @@ def test_reference_report_groups_by_function_deterministically(tmp_path: Path) -
     rodata = replace(parsed.require_section(".rodata"), addr=0x4850, size=0x40)
     sections = tuple(rodata if item.name == ".rodata" else item for item in parsed.sections)
     relocations = (
-        rel(0x00, elf.R_MIPS_HI16, addend=0x0),
-        rel(0x04, elf.R_MIPS_LO16, addend=0x4860),
+        rel(0x00, elf.R_MIPS_HI16, addend=0x0, symbol="value"),
+        rel(0x04, elf.R_MIPS_LO16, addend=0x4860, symbol="value"),
     )
     module = _module(parsed, sections=sections, relocations=relocations)
 

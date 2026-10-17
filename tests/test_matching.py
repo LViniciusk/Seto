@@ -6,7 +6,7 @@ import pytest
 
 from seto.binio import ParseError
 from seto.elf import R_MIPS_26, R_MIPS_HI16, R_MIPS_LO16, R_MIPS_32, Relocation
-from seto.datarefs import DataTarget
+from seto.datarefs import DataIdentity, DataTarget
 from seto.matching import (
     BLOCKED,
     EVIDENCE_BINARY_RANGE,
@@ -719,8 +719,9 @@ def test_summary_is_json_serialisable() -> None:
 # ------------------------------------------------------- canonical data targets
 
 
-def _same_target(target: DataTarget):
-    return lambda site, addend: target
+def _identity(target: DataTarget, artifact: str = "original"):
+    """A resolver that answers with one artifact-qualified location."""
+    return lambda site, addend: DataIdentity(artifact, target)
 
 
 def test_r_mips_32_resolved_to_the_same_section_offset_matches() -> None:
@@ -731,8 +732,8 @@ def test_r_mips_32_resolved_to_the_same_section_offset_matches() -> None:
         name="f",
         original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
         candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
-        original_data_resolver=_same_target(target),
-        candidate_data_resolver=_same_target(target),
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
     )
     assert result.status == MATCHED
     assert result.resolved_data
@@ -746,8 +747,8 @@ def test_r_mips_32_proven_different_targets_are_nonmatching() -> None:
         name="f",
         original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
         candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
-        original_data_resolver=_same_target(DataTarget(".rodata", 0x10)),
-        candidate_data_resolver=_same_target(DataTarget(".rodata", 0x20)),
+        original_data_resolver=_identity(DataTarget(".rodata", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".rodata", 0x20)),
     )
     assert result.status == NONMATCHING
     assert "R_MIPS_32 data target differs" in result.differences[0].reason
@@ -761,10 +762,49 @@ def test_r_mips_32_without_a_proven_target_is_inconclusive() -> None:
         original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
         candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
         original_data_resolver=lambda site, addend: None,
-        candidate_data_resolver=_same_target(DataTarget(".rodata", 0x10)),
+        candidate_data_resolver=_identity(DataTarget(".rodata", 0x10)),
     )
     assert result.status == INCONCLUSIVE
     assert any("cannot be proven" in item for item in result.limitations)
+
+
+def test_two_artifacts_answering_the_same_offset_are_not_equal() -> None:
+    # ``(.data, 0x20)`` is a location, not an identity.  Two independent ELF files
+    # that each resolve their reference to it must never be treated as naming the
+    # same object - the answers belong to different artifacts.
+    result = compare(
+        _code(0x00000100),
+        _code(0x00009000),
+        name="f",
+        original_relocations=[rel(0, R_MIPS_32, addend=0x100)],
+        candidate_relocations=[rel(0, R_MIPS_32, addend=0x9000)],
+        original_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-a"),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-b"),
+    )
+    assert result.status == INCONCLUSIVE
+    assert not result.resolved_data
+    assert any("different artifacts" in item for item in result.limitations)
+
+
+def test_two_artifacts_answering_the_same_pair_offset_are_not_equal() -> None:
+    result = compare(
+        _code(0x3C040001, 0x24840002),
+        _code(0x3C040000, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x2, symbol="value"),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
+            rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-a"),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x20), artifact="module-b"),
+    )
+    assert result.status == INCONCLUSIVE
+    assert not result.resolved_data
+    assert any("different artifacts" in item for item in result.limitations)
 
 
 def test_hi16_lo16_data_resolver_bridges_a_different_encoding() -> None:
@@ -781,11 +821,11 @@ def test_hi16_lo16_data_resolver_bridges_a_different_encoding() -> None:
             rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
             rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
         ],
-        original_data_resolver=_same_target(target),
-        candidate_data_resolver=_same_target(target),
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
     )
     assert result.status == MATCHED
-    assert any("words 0/1" in item for item in result.resolved_data)
+    assert any(".data+0x20" in item for item in result.resolved_data)
 
 
 def test_hi16_lo16_with_proven_symbols_and_different_targets_is_nonmatching() -> None:
@@ -801,8 +841,8 @@ def test_hi16_lo16_with_proven_symbols_and_different_targets_is_nonmatching() ->
             rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
             rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
         ],
-        original_data_resolver=_same_target(DataTarget(".data", 0x20)),
-        candidate_data_resolver=_same_target(DataTarget(".data", 0x24)),
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
     )
     assert result.status == NONMATCHING
     assert "data target differs" in result.differences[0].reason
@@ -824,8 +864,8 @@ def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
             rel(0, R_MIPS_HI16, addend=0x0),
             rel(4, R_MIPS_LO16, addend=0x3),
         ],
-        original_data_resolver=_same_target(DataTarget(".data", 0x20)),
-        candidate_data_resolver=_same_target(DataTarget(".data", 0x24)),
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
     )
     assert result.status == INCONCLUSIVE
     assert not result.differences
@@ -845,8 +885,8 @@ def test_data_resolution_never_hides_a_non_relocatable_difference() -> None:
             rel(0, R_MIPS_HI16, addend=0x0, symbol="value"),
             rel(4, R_MIPS_LO16, addend=0x3, symbol="value"),
         ],
-        original_data_resolver=_same_target(target),
-        candidate_data_resolver=_same_target(target),
+        original_data_resolver=_identity(target),
+        candidate_data_resolver=_identity(target),
     )
     assert result.status == NONMATCHING
     assert "outside the relocation field" in result.differences[0].reason
