@@ -55,4 +55,13 @@ extern int func_00002F24(void);                                 /* sceNetInet   
 extern int func_00002F3C(void);                                 /* sceNetResolver NID 0xF3370E61 */
 extern int func_00002F1C(int, int);                             /* sceNetApctl    NID 0xE2F91F9B */
 
+/* Additional imports used by the SETO-DECOMP-010 candidates. Names remain
+ * address-derived until the exporting library tables are recovered; the
+ * parameter lists record only the observed call usage, not an SDK prototype. */
+extern int func_00002364(void);                                 /* libehsys NID 0x31454993 */
+extern int func_00002354(void);                                 /* libehsys NID 0x1F190478 */
+extern void func_000008A4(void *arg0, void *arg1);              /* libehsys NID 0x476FD94A */
+extern void func_00001F04(void (*arg0)(void), void (*arg1)(void), void *arg2);
+                                                                /* libehsys NID 0xB4471B5E */
+
 #endif /* SETO_DECOMP_SCE_STUBS_H */

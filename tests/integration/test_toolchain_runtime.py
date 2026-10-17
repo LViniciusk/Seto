@@ -35,6 +35,11 @@ REAL_MATCH_CASES = (
     (0x8C, "func_0000008C.c", "MATCHED", 42, 42),
     (0x178, "func_00000178.c", "MATCHED", 51, 51),
     (0x278, "func_00000278.c", "MATCHED", 56, 56),
+    # SETO-DECOMP-010: all three compile byte-identically (0 differences, 0
+    # relocation issues) and stay INCONCLUSIVE only on data-object identity.
+    (0x0, "func_00000000.c", "INCONCLUSIVE", 7, 13),
+    (0x39C, "func_0000039C.c", "INCONCLUSIVE", 28, 30),
+    (0x414, "func_00000414.c", "INCONCLUSIVE", 31, 41),
 )
 
 
