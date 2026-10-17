@@ -463,7 +463,11 @@ def test_data_relocations_use_the_data_section() -> None:
     parsed = parse(
         build_elf32(
             e_type=ET_MIPS_PSP_PRX,
-            program_headers=[{"type": 1, "vaddr": 0, "filesz": 16, "memsz": 0x2000}],
+            # The PT_LOAD covers only the file-backed .data bytes at sh_offset
+            # 0x5c, mapped to module address 0x1000.
+            program_headers=[
+                {"type": 1, "offset": 0x5C, "vaddr": 0x1000, "filesz": 8, "memsz": 0x2000}
+            ],
             sections=[
                 _text_section(b"\x00" * 8),
                 {
@@ -476,7 +480,7 @@ def test_data_relocations_use_the_data_section() -> None:
                 {
                     "name": ".rel.data",
                     "type": SHT_MIPS_PSPREL,
-                    "data": build_relocations([(0x1000, R_MIPS_32, 0)]),
+                    "data": build_relocations([(0, R_MIPS_32, 0)]),
                     "entsize": 8,
                 },
             ],

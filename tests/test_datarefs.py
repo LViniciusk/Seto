@@ -331,6 +331,7 @@ def test_the_report_carries_the_relocation_inventory(tmp_path: Path) -> None:
         "segment_index": 0,
         "relative_index": 0,
         "addend": "0x00000000",
+        "addend_valid": True,
     }
     assert reference["object_identity"] == NOT_APPLICABLE
 

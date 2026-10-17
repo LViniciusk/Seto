@@ -144,6 +144,7 @@ class RelocationSite:
     addend: int
     symbol: str | None
     symbol_index: int = 0
+    addend_valid: bool = True
 
     @property
     def type_name(self) -> str:
@@ -295,6 +296,10 @@ def relocation_sites(
                     f"{relocation.type_name} relocation has reserved PSP r_info bits "
                     f"0x{reserved:08x}"
                 )
+        if not relocation.addend_valid:
+            limitations.append(
+                f"a {relocation.type_name} relocation has no fully recoverable in-place addend"
+            )
         if relocation.section_offset is None:
             limitations.append(
                 f"a {relocation.type_name} relocation has no resolved section and cannot be placed"
@@ -321,6 +326,7 @@ def relocation_sites(
             addend=relocation.addend,
             symbol=relocation.symbol,
             symbol_index=relocation.symbol_index,
+            addend_valid=relocation.addend_valid,
         )
     return RelocationMap(sites=sites, limitations=tuple(dict.fromkeys(limitations)))
 
@@ -736,6 +742,16 @@ def compare(
             record_difference(hi_index, "relocated word differs outside the relocation field")
             continue
 
+        if not all(
+            site.addend_valid
+            for site in (site_a_hi, site_a_lo, site_b_hi, site_b_lo)
+        ):
+            limitations.append(
+                f"word {hi_index}: HI16/LO16 in-place addend is not fully recoverable "
+                "from the file/zero-fill mapping"
+            )
+            continue
+
         original_value = combine_hi16_lo16(site_a_hi.addend, site_a_lo.addend)
         candidate_value = combine_hi16_lo16(site_b_hi.addend, site_b_lo.addend)
         if original_data_resolver is not None or candidate_data_resolver is not None:
@@ -798,6 +814,13 @@ def compare(
 
         if not outside_mask_equal(index, mask):
             record_difference(index, "relocated word differs outside the relocation field")
+            continue
+
+        if not site_a.addend_valid or not site_b.addend_valid:
+            limitations.append(
+                f"word {index}: {site_a.type_name} in-place addend is not fully recoverable "
+                "from the file/zero-fill mapping"
+            )
             continue
 
         if site_a.type == R_MIPS_32:

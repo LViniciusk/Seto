@@ -21,6 +21,7 @@ from seto.elf import (
     SHT_REL,
     SHT_MIPS_PSPREL,
     SHT_MIPS_PSPREL2,
+    SHT_NOBITS,
     SHT_PROGBITS,
     parse,
 )
@@ -122,7 +123,112 @@ def test_segment_relative_address_overflow_is_not_wrapped() -> None:
     assert relocation.offset == 0x20  # diagnostic raw fallback only
     assert not relocation.application_valid
     assert relocation.section_offset is None
-    assert any("overflows 32 bits" in item for item in module.observations)
+    assert any("exceeds the 32-bit address space" in item for item in module.observations)
+
+
+def test_a_word_ending_at_the_32bit_limit_is_still_valid() -> None:
+    relocations = build_relocations([(0, R_MIPS_32, 0)])
+    module = _psp_module(
+        program_headers=[
+            {"type": 1, "vaddr": 0xFFFFFFFC, "filesz": 0, "memsz": 4},
+        ],
+        relocations=relocations,
+        addr=0xFFFFFFFC,
+    )
+    (relocation,) = module.relocations
+    assert relocation.offset == 0xFFFFFFFC
+    assert relocation.application_valid
+    assert relocation.section_offset == 0
+    assert relocation.file_offset is None
+    assert relocation.addend_valid
+    assert any("zero-filled PT_LOAD tail" in item for item in module.observations)
+
+
+@pytest.mark.parametrize(
+    ("memsz", "raw_offset", "valid"),
+    ((8, 4, True), (8, 5, False), (3, 0, False), (8, 8, False)),
+)
+def test_a_psp_relocation_requires_all_four_bytes_inside_p_memsz(memsz, raw_offset, valid) -> None:
+    relocations = build_relocations([(raw_offset, R_MIPS_32, 0)])
+    module = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": 0, "memsz": memsz}],
+            sections=[
+                {"name": ".bss", "type": SHT_NOBITS, "flags": SHF_ALLOC, "addr": 0, "size": memsz},
+                {"name": ".rel.bss", "type": SHT_MIPS_PSPREL, "data": relocations, "entsize": 8},
+            ],
+        )
+    )
+    (relocation,) = module.relocations
+    assert relocation.application_valid is valid
+    if valid:
+        assert relocation.section_offset == raw_offset
+        assert relocation.file_offset is None
+        assert relocation.addend_valid
+        assert relocation.addend == 0
+        assert len(psp_reloc.psp_inventory(module)["zero_fill_entries"]) == 1
+    else:
+        assert relocation.section_offset is None
+        assert relocation.file_offset is None
+        assert not relocation.addend_valid
+        assert psp_reloc.psp_inventory(module)["complete"] is False
+
+
+def test_a_complete_zero_filled_word_is_not_read_from_section_file_bytes() -> None:
+    module = parse(
+        build_elf32(
+            e_type=ET_MIPS_PSP_PRX,
+            program_headers=[{"type": 1, "vaddr": 0, "filesz": 4, "memsz": 8}],
+            sections=[
+                {
+                    "name": ".text",
+                    "type": SHT_PROGBITS,
+                    "flags": SHF_ALLOC | SHF_EXECINSTR,
+                    "addr": 0,
+                    "data": word(0x11111111),
+                },
+                {"name": ".bss", "type": SHT_NOBITS, "flags": SHF_ALLOC, "addr": 4, "size": 4},
+                {
+                    "name": ".rel.bss",
+                    "type": SHT_MIPS_PSPREL,
+                    "data": build_relocations([(4, R_MIPS_32, 0)]),
+                    "entsize": 8,
+                },
+            ],
+        )
+    )
+    (relocation,) = module.relocations
+    assert relocation.application_valid
+    assert relocation.section_offset == 0
+    assert relocation.file_offset is None
+    assert relocation.addend_valid
+    assert relocation.addend == 0
+    inventory = psp_reloc.psp_inventory(module)
+    assert inventory["complete"]
+    assert inventory["zero_fill_entries"][0]["raw_offset"] == "0x4"
+
+
+def test_a_word_straddling_p_filesz_keeps_its_memory_location_but_not_an_addend() -> None:
+    relocations = build_relocations([(4, R_MIPS_32, 0)])
+    module = _psp_module(
+        program_headers=[{"type": 1, "vaddr": 0, "filesz": 6, "memsz": 8}],
+        relocations=relocations,
+    )
+    (relocation,) = module.relocations
+    assert relocation.application_valid
+    assert relocation.section_offset == 4
+    assert relocation.file_offset is None
+    assert not relocation.addend_valid
+    assert psp_reloc.psp_inventory(module)["complete"] is False
+    result = compare(
+        CODE,
+        CODE,
+        name="straddles-p-filesz",
+        original_relocations=[relocation],
+        candidate_relocations=[relocation],
+    )
+    assert result.status == INCONCLUSIVE
 
 
 def test_a_relocation_naming_an_absent_segment_is_reported_not_dropped() -> None:

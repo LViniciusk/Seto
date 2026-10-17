@@ -495,6 +495,12 @@ A report never conflates:
 
 A segment whose `p_filesz` exceeds its `p_memsz` is rejected at parse time: its
 bytes cannot be mapped, so no address derived from it would mean anything.
+For a valid four-byte application inside `p_memsz` but past `p_filesz`, Seto keeps
+the application/section location distinct from a file offset. A complete word in
+the zero-fill tail has an initial addend of zero and no `file_offset`; a word
+straddling `p_filesz` has `addend_valid: false`, is listed as incomplete, and
+cannot participate in a proven match. The parser never reads adjacent file bytes
+to fill the zero-initialized part.
 
 ### Reproducing the inventory
 
@@ -506,11 +512,12 @@ The JSON now carries `relocation_inventory` (formats, per-section counts, types,
 unknown/unsupported types, segment indices, invalid application locations,
 reserved fields, compressed/segment payloads, and an overall `complete` flag) and, for every
 reference, the raw `r_offset`/`r_info`, the segment fields, the application
-location, the combined addend, the destination, the pairing evidence, pairing and
-numeric-location confidence, cross-artifact identity applicability, and the
-unresolved reason. Unsupported or malformed relocation inventory also makes the
-command exit `5`; the report never claims complete resolution merely because no
-reference happened to land in a selected function.
+location, the combined addend, whether that addend is valid, the destination, the
+pairing evidence, pairing and numeric-location confidence, cross-artifact
+identity applicability, and the unresolved reason. Unsupported or malformed
+relocation inventory also makes the command exit `5`; the report never claims
+complete resolution merely because no reference happened to land in a selected
+function.
 
 ## Matching semantics
 
