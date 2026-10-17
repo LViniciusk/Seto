@@ -30,4 +30,15 @@ extern void func_00002F0C(void); /* stub @ 0x2f0c; sceHttp  NID 0xF9D8EB63 */
 extern void func_00002EF4(void); /* stub @ 0x2ef4; sceHttp  NID 0xD1C8945E */
 extern void func_00002F54(void); /* stub @ 0x2f54; sceSsl   NID 0x191CDEFF */
 
+/* Additional imports used by the SETO-DECOMP-008 candidates. Names remain
+ * address-derived until the exporting library tables are recovered. */
+extern void func_00000964(int value, unsigned int size); /* libehsys NID 0xEA748E31 */
+extern void func_0000295C(int mode, int value);          /* libehsys NID 0x08813E19 */
+extern void func_00002ADC(void);                         /* libehsys NID 0xF1BC43DB */
+extern void func_00002F74(int option);                   /* sceUtility NID 0x64D50C56 */
+extern void func_00002F14(void);                         /* sceNetApctl NID 0xB3EDD0EC */
+extern void func_00002F34(void);                         /* sceNetResolver NID 0x6138194A */
+extern void func_00002F2C(void);                         /* sceNetInet NID 0xA9ED66B9 */
+extern void func_00002F44(void);                         /* sceNet NID 0x281928A9 */
+
 #endif /* SETO_DECOMP_SCE_STUBS_H */
