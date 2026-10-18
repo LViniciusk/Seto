@@ -2171,3 +2171,386 @@ WSL2; a suíte Windows passou 597 testes (21 skips), a integração Windows pass
 envolvem os caminhos alterados. Reviewer: `APPROVE`;
 Test-Auditor: sem bloqueios, revisão estática. CI Ubuntu/Windows Python 3.11/3.12
 do commit `a895c35` passou 8/8.
+
+## SETO-DECOMP-015 — Jump-Table and Initialized Data Equivalence
+
+**Resultado operacional: `PASS`; comparação A: 30/30 words de código e 6/6
+entradas da jump table iguais sob endereços controlados; alegação:
+`ASSUMPTION_DEPENDENT`.** O experimento estende a linkedição controlada da
+SETO-DECOMP-014 para o código *e* os dados gerados pelo compilador para
+`func_0000039C`. Ele recompila a função neste próprio run, monta a `.rodata`
+gerada pelo Metrowerks e o código em `.text` com GNU MIPSel, e compara ambos
+literalmente com as regiões correspondentes do PRX original. Não altera o
+comparador, o parser ELF/relocation, as reconstruções C nem as classificações; o
+status estrito original permanece `INCONCLUSIVE`.
+
+### Compilação fresca e proveniência
+
+Comando reproduzível nesta configuração WSL2 (`python3` = ambiente
+`/home/vinicius/.seto/venvs/seto008-test/bin/python`):
+
+```bash
+PYTHONPATH=src python3 scripts/probe_jump_table_equivalence.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --source decomp/src/func_0000039C.c \
+  --build-dir build/seto015/experiment \
+  --out build/seto015/jump-table-equivalence.json
+```
+
+O script remove o objeto de saída antes de invocar `scripts/match_function.py`;
+só compara depois de validar exit code 5 (`INCONCLUSIVE`) do matcher, 28/30
+words, zero diferenças e zero problemas de relocation no baseline estrito.
+
+| Artefato/parâmetro | Valor observado |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Fonte C SHA-256 | `7d00c468822426f875ea366c9bc89714b20740e72a0c6e78eff3645695e69b89` |
+| Objeto fresco SHA-256 | `776f161be72d985a3eef836141d45263ede9a991867a74699c9ac56cffbc09fd` |
+| Linker script A / B SHA-256 | `bb24d72b97a49deb8195383e6fc478781ba3e086fb6e029d3bdbdac13f9e784e` / `5632ead40c9dc3c1efa4d87dd1cef791ec6fe5a74e4c7379ded621cf52e555a5` |
+| GNU linker/emulação | GNU ld 2.42 / `elf32ltsmip` |
+| Compilador/loader/flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+
+O objeto fresco é ELF32 `ET_REL` little-endian MIPS, `ET_REL`. `.text` tem `0x78`
+bytes (30 words) e `.rodata` tem `0x18` bytes (6 words). As relocations do objeto
+são:
+
+- `.rel.rodata`: seis `R_MIPS_32` para o símbolo definido `func_0000039C`, em
+  offsets de seção `0x0,0x4,…,0x14`, com addends (words in-place)
+  `0x38,0x40,0x48,0x50,0x58,0x60` (offsets relativos ao início da função);
+- `.rel.text`: `R_MIPS_26` no word 2 (`0x3A4`) para o símbolo externo
+  `func_00002364`; `R_MIPS_HI16` no word 7 (`0x3B8`) e `R_MIPS_LO16` no word 9
+  (`0x3C0`) para o símbolo local `@13` (`STT_OBJECT` em `.rodata`, tamanho 24).
+
+Esses seis addends foram re-validados contra o baseline registrado nesta rodada,
+sem construir o resultado a partir deles: o vínculo é conferido no ELF linkado.
+
+### Linkedição controlada e comparação observada
+
+O linker script gerado sob `build/seto015/` fixa `.text 0x39c : SUBALIGN(4)`,
+exige tamanho `0x78`, exige `ADDR/SIZEOF(.rodata)` e o símbolo no endereço; a
+`.rodata` recebe um endereço **atribuído** (`0x4770`, e `0x4774` no controle B).
+`.mwcats` é preservada e só `.text` é executável. A única definição externa
+fornecida ao linker é `func_00002364 = 0x2364`, derivada da stub original
+(`libehsys`, NID `0x31454993`) — uma **atribuição controlada**, não prova de
+identidade.
+
+| Caso | `.rodata` | Resultado literal vs PRX |
+|---|---:|---|
+| A | `0x4770` | **30/30 words e 6/6 entradas iguais**; par HI16/LO16 reconstrói `0x4770`; `R_MIPS_26` aponta `0x2364` |
+| B | `0x4774` | **29/30 words**; só o word `0x3C0` muda (`0x24634770` → `0x24634774`); as entradas da tabela **não** mudam |
+
+As entradas da tabela linkada coincidem com as relocations `R_MIPS_32` do próprio
+objeto aplicadas ao `.text` posicionado (`0x39C + addend`); isso é uma
+consistência necessária, não prova de proveniência por si só. A evidência de que o
+linker consumiu a tabela do compilador é o inventário de relocations validado
+(seis `R_MIPS_32` em ordem contra `func_0000039C`) somado à igualdade literal com
+a tabela original: `0x3D4,0x3DC,0x3E4,0x3EC,0x3F4,0x3FC`.
+
+### Controles negativos
+
+| Controle | Manipulação | Detecção |
+|---|---|---|
+| A (baseline) | tabela `.rodata` em `0x4770` | 6/6 entradas nos corpos de `case` |
+| B (layout) | `.rodata` movida para `0x4774` | só o word LO16 (`0x3C0`) muda |
+| C (troca) | addends in-place das entradas 0 e 1 trocados em cópia do objeto | diferenças exatamente nas entradas 0 e 1; código inalterado (30/30) |
+| D (endereço errado) | entrada 3 redirecionada para `0x3E0` (dentro de `.text`, fora dos `case`) | detectada na entrada 3; endereço não é um corpo de `case` |
+| E (word não relocado) | bit flip no word 0 em cópia do objeto | detectada exatamente no word 0; tabela inalterada (6/6) |
+
+C, D e E são adulterações **pré-link de uma cópia** do objeto; o script preserva e
+reconfere o inventário de relocations (mesmos tipos/offsets/símbolos) antes de
+linkar. Casos negativos adicionais são cobertos por testes unitários sintéticos:
+ELF de arquitetura/tipo/endianness errados, `.rodata` ausente/tamanho errado,
+contagem de relocations ≠ 6, tipo ≠ `R_MIPS_32`, símbolo inesperado, símbolos
+indefinidos/relocations não consumidas no ELF linkado, seções executáveis extras,
+symlink redirecionando a saída e divergência de hash de proveniência.
+
+### Coordenadas do PRX e alcance probatório
+
+As APIs existentes confirmaram o par HI16/LO16 original (`0x3B8`/`0x3C0`,
+pareamento `PROVEN`, addend combinado `0x00004770`) e o destino `.data+0x8`, VA
+`0x4770`, file offset `0x47d0`, com as seis entradas `0x3D4..0x3FC`. As seis
+relocations PSP `R_MIPS_32` da tabela estão no segmento relativo 0; em
+coordenadas module-relative (`psp_reloc.relative_base(..., load_base=0)` +
+`apply_relocation`) os words aplicados coincidem com os bytes file-backed
+(`0x3D4..0x3FC`). Isso registra o modelo de relocation e confirma os bytes, mas
+**não** afirma base de carregamento zero nem aplica as relocations PSP ao ELF
+GNU: `runtime_comparison = NOT_DEMONSTRATED`. A identidade de objeto entre o
+candidato e o módulo original permanece **não comprovada**.
+
+O relatório canônico `build/seto015/jump-table-equivalence.json` tem SHA-256
+`6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c`; duas
+execuções frescas produziram JSON byte a byte idêntico. O status estrito original
+permanece `INCONCLUSIVE`; `promoted_to_matched=false` e
+`independent_identity_proven=false`.
+
+### Reuso e hardening compartilhados
+
+`scripts/probe_common.py` extrai apenas os helpers comprovadamente reutilizáveis:
+execução controlada de processo (argv, timeout, sem `shell=True`), JSON canônico,
+validação de ELF/símbolo indefinido, comparação literal de words, pareamento
+HI16/LO16 efetivo e as proteções de caminho de build. `scripts/probe_link_equivalence.py`
+passou a consumi-los por wrappers que preservam seus nomes/assinaturas públicos; a
+suíte da 014 continuou passando 31/31 e o relatório canônico da 014 foi regenerado
+com o **mesmo** SHA-256 `ebffa9dc…7ba098f6`. O novo experimento reutiliza os mesmos
+controles de filesystem: rejeição de `build`/`build/seto015` como symlink
+(existente, externo ou quebrado) e como arquivo, validação da raiz antes de
+`resolve()`, confinamento da saída e ausência de caminho alternativo de escrita
+após erro. **Não** alega proteção contra TOCTOU.
+
+### Gates de repositório desta rodada
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_jump_table_equivalence.py` | 39 passaram (Windows e WSL2) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram (Windows e WSL2) |
+| Windows / `pytest -q` | 636 passaram, 23 ignorados |
+| WSL2 integração GNU (objeto sintético) | 1 passou (`-k gnu`) |
+| WSL2 015 real (`SETO_JUMP_TABLE_EQUIVALENCE_REAL=1`) | 2 passaram (GNU + compile/link/compare e determinismo) |
+| WSL2 014 real (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+
+A suíte completa WSL2 mantém apenas as falhas ambientais já descritas na 014
+(`test_match_script`, `test_smoke`/`test_toolchain` de inventário e
+`test_toolchain_bootstrap` POSIX com `.sh` CRLF no checkout montado); nenhum
+teste ou módulo adicional foi alterado para mascarar essas falhas.
+
+**Limitações e próximo passo.** A igualdade de código e tabela vale apenas sob o
+layout imposto; a `.rodata` do candidato em `0x4770` é um posicionamento
+experimental, não uma localização original recuperada. Não há demonstração de
+recarregamento de runtime do PSP (a base de carga do módulo não está no arquivo)
+nem prova de identidade entre o candidato e o original. A extensão a `0x414`
+**não** foi tentada nesta rodada: exigiria novas hipóteses de layout/tabela e
+infraestrutura não comprovadamente reutilizável, o que a própria especificação
+coloca fora do escopo enquanto a identidade independente permanece sem prova.
+
+**Revisão.** Reviewer: findings de severidade baixa resolvidos — a linguagem de
+proveniência do cross-check `linked == .text + addend` foi reescrita como
+consistência necessária (não prova por si só); os diretórios de teste passaram a
+ser criados pelos guards compartilhados de build; e a cobertura unitária foi
+ampliada (`.rodata` ausente/curta, seções executáveis extras, classe ELF errada,
+layout `.text` errado e confinamento do `--out`). Test-Auditor: após os
+acréscimos, a matriz requisito→teste não apresenta lacunas materiais; as
+ausências restantes são de baixo risco e o script falha fechado.
+
+## SETO-DECOMP-015-R2 — Divergence Reporting & Control Validation
+
+**Resultado operacional: `PASS` inalterado; nenhuma evidência da 015 foi
+reclassificada ou promovida.** Esta rodada resolve dois apontamentos da auditoria
+final da 015 com correções pequenas e testes sintéticos de regressão, sem tocar
+fontes C, o comparador estrito, os parsers ELF/relocation, as reconstruções C nem
+`scripts/probe_common.py` / `scripts/probe_link_equivalence.py`.
+
+### 1. Divergência real preservada (não substituída por `FAIL` genérico)
+
+Antes, `run_experiment()` lançava `ProbeError("FAIL", …)` assim que o artefato A
+diferia do original; o `main()` capturava a exceção e gravava um `_base_report()`
+genérico, **descartando** os 30 words, as 6 entradas e as diferenças já
+calculados. Agora a comparação é classificada explicitamente:
+
+| Situação | `experiment_status` | `equivalence_claim` | Exit code |
+|---|---|---|---|
+| 30/30 words **e** 6/6 entradas | `PASS` | `ASSUMPTION_DEPENDENT` | `0` |
+| Experimento válido com diferença de código e/ou tabela | `DIVERGENCE` | `DIVERGENCE_UNDER_CONTROLLED_ASSIGNMENTS` | `3` |
+| ELF/relocation/layout inválidos | `FAIL` / `UNSUPPORTED` (via `ProbeError`) | — | `1` |
+| Ferramenta externa ausente | `BLOCKED` | — | `4` |
+
+- `finalize_experiment_report(report)` é uma função pura que deriva a igualdade de
+  `report["code"]`/`report["jump_table"]`, fixa status/alegação e devolve o exit
+  code; o relatório é **gravado antes** de `run_experiment` retornar, então uma
+  divergência nunca vira um relatório vazio.
+- O código de saída de divergência (`DIVERGENCE_EXIT_CODE = 3`) reutiliza a
+  convenção já documentada do repositório para "a verificação rodou e o resultado
+  não é igual" (`seto.cli.EXIT_MISMATCH`), distinto de erro operacional (`1`) e de
+  bloqueio (`4`).
+- As diferenças continuam registradas em `code.differences` /
+  `jump_table.differences`; `promoted_to_matched=false`,
+  `independent_identity_proven=false` e `original_match_status="INCONCLUSIVE"`
+  permanecem, com `PASS` falso impossível (a alegação de igualdade só existe sob o
+  layout imposto).
+- Os controles C/D/E **pressupõem** que A esteja íntegro e igual ao original. Quando
+  o baseline diverge, eles **não são executados** e são registrados como
+  `{status: "NOT_RUN", reason: "baseline comparison diverged", detected: false,
+  promoted_to_matched: false}` (`not_run_controls()`), em vez de afirmar que
+  passaram. Os controles de integridade estrutural (ELF inválido, relocation
+  inconsistente, símbolo não resolvido, layout incompatível, par A→B que não
+  muda só o word LO16) continuam falhando imediatamente como `ProbeError`.
+
+### 2. Validação explícita do endereço do controle B
+
+O controle B só provava que mover a `.rodata` produzia *alguma* diferença em
+relação a A. `validate_layout_destination(baseline_words, moved_words,
+assigned_address=…)` agora recomputa o destino efetivo das instruções linkadas com
+o decodificador compartilhado `paired_effective_address` e **rejeita** um par que
+reconstrua outro endereço: um par A→B que reconstrói `0x4778` (diferença no índice
+esperado `9`, mas destino errado) falha com
+`moved .rodata reconstructs 0x4778, expected 0x4774`. Um par HI16/LO16 inválido
+(HI que não é `LUI`, LO que não consome o registrador) continua rejeitado pelas
+validações já disponíveis. No run real, `variants["B"]
+.hi16_lo16_effective_address == "0x4774"` e a reconstrução é `true`.
+
+### Verificação
+
+O relatório canônico da 015 permaneceu **byte a byte idêntico** (o caminho `PASS`
+não mudou de forma): SHA-256 `6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c`,
+exit code `0`. Os arquivos `probe_common.py` e `probe_link_equivalence.py` não
+foram alterados, então a 014 (relatório `ebffa9dc…7ba098f6`) e o comportamento
+compartilhado seguem intactos.
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_jump_table_equivalence.py` | 54 passaram (39 + 15 casos novos de R2) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram |
+| Windows / `pytest -q` | 651 passaram, 23 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 21 ignorados |
+| WSL2 unit (015 + 014) | 85 passaram |
+| WSL2 015 real (`SETO_JUMP_TABLE_EQUIVALENCE_REAL=1`) | 2 passaram (GNU + compile/link/compare, determinismo e controle B em `0x4774`) |
+| WSL2 014 real (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram |
+| `compileall -q scripts tests` | clean |
+| `git diff --check` | clean |
+
+Os 15 casos novos cobrem: as quatro combinações 30/30×6/6, 29/30×6/6, 30/30×5/6 e
+29/30×5/6 (classificação, exit code, campos preservados e escrita do relatório via
+`finalize_experiment_report` + `_write_report`); o controle B positivo (`0x4774`),
+negativo (diferença no índice `9` mas reconstrói `0x4778`, rejeitado) e par
+HI16/LO16 inválido, inclusive propagado através de `validate_layout_destination`;
+a forma literal de `not_run_controls()` (`NOT_RUN`/`detected=false`); que um layout
+inválido continua falhando como `UNSUPPORTED`/`FAIL` (nunca `DIVERGENCE`); e que
+`DIVERGENCE_EXIT_CODE` é o código de mismatch do repositório, distinto de `0/1/4/5`.
+
+**Limitação de cobertura residual.** O gating dos controles C/D/E dentro de
+`run_experiment` (o ramo `else: control_records = not_run_controls()`) e a
+derivação de `false_positive_controls` são verificados por construção e pelos
+testes de forma/nível unitário, **não** por um teste de pipeline completo: forçar
+uma divergência real exigiria substituir compilador/linker/matcher e o parsing do
+PRX. Os testes sintéticos fixam a forma exata do relatório divergente e o caminho
+de finalização/gravação, mas não exercitam `run_experiment` de ponta a ponta
+(fechada na R3, abaixo).
+
+**Apontamentos de revisão resolvidos.** Reviewer e Test-Auditor (read-only) não
+encontraram bloqueadores, major, regressões de segurança nem violações de escopo;
+os achados menores aplicados nesta rodada foram: `false_positive_controls` passa a
+ser derivado dos controles efetivamente executados (em divergência, `code=[]` e
+`jump_table=["B"]`, já que B é sempre validado e C/D não rodam) em vez de anunciar
+C/D/E que ficaram `NOT_RUN`; a forma de `not_run_controls()` passou a ser asserida
+literalmente; e o controle B ganhou a verificação explícita do índice de diferença
+e a cobertura do par inválido através do validador. A duplicação do literal `3`
+(com o teste que o ata a `seto.cli.EXIT_MISMATCH`) e as duas noções de igualdade
+(contagens vs listas de diferenças, que não podem divergir com os produtores
+atuais) foram mantidas por serem fail-safe e mínimas.
+
+**Limitações.** Uma divergência continua sendo um resultado do experimento sob o
+layout imposto, não prova de identidade; `INCONCLUSIVE` não vira `MATCHED` e a
+extensão a `0x414` segue fora de escopo. A suíte completa WSL2 mantém apenas as
+falhas ambientais já descritas acima.
+
+## SETO-DECOMP-015-R3 — Preserve Valid Jump-Table Divergences
+
+**Resultado operacional: `PASS` inalterado; a 015 continua 30/30 words e 6/6
+entradas no caso A, e o relatório canônico permanece byte a byte idêntico
+(`6b38d24d…`).** A R2 já classificava `DIVERGENCE`, mas duas checagens anteriores
+ainda rejeitavam tabelas **estruturalmente válidas** cujos valores diferiam do PRX
+original, impedindo que a divergência chegasse ao relatório. Esta rodada separa
+"invariante estrutural" de "igualdade histórica" nesses dois pontos, sem alterar
+o resultado positivo nem a semântica do matcher estrito.
+
+### 1. Removida a exigência de addends históricos no candidato
+
+Em `run_experiment()` a condição
+`addends != EXPECTED_OFFSETS or table_words != EXPECTED_OFFSETS → FAIL` foi
+substituída por `validate_candidate_table_invariants(table_relocations,
+table_words)`, que aceita qualquer tabela estruturalmente íntegra:
+
+- `relocation.addend_valid` falso → `UNSUPPORTED`;
+- addends que não batem com os words armazenados no objeto → `FAIL`;
+- destino relativo desalinhado (`% 4 != 0`) ou fora de `[0, FUNCTION_SIZE)` → `FAIL`.
+
+A quantidade, o tipo (`R_MIPS_32`), o símbolo (`func_0000039C`) e a ordem das seis
+relocations continuam garantidos por `candidate_table_relocations()` (`.rodata`
+presente, tamanho `0x18`, uma por entrada nos offsets `0x0..0x14`); não são repetidos
+no helper de invariantes — apenas os testes de rejeição ganharam a asserção do status
+`UNSUPPORTED`.
+
+`EXPECTED_OFFSETS` permanece como referência histórica e alimenta o controle
+negativo C; não é mais condição de igualdade do candidato. A sequência
+`(0x38,0x40,0x48,0x44,0x58,0x60)` agora é aceita, linkada e identificada como
+diferente.
+
+### 2. Destino válido separado de destino historicamente equivalente
+
+`validate_case_destinations(baseline_entries)` foi substituída, na checagem de
+baseline, por `validate_structural_destinations(baseline_entries)`, que exige seis
+entradas alinhadas e dentro de `.text[0x39C:0x414)`. `entry_destination_rows()`
+segue como fonte de diagnóstico, preservando `inside_function` e
+`matches_expected_case`; uma entrada como `0x3E0` (dentro da função, diferente do
+`case` esperado `0x3EC`) passa a produzir a linha
+`{inside_function: true, matches_expected_case: false}` — evidência de divergência,
+não motivo para descartar o relatório. `validate_case_destinations()` foi mantida
+intacta (ainda usada pelos testes de controle negativo), apenas deixou de ser
+precondição de produção.
+
+### 3. Propagação até o relatório final
+
+A checagem de que o linker resolveu as **próprias** relocations do candidato
+(`resolved_entries == baseline_entries → FAIL`) foi preservada. A partir daí o
+fluxo R2 trabalha normalmente: `compare_table_entries()` acha as diferenças →
+`baseline_equal=False` → controles C/D/E ficam `NOT_RUN` → controles estruturais e
+o controle B continuam verificados → `finalize_experiment_report()` produz
+`DIVERGENCE` → `_write_report()` grava tudo antes do retorno → exit code `3`. O
+relatório preserva words originais/linkados, as seis entradas, diferenças,
+relocations/addends, hashes e destinos efetivos.
+
+### 4. Controles anunciados apenas quando executados
+
+Em R2, `false_positive_controls` era derivado da **presença da chave** em
+`control_records`; como `not_run_controls()` mantém as chaves `C`/`D`/`E`, um
+relatório divergente anunciava `C`/`D`/`E` como evidência executada, embora
+estivessem `NOT_RUN`. Agora o campo deriva dos controles cujo `detected` é verdadeiro,
+de modo que uma divergência reporta `code.false_positive_controls=[]` e
+`jump_table.false_positive_controls=["B"]` (B é o controle de layout sempre
+validado), coerente com o mapa `controls` gravado. O relatório `PASS` permanece
+idêntico (ali `C`/`D`/`E` de fato rodaram).
+
+### Verificação e testes
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_jump_table_equivalence.py` | 66 passaram (+12 de R3) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram |
+| Windows / `pytest -q` | 663 passaram, 23 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 21 ignorados |
+| WSL2 unit (015 + 014) | 97 passaram |
+| WSL2 015 real (`SETO_JUMP_TABLE_EQUIVALENCE_REAL=1`) | 2 passaram (A 30/30+6/6, B `0x4774`, C/D/E detectados) |
+| WSL2 014 real (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram (20/20, relatório canônico sem regressão) |
+| Canonical 015 report | inalterado, sha256 `6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c`, exit `0` |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+
+Os 12 casos novos cobrem: tabela válida mas divergente (addend da entrada 3 de
+`0x50` para `0x44`) com código 30/30, tabela 5/6, diferença exata na entrada 3
+(`0x000003EC` → `0x000003E0`), `DIVERGENCE`, exit code `3`, controles C/D/E
+`NOT_RUN`, `false_positive_controls` reduzido a `[]`/`["B"]` e sem promoção a
+`MATCHED`; duas entradas divergentes preservadas de ponta a ponta;
+`validate_structural_destinations` aceitando divergência válida e rejeitando
+desalinhamento/fora-de-faixa/contagem errada; `validate_candidate_table_invariants`
+aceitando a tabela divergente válida e rejeitando addend desalinhado, fora da
+função, inconsistente com o word e inválido (`UNSUPPORTED`); resolução do linker
+divergente dos addends → `FAIL`; contagens que contradizem as listas de diferenças →
+nunca `PASS`; e o baseline 30/30 + 6/6 → `PASS` com A/B/C/D/E preservados,
+`false_positive_controls` honesto e controle B recomputando `0x4774`.
+
+**Caminho de ponta a ponta.** Pela primeira vez um teste unitário percorre
+`run_experiment()` inteiro (comparação + montagem + gravação) usando **apenas
+fixtures ELF sintéticas** e `monkeypatch` apenas nas bordas não sintetizáveis
+(subprocesso do `match_function`, versões de toolchain, disponibilidade das
+ferramentas GNU, a linkagem e os extratores de evidência do PRX
+`_original_table_evidence`/`_original_call_evidence`/`_psp_region_relocations`).
+Isso fecha a "limitação de cobertura residual" da R2; não há opção de CLI para
+injetar objetos arbitrários na execução de produção.
+
+**Preservações.** O matcher estrito e os parsers ELF/MIPS não foram tocados
+(nenhuma mudança sob `src/`), então o baseline do audit 013 (7 `MATCHED`, 8
+`INCONCLUSIVE`, 0 `NONMATCHING`, 60 words pendentes) segue válido por construção;
+não foi reexecutado nesta rodada. `probe_common.py` e a 014 permanecem intactos. A
+suíte WSL2 completa mantém apenas as falhas ambientais já descritas.

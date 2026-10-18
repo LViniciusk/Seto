@@ -24,6 +24,25 @@ for _path in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+from probe_common import (  # noqa: E402
+    ProbeError,
+    canonical_json,
+    compare_word_sequences as _compare_word_sequences,
+    ensure_build_dir as _ensure_build_dir,
+    paired_effective_address,
+    prepare_build_file as _prepare_build_file,
+    relative as _relative_common,
+    repo_path as _repo_path_common,
+    require_mips_elf as _require_mips_elf,
+    run as _run_common,
+    validate_link_has_no_unresolved,
+    validate_nonrelocated_tamper as _validate_nonrelocated_tamper,
+    validate_recorded_hash,
+    validate_saved_match_record,
+    validated_build_root as _validated_build_root_common,
+    write_build_bytes as _write_build_bytes,
+    write_build_text as _write_build_text,
+)
 from seto import datarefs, elf, imports, matching, mips, psp_reloc  # noqa: E402
 from seto.binio import ParseError  # noqa: E402
 from seto.hashing import sha256_file  # noqa: E402
@@ -48,48 +67,12 @@ NM = "mipsel-linux-gnu-nm"
 FILE = "file"
 
 
-class ProbeError(Exception):
-    """An objective experiment error with a report classification."""
-
-    def __init__(self, status: str, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-
-
-def canonical_json(value: object) -> str:
-    """Serialize stable report data without timestamps or absolute paths."""
-    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-
-
 def compare_word_sequences(
     original: Sequence[int], candidate: Sequence[int], *, address: int = FUNCTION_ADDRESS
 ) -> list[dict[str, object]]:
     """Compare all words literally; no relocation masks or normalization apply."""
-    if len(original) != FUNCTION_WORDS or len(candidate) != FUNCTION_WORDS:
-        raise ParseError(
-            f"expected {FUNCTION_WORDS} words on each side; "
-            f"got original={len(original)}, candidate={len(candidate)}"
-        )
-    return [
-        {
-            "word_index": index,
-            "address": f"0x{address + index * 4:x}",
-            "original": f"0x{left:08x}",
-            "linked": f"0x{right:08x}",
-        }
-        for index, (left, right) in enumerate(zip(original, candidate, strict=True))
-        if left != right
-    ]
-
-
-def paired_effective_address(hi_word: int, lo_word: int) -> int:
-    """Decode the linked LUI/ADDIU pair using signed LO16 semantics."""
-    if mips.opcode(hi_word) != 0x0F or mips.rs(hi_word) != 0:
-        raise ParseError("HI16 site is not a LUI instruction")
-    if mips.opcode(lo_word) != 0x09 or mips.rt(hi_word) != mips.rs(lo_word):
-        raise ParseError("LO16 site is not an ADDIU consuming the LUI register")
-    return matching.combine_hi16_lo16(
-        mips.immediate(hi_word), mips.signed_immediate(lo_word)
+    return _compare_word_sequences(
+        original, candidate, address=address, expected_words=FUNCTION_WORDS
     )
 
 
@@ -98,11 +81,6 @@ def equivalence_claim(equal_words: int) -> str:
     if equal_words == FUNCTION_WORDS:
         return "ASSUMPTION_DEPENDENT"
     return "DIVERGENCE_UNDER_CONTROLLED_ASSIGNMENTS"
-
-
-def validate_recorded_hash(label: str, actual: str, recorded: object) -> None:
-    if not isinstance(recorded, str) or actual != recorded:
-        raise ProbeError("FAIL", f"{label} SHA-256 does not match its compile provenance record")
 
 
 def validate_match_baseline(record: dict[str, object], returncode: int) -> dict[str, object]:
@@ -122,15 +100,6 @@ def validate_match_baseline(record: dict[str, object], returncode: int) -> dict[
     return payload
 
 
-def validate_saved_match_record(
-    stdout_record: dict[str, object], saved_record: dict[str, object]
-) -> None:
-    """Require the persisted match_function provenance record to match this run."""
-    expected = {key: value for key, value in stdout_record.items() if key != "match"}
-    if saved_record != expected:
-        raise ProbeError("FAIL", "persisted match_function record differs from this fresh invocation")
-
-
 def validate_linked_text_layout(module: elf.ElfFile) -> elf.Section:
     section = module.require_section(".text")
     if section.addr != FUNCTION_ADDRESS or section.size != FUNCTION_SIZE:
@@ -139,14 +108,6 @@ def validate_linked_text_layout(module: elf.ElfFile) -> elf.Section:
             f"linked .text layout is {section.addr:#x}/{section.size:#x}, expected 0x4b8/0x50",
         )
     return section
-
-
-def validate_link_has_no_unresolved(module: elf.ElfFile) -> None:
-    if module.relocations:
-        raise ProbeError("FAIL", f"linked ELF contains unconsumed relocations: {[r.summary() for r in module.relocations]}")
-    undefined = [symbol.name for symbol in module.symbols if symbol.shndx == elf.SHN_UNDEF and symbol.name]
-    if undefined:
-        raise ProbeError("FAIL", f"linked ELF has undefined symbols: {undefined}")
 
 
 def validate_address_controls(
@@ -168,71 +129,27 @@ def validate_nonrelocated_tamper(
     word_index: int,
     relocation_sites: dict[int, matching.RelocationSite],
 ) -> list[dict[str, object]]:
-    if word_index in relocation_sites:
-        raise ProbeError("FAIL", f"tamper word {word_index} is relocated")
-    differences = compare_word_sequences(original, tampered)
-    if [row["word_index"] for row in differences] != [word_index]:
-        raise ProbeError("FAIL", "nonrelocated instruction tamper was not isolated and detected")
-    return differences
-
-
-def _inside(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+    return _validate_nonrelocated_tamper(
+        original,
+        tampered,
+        word_index=word_index,
+        relocation_sites=relocation_sites,
+        address=FUNCTION_ADDRESS,
+        expected_words=FUNCTION_WORDS,
+    )
 
 
 def _validated_build_root() -> Path:
     """Reject redirected build roots before resolving any path components."""
-    build = REPO_ROOT / "build"
-    root = build / "seto014"
-    for path in (build, root):
-        if path.is_symlink():
-            raise ProbeError("FAIL", f"build directory must not be a symlink: {path}")
-        if path.exists() and not path.is_dir():
-            raise ProbeError("FAIL", f"build path is not a directory: {path}")
-    return root.resolve()
-
-
-def _ensure_build_dir(path: Path, build_root: Path) -> None:
-    if path.is_symlink():
-        raise ProbeError("FAIL", f"build directory may not be a symlink: {path.as_posix()}")
-    path.mkdir(parents=True, exist_ok=True)
-    if not _inside(path, build_root) or not path.is_dir():
-        raise ProbeError("FAIL", f"build directory escapes its allowed root: {path}")
-
-
-def _prepare_build_file(path: Path, build_root: Path) -> None:
-    if path.is_symlink():
-        raise ProbeError("FAIL", f"build output may not be a symlink: {path.as_posix()}")
-    if not _inside(path, build_root):
-        raise ProbeError("FAIL", f"build output escapes its allowed root: {path}")
-    if path.exists() and not path.is_file():
-        raise ProbeError("FAIL", f"build output is not a regular file: {path.as_posix()}")
-
-
-def _write_build_text(path: Path, text: str, build_root: Path) -> None:
-    _prepare_build_file(path, build_root)
-    path.write_text(text, encoding="utf-8")
-
-
-def _write_build_bytes(path: Path, data: bytes, build_root: Path) -> None:
-    _prepare_build_file(path, build_root)
-    path.write_bytes(data)
+    return _validated_build_root_common(REPO_ROOT, subdir="seto014")
 
 
 def _repo_path(value: Path, *, allowed_root: Path) -> Path:
-    path = value if value.is_absolute() else REPO_ROOT / value
-    path = path.resolve()
-    if not _inside(path, allowed_root):
-        raise ProbeError("FAIL", f"path escapes allowed tree: {value}")
-    return path
+    return _repo_path_common(value, repo_root=REPO_ROOT, allowed_root=allowed_root)
 
 
 def _relative(path: Path) -> str:
-    return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+    return _relative_common(path, REPO_ROOT)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -248,34 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
 def _run(
     argv: list[str],
     *,
-    cwd: Path = REPO_ROOT,
+    cwd: Path | None = None,
     timeout: int = 300,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-
-
-def _require_mips_elf(module: elf.ElfFile, *, file_type: int, label: str) -> None:
-    header = module.header
-    if header.ei_class != elf.ELFCLASS32:
-        raise ProbeError("UNSUPPORTED", f"{label} is not ELF32")
-    if header.ei_data != elf.ELFDATA2LSB:
-        raise ProbeError("UNSUPPORTED", f"{label} is not little-endian")
-    if header.e_machine != elf.EM_MIPS:
-        raise ProbeError("UNSUPPORTED", f"{label} is not MIPS")
-    if header.e_type != file_type:
-        raise ProbeError(
-            "UNSUPPORTED",
-            f"{label} has type {header.file_type_name}, expected {elf.FILE_TYPE_NAMES[file_type]}",
-        )
+    return _run_common(argv, cwd=REPO_ROOT if cwd is None else cwd, timeout=timeout, env=env)
 
 
 def _function_words(module: elf.ElfFile, start: int, size: int, *, label: str) -> tuple[int, ...]:
