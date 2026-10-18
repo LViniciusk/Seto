@@ -177,6 +177,22 @@ def _validated_build_root() -> Path:
     return validated_build_root(REPO_ROOT, subdir="seto017")
 
 
+def _wipe_stale_build_artifacts(paths: Sequence[Path], build_root: Path) -> None:
+    """Screen output paths, then remove any stale file so the writes are fresh.
+
+    ``Path.exists()`` follows symlinks, so a broken symlink is invisible to it
+    and would survive a naive ``unlink``; ``match_function.py`` then resolves the
+    report path through that link and could write elsewhere under the repository,
+    outside the permitted build tree.
+    Screening every path with ``prepare_build_file`` first rejects an existing or
+    broken symlink (and any non-regular file or path outside ``build_root``),
+    keeping the fresh compilation confined to the build tree.
+    """
+    for path in paths:
+        prepare_build_file(path, build_root)
+        path.unlink(missing_ok=True)
+
+
 def ordered_inventory() -> list[tuple[int, str, str, int, int]]:
     """Return REAL_MATCH_CASES sorted strictly by starting module address."""
     return sorted(REAL_MATCH_CASES, key=lambda case: case[0])
@@ -885,11 +901,10 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         obj_path = objects_dir / obj_name
         report_path = objects_dir / f"{c_name}.match.json"
 
-        # Wipe previous artifact to guarantee fresh compilation
-        if obj_path.exists():
-            obj_path.unlink()
-        if report_path.exists():
-            report_path.unlink()
+        # Guarantee fresh compilation.  A broken symlink is invisible to
+        # Path.exists(), so both paths are screened before the subprocess runs:
+        # a symlinked object or report is rejected instead of followed.
+        _wipe_stale_build_artifacts((obj_path, report_path), build_root)
 
         match_cmd = [
             sys.executable,

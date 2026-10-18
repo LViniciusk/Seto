@@ -2929,3 +2929,59 @@ de que apenas `.text` é executável) e o `import json` não usado nos testes.
 | WSL2 `pytest -q` | 720 passaram, 12 ignorados, 9 falhas ambiente pré-existentes (`test_match_script`, `test_smoke`, `test_toolchain`, `test_toolchain_bootstrap`; arquivos não tocados, reproduzidas em worktree limpo do baseline) |
 | Probe standalone (`probe_integrated_module_equivalence.py`) | exit code `0`, relatório canônico determinístico |
 | `compileall -q src scripts tests` / `git diff --check` | clean / clean |
+
+## SETO-DECOMP-017-R3 — Guarda de Caminho de Saída
+
+**Resultado: `PASS` (inalterado); nenhum resultado científico mudou.** Fecha uma
+lacuna objetiva de confinamento de escrita em `build/seto017/`.
+
+### 1. Vulnerabilidade
+
+Antes de invocar `match_function.py` por função, a sonda apagava os artefatos
+antigos com `if obj_path.exists(): obj_path.unlink()` (e o mesmo para
+`report_path`). Como `Path.exists()` segue symlinks, um symlink **quebrado** é
+invisível para ele: o wipe não acontece, e `relative(report_path, REPO_ROOT)`
+resolve o link para o seu alvo. Se o alvo estiver dentro do repositório, mas
+fora de `build/seto017/`, o subprocesso grava o relatório nesse alvo — **fora
+da árvore de build permitida** — e as verificações seguintes
+(`report_path.is_file()` / `read_text()`) leem de volta através do link, de modo
+que a fuga passa despercebida e o experimento ainda termina com sucesso.
+
+Demonstração A/B (symlink quebrado para `<repo>/build/r3-escape-demo.json`):
+
+| Versão | Exit code | Arquivo externo criado |
+|---|---|---|
+| `7216376` (pré-R3) | `0` (sucesso silencioso) | **sim** — `build/r3-escape-demo.json` |
+| R3 | `1` (`FAIL`) | **não** |
+
+### 2. Correção
+
+Nova função `_wipe_stale_build_artifacts(paths, build_root)` reutiliza
+`prepare_build_file()` (que rejeita symlink — quebrado ou não — via
+`is_symlink()`, caminhos fora de `build_root` e não-arquivos regulares) **antes**
+de `unlink(missing_ok=True)`. Ela é aplicada aos caminhos do objeto e do
+relatório antes de `match_function.py`, exatamente como o idioma já usado pelos
+probes 014 (`probe_link_equivalence.py:590-593`) e 016
+(`probe_multi_reference_equivalence.py:1200-1204`). A recompilação fresca é
+preservada (o arquivo regular obsoleto continua sendo removido).
+
+### 3. Testes
+
+- `test_wipe_stale_build_artifacts_rejects_broken_symlink_without_creating_target`: symlink quebrado → falha fechada, destino externo inexistente permanece inexistente.
+- `test_wipe_stale_build_artifacts_rejects_when_the_report_path_is_a_symlink`: comprova a guarda do caminho vulnerável do relatório, antes de invocar o subprocesso.
+- `test_wipe_stale_build_artifacts_rejects_valid_symlink_and_preserves_target`: symlink válido → rejeitado, alvo intacto.
+- `test_wipe_stale_build_artifacts_removes_stale_regular_files_for_fresh_compilation`: objetos/relatórios regulares obsoletos → removidos; idempotente.
+- `test_wipe_stale_build_artifacts_rejects_a_path_outside_the_build_root`: caminho fora de `build_root` → rejeitado.
+- `test_wipe_stale_build_artifacts_rejects_a_directory_at_the_output_path`: diretório no caminho de saída → rejeitado.
+
+### 4. Portões (R3)
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `tests/test_probe_integrated_module_equivalence.py` | Windows & WSL2 | **30/30** |
+| Suíte completa | Windows (`pytest -q`) | 720 passaram, 27 ignorados |
+| Suíte completa | WSL2 (`pytest -q`) | 726 passaram, 12 ignorados, 9 falhas ambiente pré-existentes |
+| Integração real 014 + 015 + 016 + 017 (opt-ins ligados) | WSL2 | 45 passaram, 3 ignorados |
+| Relatório canônico / ELF integrado | WSL2 | `7a3ddf01…` / `6b447e5e…` (inalterados) |
+| A/B com symlink quebrado para arquivo dentro do repositório | WSL2 | Pré-R3: `rc=0`, arquivo fora de `build/seto017/` criado; R3: `rc=1`, nenhum arquivo fora da árvore de build criado |
+| `compileall -q src scripts tests` / `git diff --check` | Windows | clean / clean |
