@@ -2005,3 +2005,138 @@ de linker, que permanece não executado pelo bloqueio acima.
 | `compileall -q src scripts tests` | clean |
 | `seto verify` | ISO OK (`FB22D0F0…C906`) |
 | Linker smoke HI16/LO16 e controles `0x4830`/`0x4834` | Não executados: linker MIPS ausente; nenhum resultado afirmado |
+
+### R2 — Controlled Link-Time Comparison
+
+**Resultado operacional: `PASS`; comparação A: 20/20 words iguais sob endereços
+controlados; alegação: `ASSUMPTION_DEPENDENT`.** Esta continuação usa o linker GNU
+MIPSel validado na ENV-014, recompila o candidato neste próprio run e compara
+literalmente os 20 words do ELF linkado com os bytes file-backed do PRX em
+`.text[0x4B8:0x508]`. Não altera o comparador nem os relatórios oficiais de
+matching.
+
+#### Compilação fresca e proveniência
+
+Comando reproduzível nesta configuração WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/probe_link_equivalence.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --source decomp/src/func_000004B8.c \
+  --build-dir build/seto014/r2/integration-real \
+  --out build/seto014/link-equivalence.json
+```
+
+O script remove o objeto de saída local antes de invocar `scripts/match_function.py`;
+esse último só compara depois de validar o exit code zero do compilador. A invocação
+completa terminou em 5, que é o exit code esperado do matcher para `INCONCLUSIVE`.
+O relatório JSON confirmou 18/20 words, zero diferenças e zero problemas de
+relocation no baseline estrito.
+
+| Artefato/parâmetro | Valor observado |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Fonte C SHA-256 | `71b84bca92e2f2fd084e0a4a18849a6c7bc169e07faf856d9d808068bf52e9a8` |
+| Objeto fresco SHA-256 | `17cce92e8424bfded12b9ee4a26363ec7ac19c36f8bf795af02d05a22904425f` |
+| Linker script SHA-256 | `8d62c76a039a7fde59be6d80515610c7ce859aa9adb8cc29ae8eb023edceffaa` |
+| GNU linker/emulação | GNU ld 2.42 / `elf32ltsmip` |
+| Compilador/loader/flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+
+O objeto novo foi conferido como ELF32 little-endian MIPS `ET_REL`; contém o par
+`R_MIPS_HI16`/`R_MIPS_LO16` para `D_00004830`, quatro `R_MIPS_26` de chamadas e
+`.rel.mwcats` com `R_MIPS_32` para `func_000004B8`. Esse SHA coincide com o artefato
+anterior porque o compilador reproduziu os mesmos bytes; o run atual removeu e
+recriou o objeto e validou seu hash contra o registro de `match_function.py`.
+
+#### Linkedição e comparação observada
+
+O script temporário, gerado somente sob `build/seto014/`, fixa
+`.text 0x4B8 : SUBALIGN(4)`, exige tamanho `0x50` e endereço do símbolo, mantém
+`.mwcats` e verifica que apenas `.text` é executável. O linker não inseriu código,
+stubs ou trampolins; o ELF de saída é ELF32 little-endian MIPS `ET_EXEC`, com 20
+words e sem relocations remanescentes ou símbolos indefinidos. Os únicos símbolos
+externos definidos para a linkedição foram:
+
+```text
+D_00004830      = 0x4830   (varia para B/C)
+func_00000894   = 0x894
+func_00000854   = 0x854
+func_00002D0C   = 0x2D0C
+func_000008A4   = 0x8A4
+```
+
+As quatro chamadas foram correlacionadas com entradas `libehsys` do import table
+original (`0x894`/NID `0xEC6F1CF2`, `0x854`/`0x10F3BB61`, `0x2D0C`/`0x57018B7C`,
+`0x8A4`/`0x476FD94A`). Os endereços fornecidos ao linker continuam sendo
+**atribuições controladas** para o candidato, não prova de identidade dos seus
+símbolos.
+
+| Caso | Atribuição de `D_00004830` | Comparação literal com PRX | HI16/LO16 observado |
+|---|---:|---:|---|
+| A | `0x4830` | **20/20 iguais**, nenhuma diferença | HI `0x0000`, LO `0x4830`, efetivo `0x4830` |
+| B | `0x4834` | **19/20 iguais**, word `0x4D0`: `0x24A54830` → `0x24A54834` | LO muda; o par, como unidade semântica, passa a apontar a `0x4834` |
+| C | `0x8004` | **18/20 iguais**, words `0x4C4` e `0x4D0` diferem | HI `0x0001`, LO `0x8004`, signed LO `-32764`, efetivo `0x8004` |
+
+O controle adicional copiou o objeto fresco e alterou somente o word não relocável em
+`0x4B8` (`0x27BDFFD0` → `0x27BDFFD1`). A comparação detectou exatamente essa
+diferença; o objeto original e a fonte C não foram alterados. O caso C valida carry,
+não representa uma hipótese sobre o endereço real.
+
+#### Coordenadas do PRX e alcance probatório
+
+As APIs existentes do Seto confirmaram o par original em `0x4C4`/`0x4D0`, com
+pareamento por fluxo de registradores, e o destino original `.data+0xC8`, VA
+`0x4830`, offset de arquivo `0x4890`. Os 14 bytes foram lidos diretamente da seção
+original e são `/PSP/SAVEDATA/`; nenhum dado foi copiado para o candidato. A
+identidade entre o símbolo candidato `D_00004830` e esse objeto original continua
+**não comprovada**.
+
+As seis relocations PSP no intervalo (`HI16`, `LO16` e quatro `R_MIPS_26`) referem-se
+ao segmento relativo 0. `psp_reloc.relative_base(..., load_base=0)` e
+`apply_relocation()` registram apenas o modelo module-relative, que preserva os
+words file-backed; isso não afirma que o módulo seja carregado em base zero. A base
+real em runtime não foi inferida. Portanto, os 20/20 de A são uma comparação válida
+dos bytes no arquivo sob o layout escolhido, mas **não demonstram equivalência de
+runtime**. As relocations PSP não foram aplicadas uma segunda vez aos bytes
+linkados.
+
+O relatório canônico `build/seto014/link-equivalence.json` tem SHA-256
+`ebffa9dcb227071c58f0e8e3d7fead35ad94544e060268a9e2ee56cf7ba098f6`. Duas execuções
+frescas produziram JSONs byte a byte idênticos. O status estrito original permanece
+`INCONCLUSIVE`; o resultado não usa `MATCHED`, `verified_decompilation=True`, nem
+identidade verificada.
+
+### Testes, gates e revisão da R2
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_link_equivalence.py` | 18 passaram |
+| WSL2 integração R2 (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram; smoke GNU + compile/link/compare real e determinismo |
+| Windows / `pytest -q` | 583 passaram, 21 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 19 ignorados |
+| WSL2 / `pytest -m integration -q` com opt-in real | 39 passaram, 3 ignorados |
+| `compileall -q src scripts tests` | clean |
+| `seto verify` | ISO OK (`FB22D0F0…C906`) |
+| Auditoria global 013, saída separada em `build/` | `PASS`, hash inalterado `108ae293…d8c1e653` |
+
+No `pytest -q` completo em WSL2 sobre este checkout montado pelo Windows, foram
+observados 588 passes, 9 falhas e 8 skips. As falhas foram nos testes não alterados
+`test_match_script::test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces`,
+cinco casos de `test_smoke.py`, um de `test_toolchain.py` que observou Wibo visível
+neste WSL, e os dois testes POSIX de `test_toolchain_bootstrap.py` que receberam
+scripts `.sh` com CRLF no checkout montado. Nenhum código ou configuração alheios à
+R2 foi alterado para mascarar essas falhas. A suíte completa Windows passou; a CI
+Ubuntu/Windows é registrada nos checks do PR.
+
+**Test-Auditor:** não encontrou lacunas materiais após a revisão dos controles e
+proveniência; confirmou que as atribuições não promovem identidade. A revisão foi
+estática e não executou os artifacts independentemente. **Reviewer:** `APPROVE`;
+após correção do offset do controle tamper, a ferramenta exige `.text` de `0x50`
+bytes com o símbolo-alvo no offset zero e o teste verifica o ELF linkado negativo.
+
+**Próximo passo técnico:** obter evidência independente que relacione
+`D_00004830` ao objeto original (por exemplo, objeto/linker map ou metadados de
+debug autenticados) e, para uma conclusão de runtime, o load base real usado pelo
+PSP. Os 20/20 words sob as hipóteses atuais não bastam para avançar a classificação
+estrita nem justificam ampliar esta rodada às outras funções.
