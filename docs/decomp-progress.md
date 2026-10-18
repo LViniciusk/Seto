@@ -2111,9 +2111,9 @@ identidade verificada.
 
 | Gate | Resultado |
 |---|---|
-| `tests/test_probe_link_equivalence.py` | 18 passaram |
+| `tests/test_probe_link_equivalence.py` | 27 passaram |
 | WSL2 integração R2 (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram; smoke GNU + compile/link/compare real e determinismo |
-| Windows / `pytest -q` | 584 passaram, 21 ignorados |
+| Windows / `pytest -q` | 593 passaram, 21 ignorados |
 | Windows / `pytest -m integration -q` | 23 passaram, 19 ignorados |
 | WSL2 / `pytest -m integration -q` com opt-in real | 39 passaram, 3 ignorados |
 | `compileall -q src scripts tests` | clean |
@@ -2123,7 +2123,7 @@ identidade verificada.
 | CI GitHub Windows / Python 3.11 e 3.12 | 4/4 checks passaram |
 
 No `pytest -q` completo em WSL2 sobre este checkout montado pelo Windows, foram
-observados 588 passes, 9 falhas e 8 skips. As falhas foram nos testes não alterados
+observados 597 passes, 9 falhas e 8 skips. As falhas foram nos testes não alterados
 `test_match_script::test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces`,
 cinco casos de `test_smoke.py`, um de `test_toolchain.py` que observou Wibo visível
 neste WSL, e os dois testes POSIX de `test_toolchain_bootstrap.py` que receberam
@@ -2142,3 +2142,25 @@ bytes com o símbolo-alvo no offset zero e o teste verifica o ELF linkado negati
 debug autenticados) e, para uma conclusão de runtime, o load base real usado pelo
 PSP. Os 20/20 words sob as hipóteses atuais não bastam para avançar a classificação
 estrita nem justificam ampliar esta rodada às outras funções.
+
+**Hardening local dos artefatos R2:** `scripts/probe_link_equivalence.py` agora
+valida `build` e `build/seto014` antes de resolver a raiz; symlinks existentes ou
+quebrados e arquivos no lugar de diretórios são rejeitados. A raiz ausente é aceita
+sem criação pelo helper. `_validate_arguments`, linkedição, inspeção, gravação de
+relatório e o tratamento de erro usam o helper único. Se a raiz for inválida, o
+erro original vai para stderr com exit não zero e o programa não tenta gravar
+relatório ali nem escolhe outro destino.
+
+Os testes cobrem raiz real/ausente, symlinks externos/quebrados em ambos os níveis,
+arquivos nos caminhos de raiz e uma chamada pelo fluxo de `main()` com sentinela
+externa intacta e nenhuma escrita redirecionada. O experimento R2 permanece
+determinístico e com o mesmo SHA-256; nenhum teste altera o PRX ou o objeto fonte.
+Essas verificações protegem contra redirecionamentos já existentes na árvore local;
+**não** alegam proteção contra alterações concorrentes (TOCTOU) do filesystem.
+
+Neste hardening: `tests/test_probe_link_equivalence.py` passou 27/27 em Windows e
+WSL2; a suíte Windows passou 593 testes (21 skips), e a integração WSL2 R2 passou
+39 testes (3 skips). A suíte WSL2 completa preserva as 9 falhas/8 skips ambientais
+já descritos acima; elas não envolvem os caminhos alterados. Reviewer: `APPROVE`;
+Test-Auditor: sem bloqueios, revisão estática. A CI da atualização de segurança será
+registrada após o novo commit do PR.

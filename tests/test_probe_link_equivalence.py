@@ -220,3 +220,93 @@ def test_input_path_cannot_escape_the_seto014_build_tree() -> None:
     root = (REPO_ROOT / "build/seto014").resolve()
     with pytest.raises(probe.ProbeError, match="escapes allowed tree"):
         probe._repo_path(Path("../../private/original/module.prx"), allowed_root=root)
+
+
+def test_validated_build_root_accepts_real_and_missing_directories_without_creating_them(
+    tmp_path, monkeypatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    root = probe._validated_build_root()
+    assert root == (repo / "build/seto014").resolve()
+    assert not (repo / "build").exists()
+
+    (repo / "build").mkdir()
+    root = probe._validated_build_root()
+    assert root == (repo / "build/seto014").resolve()
+    assert (repo / "build").is_dir()
+    assert not (repo / "build/seto014").exists()
+
+    (repo / "build/seto014").mkdir()
+    assert probe._validated_build_root() == (repo / "build/seto014").resolve()
+
+
+@pytest.mark.parametrize("component", ["build", "seto014"])
+def test_validated_build_root_rejects_regular_files(tmp_path, monkeypatch, component) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    path = repo / "build"
+    if component == "seto014":
+        path.mkdir()
+        path = path / "seto014"
+    path.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(probe.ProbeError, match="build path is not a directory"):
+        probe._validated_build_root()
+
+
+def _create_symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"platform does not permit local symlink creation: {exc}")
+
+
+@pytest.mark.parametrize("component", ["build", "seto014"])
+@pytest.mark.parametrize("broken", [False, True], ids=["external", "broken"])
+def test_validated_build_root_rejects_symlinks_before_resolve(
+    tmp_path, monkeypatch, component, broken
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    if not broken:
+        outside.mkdir()
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    link = repo / "build"
+    if component == "seto014":
+        link.mkdir()
+        link = link / "seto014"
+    target = outside / "does-not-exist" if broken else outside
+    _create_symlink_or_skip(link, target)
+    with pytest.raises(probe.ProbeError, match="build directory must not be a symlink"):
+        probe._validated_build_root()
+
+
+@pytest.mark.parametrize("component", ["build", "seto014"])
+def test_invalid_build_root_never_writes_report_to_symlink_target(
+    tmp_path, monkeypatch, component, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    monkeypatch.chdir(repo)
+    link = repo / "build"
+    if component == "seto014":
+        link.mkdir()
+        link = link / "seto014"
+    _create_symlink_or_skip(link, outside)
+
+    exit_code = probe.main([])
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "build directory must not be a symlink" in captured.err
+    assert "PASS" not in captured.out
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert not (outside / "link-equivalence.json").exists()
