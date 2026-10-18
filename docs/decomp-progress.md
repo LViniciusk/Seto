@@ -2113,12 +2113,14 @@ identidade verificada.
 |---|---|
 | `tests/test_probe_link_equivalence.py` | 18 passaram |
 | WSL2 integração R2 (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram; smoke GNU + compile/link/compare real e determinismo |
-| Windows / `pytest -q` | 583 passaram, 21 ignorados |
+| Windows / `pytest -q` | 584 passaram, 21 ignorados |
 | Windows / `pytest -m integration -q` | 23 passaram, 19 ignorados |
 | WSL2 / `pytest -m integration -q` com opt-in real | 39 passaram, 3 ignorados |
 | `compileall -q src scripts tests` | clean |
 | `seto verify` | ISO OK (`FB22D0F0…C906`) |
 | Auditoria global 013, saída separada em `build/` | `PASS`, hash inalterado `108ae293…d8c1e653` |
+| CI GitHub Ubuntu / Python 3.11 e 3.12 | 4/4 checks passaram |
+| CI GitHub Windows / Python 3.11 e 3.12 | 4/4 checks passaram |
 
 No `pytest -q` completo em WSL2 sobre este checkout montado pelo Windows, foram
 observados 588 passes, 9 falhas e 8 skips. As falhas foram nos testes não alterados
@@ -2127,7 +2129,7 @@ cinco casos de `test_smoke.py`, um de `test_toolchain.py` que observou Wibo vis�
 neste WSL, e os dois testes POSIX de `test_toolchain_bootstrap.py` que receberam
 scripts `.sh` com CRLF no checkout montado. Nenhum código ou configuração alheios à
 R2 foi alterado para mascarar essas falhas. A suíte completa Windows passou; a CI
-Ubuntu/Windows é registrada nos checks do PR.
+Ubuntu/Windows do PR #13 passou integralmente (8/8 checks).
 
 **Test-Auditor:** não encontrou lacunas materiais após a revisão dos controles e
 proveniência; confirmou que as atribuições não promovem identidade. A revisão foi
