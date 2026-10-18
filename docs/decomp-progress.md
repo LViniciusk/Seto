@@ -2554,3 +2554,144 @@ injetar objetos arbitrários na execução de produção.
 `INCONCLUSIVE`, 0 `NONMATCHING`, 60 words pendentes) segue válido por construção;
 não foi reexecutado nesta rodada. `probe_common.py` e a 014 permanecem intactos. A
 suíte WSL2 completa mantém apenas as falhas ambientais já descritas.
+
+## SETO-DECOMP-016 — Multi-Reference Link & Data Equivalence
+
+**Resultado operacional: `PASS`; comparação A: 41/41 words de código e 7/7
+entradas da jump table iguais sob layout e símbolos controlados; alegação:
+`ASSUMPTION_DEPENDENT`.** O experimento estende a linkedição controlada das
+rodadas 014 e 015 para `func_00000414` (`0x414–0x4b8`, 164 bytes, 41 words), a
+função com referências combinadas mais rica entre as que apontam apenas para
+dados inicializados file-backed: uma jump table `.rodata` de 7 entradas (com o
+offset `0x6c` repetido nas entradas `2..6`), cinco pares `R_MIPS_HI16`/`R_MIPS_LO16`
+(incluindo o símbolo compartilhado `D_000047D0` usado tanto no `case 1` quanto no
+`default`), três regiões de strings ASCII terminadas em NUL em `.data` e cinco
+chamadas `R_MIPS_26` para duas stubs importadas de `libehsys`. Não altera o
+comparador estrito, os parsers ELF/relocation, as fontes C nem `probe_common.py` /
+`probe_link_equivalence.py` / `probe_jump_table_equivalence.py`; o status estrito
+original permanece `INCONCLUSIVE` (`31/41` words certificadas).
+
+### Compilação fresca e proveniência
+
+Comando reproduzível nesta configuração WSL2 (`python3` = ambiente
+`/home/vinicius/.seto/venvs/seto008-test/bin/python`):
+
+```bash
+PYTHONPATH=src python3 scripts/probe_multi_reference_equivalence.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --source decomp/src/func_00000414.c \
+  --build-dir build/seto016/experiment \
+  --out build/seto016/multi-reference-equivalence.json
+```
+
+O script remove qualquer `.o` e `match-record.json` anteriores antes de invocar
+`scripts/match_function.py`, exigindo exit code `5` (`INCONCLUSIVE`), `31/41`
+words certificadas, zero diferenças e zero `relocation_issues` antes de iniciar a
+linkedição controlada.
+
+| Artefato/parâmetro | Valor observado |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Fonte C (`decomp/src/func_00000414.c`) SHA-256 | `90dd395c4bf06d01f21bcafe0cc8985774b9b6f05b9bf9c97eb19b34526832af` |
+| Objeto fresco (`func_00000414.o`) SHA-256 | `31ccca3915dd0339ebc9afe9579e6c313d4f406238cb70ea19364401ffc73e2a` |
+| Linker script A (`0x4788`) / B (`0x4784`) SHA-256 | `e8b8a88df3a3ebb3b799772bf3fcb65b96f4d27ae290a4256ba37d8dc8f325ab` / `5df31cbd0bf6f3f0620b89f7dd0a9a0e25288c28f1dc7ea11408d33d405cb838` |
+| ELF linkado A / B SHA-256 | `ee79924454cfbb69e3ec494940525f78d43327f789c3350c738075cf9c799ef0` / `e18f895be61d4ab7945e5ca7f6dcfc072fe7020016c058ee2142176910a0f008` |
+| Relatório canônico (`multi-reference-equivalence.json`) SHA-256 | `469865af2d6632ec0969a819c6eaff6b5fc87a2a36aa9061e498b34970647d35` |
+| GNU linker/emulação | GNU ld (GNU Binutils for Ubuntu) 2.42 / `elf32ltsmip` |
+| Compilador/loader/flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+
+O objeto fresco é ELF32 `ET_REL` little-endian MIPS com `.text` de `0xa4` bytes
+(41 words), `.rodata` de `0x1c` bytes (7 words, símbolo local `@15` em offset
+`0x0`, tamanho `28`) e `.mwcats` de `0x8` bytes:
+
+- `.rel.rodata`: sete `R_MIPS_32` em offsets `0x0..0x18` contra o símbolo definido
+  `func_00000414`, com addends in-place `0x3c, 0x54, 0x6c, 0x6c, 0x6c, 0x6c, 0x6c`
+  (validados por invariantes estruturais sem hardcode de igualdade histórica na
+  admissão do candidato);
+- `.rel.text`: 15 relocations com addend in-place zero — cinco `R_MIPS_26` (word
+  `3` para `func_00002354`; words `17, 23, 29, 35` para `func_000008A4`) e cinco
+  pares `R_MIPS_HI16`/`R_MIPS_LO16` (`8->10` para `@15`, `15->18` para
+  `D_000047A4`, `21->24` para `D_000047D0`, `27->30` para `D_00004800` e `33->36`
+  para `D_000047D0`).
+
+### Linkedição controlada, pares HI16/LO16 e chamadas
+
+O linker script gerado sob `build/seto016/` posiciona `.text` em `0x414` (tamanho
+`0xa4`), `.rodata` em `0x4788` no caso A (`0x4784` no controle B, tamanho `0x1c`)
+e preserva `.mwcats` (`0x8` bytes). As cinco definições externas fornecidas via
+`--defsym` são atribuições controladas derivadas das coordenadas observadas no PRX:
+
+| Símbolo / seção | Endereço atribuído | Sítios na função (`word_index` / endereço) | Evidência no PRX original | Resultado linkado (caso A) |
+|---|---:|---|---|---|
+| `@15` (`.rodata`) | `0x4788` (layout) | `8->10` (`0x434->0x43c`) | `.data+0x20` (`0x4788`, file `0x47e8`), 7 words `R_MIPS_32` | `0x3c030000` / `0x24634788` → `0x4788`; 7/7 entradas `0x450, 0x468, 0x480×5` |
+| `D_000047A4` | `0x47a4` (`--defsym`) | `15->18` (`0x450->0x45c`) | `.data+0x3c` (`0x47a4`, file `0x4804`), `case 0` | `0x3c050000` / `0x24a547a4` → `0x47a4` |
+| `D_000047D0` (compartilhado) | `0x47d0` (`--defsym`) | `21->24` (`0x468->0x474`) e `33->36` (`0x498->0x4a4`) | `.data+0x68` (`0x47d0`, file `0x4830`), `case 1` e `default` | ambos os pares `0x3c050000` / `0x24a547d0` → `0x47d0` |
+| `D_00004800` | `0x4800` (`--defsym`) | `27->30` (`0x480->0x48c`) | `.data+0x98` (`0x4800`, file `0x4860`), `cases 2..6` | `0x3c050000` / `0x24a54800` → `0x4800` |
+| `func_00002354` | `0x2354` (`--defsym`) | word `3` (`0x420`) | stub `libehsys` NID `0x1F190478` em `0x2354` | `0x0c0008d5` (`jal 0x2354`) |
+| `func_000008A4` | `0x8a4` (`--defsym`) | words `17, 23, 29, 35` (`0x458, 0x470, 0x488, 0x4a0`) | stub `libehsys` NID `0x476FD94A` em `0x8a4` | `0x0c000229` ×4 (`jal 0x8a4`) |
+
+No caso A (`.rodata` em `0x4788`), **41/41 words de código e 7/7 entradas da jump
+table são literalmente idênticos ao PRX**. No caso B (`.rodata` em `0x4784`),
+**40/41 words e 7/7 entradas** coincidem: apenas o word `10` (`0x43c`, `LO16` da
+tabela) muda de `0x24634788` para `0x24634784` (reconstruindo `0x4784`), enquanto
+as 7 entradas da tabela permanecem `0x450, 0x468, 0x480×5`.
+
+### Regiões de strings em `.data` no PRX original
+
+O objeto candidato não contém bytes de string (`D_000047A4`, `D_000047D0` e
+`D_00004800` são declarações `extern` indefinidas resolvidas por `--defsym`). O
+experimento verifica diretamente no PRX original (sem copiar o conteúdo textual
+bruto para o repositório nem para o JSON) que os três alvos provados em `.data`
+estão dentro dos limites da seção, não se sobrepõem, são ASCII imprimível
+terminado em NUL e correspondem aos cinco pares `HI16/LO16`:
+
+| Símbolo candidato | Offset em `.data` (fim exclusivo) | VA / file offset | Bytes (sem / com NUL) | Pares `HI16->LO16` | SHA-256 sem NUL | SHA-256 com NUL |
+|---|---|---|---:|---|---|---|
+| `D_000047A4` | `0x3c` (`0x67`) | `0x47a4` / `0x4804` | 42 / 43 | `15->18` | `7b9aaf8792d178885891c3c614b20e3550ac98ea3cbde80a4d544921e59445b8` | `9f6c41eb3583eaf9e732248cac6336d303908cb3659995672ab1edbe5351813c` |
+| `D_000047D0` | `0x68` (`0x95`) | `0x47d0` / `0x4830` | 44 / 45 | `21->24`, `33->36` (compartilhado) | `d37fbd796cb48b25d00c60c5dd369aa4312a4931b1c5d231311d339ac9d127e7` | `38a83bf45a8e9dff2011ce7341cbfb2754a16550f8989e185df345b6a621ab16` |
+| `D_00004800` | `0x98` (`0xc5`) | `0x4800` / `0x4860` | 44 / 45 | `27->30` | `c196ecc3cb47ca326a8240e3bf75d98402bbcfa9691b58e69e3644f2aae88688` | `24d2091e4d4901a5a1eae76c487e1d5a31c24615c61ca49cce5b12a82a900e35` |
+
+Em todos os três casos, `candidate_string_bytes_proven = false` e
+`cross_artifact_identity = UNPROVEN`.
+
+### Controles negativos A–E
+
+| Controle | Manipulação | Resultado observado | Artefato / ELF SHA-256 |
+|---|---|---|---|
+| A (baseline) | `.rodata` em `0x4788` e `--defsym` nominais | 41/41 words e 7/7 entradas iguais | ELF `ee79924454cfbb69e3ec494940525f78d43327f789c3350c738075cf9c799ef0` |
+| B (layout `.rodata`) | `.rodata` movida para `0x4784` | 40/41 words (só word `10` em `0x43c` muda, reconstruindo `0x4784`); 7/7 entradas inalteradas | ELF `e18f895be61d4ab7945e5ca7f6dcfc072fe7020016c058ee2142176910a0f008` |
+| C (símbolo compartilhado) | `D_000047D0` reatribuído de `0x47d0` para `0x47d4` via `--defsym` | 39/41 words: mudam **exatamente** os dois `LO16` compartilhados nos words `24` (`0x474`) e `36` (`0x4a4`), ambos reconstruindo `0x47d4`; `D_000047A4`, `D_00004800` e as 7 entradas da tabela permanecem intactos | ELF `397f2024ef4ccf87159693a4ecb0c04a4449965663091fbea7a861d5abdac2e6` |
+| D (troca na tabela) | addends in-place das entradas `0` (`0x3c`) e `1` (`0x54`) trocados em cópia pré-link do `.o` | diferenças exatamente nas entradas `0` e `1` (`0x468, 0x450`); código 41/41 inalterado; inventário de relocations preservado | `.o` `148539c3d7a89a0356f737ad22bbc13aaf246d6b15b44c0286d669bc44e4bdee` / ELF `6be7cf6fb04a0f5226b42f2c05cf5e92aca8a3a4dd553572624ab9d5df8d6720` |
+| E (word não relocado) | bit 0 invertido no word `0` (`0x27bdfff0` → `0x27bdfff1`) em cópia pré-link do `.o` | diferença exatamente no word `0` (`0x414`); 7/7 entradas inalteradas; inventário de relocations preservado | `.o` `9d01c2b7c72fbc8fe443e366d334a6920384b6bd0e8ae1b8c2461b1bd7da78dc` / ELF `0bebc3d275f0782218bd2ba3b2efaeb1e8e890a1adad7f006b9d8b26d8184814` |
+
+O pipeline preserva toda a semântica introduzida nas rodadas 015-R2 e 015-R3:
+divergências estruturalmente válidas de código ou tabela retornam `DIVERGENCE`
+(exit code `3`, `equivalence_claim = DIVERGENCE_UNDER_CONTROLLED_ASSIGNMENTS`),
+gravam os controles C/D/E como `NOT_RUN` e anunciam em `false_positive_controls`
+apenas os controles efetivamente executados (`detected == True`).
+
+### Alcance probatório, limitações e verificação
+
+As 15 relocations PSP de `.text` e as 7 relocations PSP `R_MIPS_32` da tabela em
+`.data+0x20` foram verificadas em coordenadas module-relative (`load_base=0`
+apenas como modelo da representação em disco); `runtime_comparison =
+NOT_DEMONSTRATED`. A igualdade 41/41 e 7/7 vale **exclusivamente sob o layout e
+as atribuições `--defsym` impostos**: não prova identidade independente entre os
+símbolos candidatos (`@15`, `D_000047A4`, `D_000047D0`, `D_00004800`,
+`func_00002354`, `func_000008A4`) e o módulo original, não prova bytes de string no
+candidato e **não promove `func_00000414` de `INCONCLUSIVE` para `MATCHED`**
+(`original_match_status = "INCONCLUSIVE"`, `promoted_to_matched = false`,
+`independent_identity_proven = false`).
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_multi_reference_equivalence.py` | 27 passaram (Windows e WSL2) |
+| `tests/test_probe_jump_table_equivalence.py` | 66 passaram (Windows e WSL2) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram (Windows e WSL2) |
+| Windows / `pytest -q` | 690 passaram, 25 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 23 ignorados |
+| WSL2 integração 016 (`SETO_MULTI_REFERENCE_EQUIVALENCE_REAL=1`) | 2 passaram (GNU sintético sem `private/` + Metrowerks/PRX real e determinismo) |
+| WSL2 integração 014 + 015 + 016 reais | 6 passaram |
+| Relatórios canônicos 015 / 016 | `6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c` (inalterado) / `469865af2d6632ec0969a819c6eaff6b5fc87a2a36aa9061e498b34970647d35` (determinístico em 2 runs frescos); `probe_common.py` e 014 intocados |
+| `compileall -q src scripts tests` / `git diff --check` | clean / clean |
