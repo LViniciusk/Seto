@@ -700,7 +700,8 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
     source_hash_before = sha256_file(source_path)
     prx_hash_before = sha256_file(prx_path)
     script_path = build_dir / "controlled-link.ld"
-    _write_build_text(script_path, _linker_script(), build_root)
+    script_text = _linker_script()
+    _write_build_text(script_path, script_text, build_root)
 
     match_command = [
         sys.executable,
@@ -851,8 +852,8 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
 
     toolchain_command = [sys.executable, "-m", "seto", "--config", _relative(config_path), "toolchain"]
     toolchain_result = _run(toolchain_command, timeout=120, env=env)
-    (logs_dir / "seto-toolchain.stdout.txt").write_text(toolchain_result.stdout, encoding="utf-8")
-    (logs_dir / "seto-toolchain.stderr.txt").write_text(toolchain_result.stderr, encoding="utf-8")
+    _write_build_text(logs_dir / "seto-toolchain.stdout.txt", toolchain_result.stdout, build_root)
+    _write_build_text(logs_dir / "seto-toolchain.stderr.txt", toolchain_result.stderr, build_root)
     mw_lines = [line.strip() for line in toolchain_result.stdout.splitlines() if line.lstrip().startswith("mwccpsp")]
     wibo_lines = [line.strip() for line in toolchain_result.stdout.splitlines() if line.lstrip().startswith("wibo")]
     mw_version = None
@@ -870,9 +871,6 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
     if mw_version is None or wibo_version is None:
         raise ProbeError("BLOCKED", "Seto toolchain inventory could not confirm configured Metrowerks/wibo versions")
 
-    script_path = build_dir / "controlled-link.ld"
-    script_text = _linker_script()
-    script_path.write_text(script_text, encoding="utf-8")
     script_hash = sha256_file(script_path)
     if script_hash == "":
         raise ProbeError("FAIL", "linker script hash could not be computed")
