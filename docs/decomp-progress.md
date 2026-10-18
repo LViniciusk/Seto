@@ -2425,7 +2425,8 @@ derivação de `false_positive_controls` são verificados por construção e pel
 testes de forma/nível unitário, **não** por um teste de pipeline completo: forçar
 uma divergência real exigiria substituir compilador/linker/matcher e o parsing do
 PRX. Os testes sintéticos fixam a forma exata do relatório divergente e o caminho
-de finalização/gravação, mas não exercitam `run_experiment` de ponta a ponta.
+de finalização/gravação, mas não exercitam `run_experiment` de ponta a ponta
+(fechada na R3, abaixo).
 
 **Apontamentos de revisão resolvidos.** Reviewer e Test-Auditor (read-only) não
 encontraram bloqueadores, major, regressões de segurança nem violações de escopo;
@@ -2443,3 +2444,113 @@ atuais) foram mantidas por serem fail-safe e mínimas.
 layout imposto, não prova de identidade; `INCONCLUSIVE` não vira `MATCHED` e a
 extensão a `0x414` segue fora de escopo. A suíte completa WSL2 mantém apenas as
 falhas ambientais já descritas acima.
+
+## SETO-DECOMP-015-R3 — Preserve Valid Jump-Table Divergences
+
+**Resultado operacional: `PASS` inalterado; a 015 continua 30/30 words e 6/6
+entradas no caso A, e o relatório canônico permanece byte a byte idêntico
+(`6b38d24d…`).** A R2 já classificava `DIVERGENCE`, mas duas checagens anteriores
+ainda rejeitavam tabelas **estruturalmente válidas** cujos valores diferiam do PRX
+original, impedindo que a divergência chegasse ao relatório. Esta rodada separa
+"invariante estrutural" de "igualdade histórica" nesses dois pontos, sem alterar
+o resultado positivo nem a semântica do matcher estrito.
+
+### 1. Removida a exigência de addends históricos no candidato
+
+Em `run_experiment()` a condição
+`addends != EXPECTED_OFFSETS or table_words != EXPECTED_OFFSETS → FAIL` foi
+substituída por `validate_candidate_table_invariants(table_relocations,
+table_words)`, que aceita qualquer tabela estruturalmente íntegra:
+
+- `relocation.addend_valid` falso → `UNSUPPORTED`;
+- addends que não batem com os words armazenados no objeto → `FAIL`;
+- destino relativo desalinhado (`% 4 != 0`) ou fora de `[0, FUNCTION_SIZE)` → `FAIL`.
+
+A quantidade, o tipo (`R_MIPS_32`), o símbolo (`func_0000039C`) e a ordem das seis
+relocations continuam garantidos por `candidate_table_relocations()` (`.rodata`
+presente, tamanho `0x18`, uma por entrada nos offsets `0x0..0x14`); não são repetidos
+no helper de invariantes — apenas os testes de rejeição ganharam a asserção do status
+`UNSUPPORTED`.
+
+`EXPECTED_OFFSETS` permanece como referência histórica e alimenta o controle
+negativo C; não é mais condição de igualdade do candidato. A sequência
+`(0x38,0x40,0x48,0x44,0x58,0x60)` agora é aceita, linkada e identificada como
+diferente.
+
+### 2. Destino válido separado de destino historicamente equivalente
+
+`validate_case_destinations(baseline_entries)` foi substituída, na checagem de
+baseline, por `validate_structural_destinations(baseline_entries)`, que exige seis
+entradas alinhadas e dentro de `.text[0x39C:0x414)`. `entry_destination_rows()`
+segue como fonte de diagnóstico, preservando `inside_function` e
+`matches_expected_case`; uma entrada como `0x3E0` (dentro da função, diferente do
+`case` esperado `0x3EC`) passa a produzir a linha
+`{inside_function: true, matches_expected_case: false}` — evidência de divergência,
+não motivo para descartar o relatório. `validate_case_destinations()` foi mantida
+intacta (ainda usada pelos testes de controle negativo), apenas deixou de ser
+precondição de produção.
+
+### 3. Propagação até o relatório final
+
+A checagem de que o linker resolveu as **próprias** relocations do candidato
+(`resolved_entries == baseline_entries → FAIL`) foi preservada. A partir daí o
+fluxo R2 trabalha normalmente: `compare_table_entries()` acha as diferenças →
+`baseline_equal=False` → controles C/D/E ficam `NOT_RUN` → controles estruturais e
+o controle B continuam verificados → `finalize_experiment_report()` produz
+`DIVERGENCE` → `_write_report()` grava tudo antes do retorno → exit code `3`. O
+relatório preserva words originais/linkados, as seis entradas, diferenças,
+relocations/addends, hashes e destinos efetivos.
+
+### 4. Controles anunciados apenas quando executados
+
+Em R2, `false_positive_controls` era derivado da **presença da chave** em
+`control_records`; como `not_run_controls()` mantém as chaves `C`/`D`/`E`, um
+relatório divergente anunciava `C`/`D`/`E` como evidência executada, embora
+estivessem `NOT_RUN`. Agora o campo deriva dos controles cujo `detected` é verdadeiro,
+de modo que uma divergência reporta `code.false_positive_controls=[]` e
+`jump_table.false_positive_controls=["B"]` (B é o controle de layout sempre
+validado), coerente com o mapa `controls` gravado. O relatório `PASS` permanece
+idêntico (ali `C`/`D`/`E` de fato rodaram).
+
+### Verificação e testes
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_jump_table_equivalence.py` | 66 passaram (+12 de R3) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram |
+| Windows / `pytest -q` | 663 passaram, 23 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 21 ignorados |
+| WSL2 unit (015 + 014) | 97 passaram |
+| WSL2 015 real (`SETO_JUMP_TABLE_EQUIVALENCE_REAL=1`) | 2 passaram (A 30/30+6/6, B `0x4774`, C/D/E detectados) |
+| WSL2 014 real (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram (20/20, relatório canônico sem regressão) |
+| Canonical 015 report | inalterado, sha256 `6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c`, exit `0` |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+
+Os 12 casos novos cobrem: tabela válida mas divergente (addend da entrada 3 de
+`0x50` para `0x44`) com código 30/30, tabela 5/6, diferença exata na entrada 3
+(`0x000003EC` → `0x000003E0`), `DIVERGENCE`, exit code `3`, controles C/D/E
+`NOT_RUN`, `false_positive_controls` reduzido a `[]`/`["B"]` e sem promoção a
+`MATCHED`; duas entradas divergentes preservadas de ponta a ponta;
+`validate_structural_destinations` aceitando divergência válida e rejeitando
+desalinhamento/fora-de-faixa/contagem errada; `validate_candidate_table_invariants`
+aceitando a tabela divergente válida e rejeitando addend desalinhado, fora da
+função, inconsistente com o word e inválido (`UNSUPPORTED`); resolução do linker
+divergente dos addends → `FAIL`; contagens que contradizem as listas de diferenças →
+nunca `PASS`; e o baseline 30/30 + 6/6 → `PASS` com A/B/C/D/E preservados,
+`false_positive_controls` honesto e controle B recomputando `0x4774`.
+
+**Caminho de ponta a ponta.** Pela primeira vez um teste unitário percorre
+`run_experiment()` inteiro (comparação + montagem + gravação) usando **apenas
+fixtures ELF sintéticas** e `monkeypatch` apenas nas bordas não sintetizáveis
+(subprocesso do `match_function`, versões de toolchain, disponibilidade das
+ferramentas GNU, a linkagem e os extratores de evidência do PRX
+`_original_table_evidence`/`_original_call_evidence`/`_psp_region_relocations`).
+Isso fecha a "limitação de cobertura residual" da R2; não há opção de CLI para
+injetar objetos arbitrários na execução de produção.
+
+**Preservações.** O matcher estrito e os parsers ELF/MIPS não foram tocados
+(nenhuma mudança sob `src/`), então o baseline do audit 013 (7 `MATCHED`, 8
+`INCONCLUSIVE`, 0 `NONMATCHING`, 60 words pendentes) segue válido por construção;
+não foi reexecutado nesta rodada. `probe_common.py` e a 014 permanecem intactos. A
+suíte WSL2 completa mantém apenas as falhas ambientais já descritas.

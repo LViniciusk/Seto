@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import struct
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -67,7 +68,12 @@ def _u32_words(values) -> bytes:
     return b"".join(word(value) for value in values)
 
 
-def _candidate_object_bytes() -> bytes:
+def _candidate_object_bytes(
+    *,
+    offsets: Sequence[int] = OBJECT_OFFSETS,
+    table_words: Sequence[int] | None = None,
+    with_mwcats: bool = True,
+) -> bytes:
     symtab, strtab = build_symbols(
         [
             {"name": "", "value": 0, "size": 0, "info": 0, "shndx": 0},
@@ -77,21 +83,29 @@ def _candidate_object_bytes() -> bytes:
         ]
     )
     text = _u32_words(FUNCTION_WORDS)
-    table = _u32_words(OBJECT_OFFSETS)
+    actual_words = tuple(offsets if table_words is None else table_words)
+    table = _u32_words(actual_words)
     text_rels = build_relocations(
         [(2 * 4, R_MIPS_26, 3), (7 * 4, R_MIPS_HI16, 1), (9 * 4, R_MIPS_LO16, 1)]
     )
-    table_rels = build_relocations([(index * 4, R_MIPS_32, 2) for index in range(6)])
-    return build_elf32(
-        sections=[
-            {"name": ".text", "type": SHT_PROGBITS, "flags": SHF_ALLOC | SHF_EXECINSTR, "addr": 0, "size": len(text), "data": text},
-            {"name": ".rel.text", "type": SHT_REL, "data": text_rels, "link": 5, "info": 1, "entsize": 8},
-            {"name": ".rodata", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 0, "size": len(table), "data": table},
-            {"name": ".rel.rodata", "type": SHT_REL, "data": table_rels, "link": 5, "info": 3, "entsize": 8},
-            {"name": ".symtab", "type": SHT_SYMTAB, "data": symtab, "link": 6, "info": 1, "entsize": 16},
-            {"name": ".strtab", "type": SHT_STRTAB, "data": strtab, "align": 1},
-        ]
+    table_rels = build_relocations([(index * 4, R_MIPS_32, 2) for index in range(len(offsets))])
+    sections: list[dict[str, object]] = [
+        {"name": ".text", "type": SHT_PROGBITS, "flags": SHF_ALLOC | SHF_EXECINSTR, "addr": 0, "size": len(text), "data": text},
+        {"name": ".rel.text", "type": SHT_REL, "data": text_rels, "link": 6 if with_mwcats else 5, "info": 1, "entsize": 8},
+        {"name": ".rodata", "type": SHT_PROGBITS, "flags": SHF_ALLOC, "addr": 0, "size": len(table), "data": table},
+        {"name": ".rel.rodata", "type": SHT_REL, "data": table_rels, "link": 6 if with_mwcats else 5, "info": 3, "entsize": 8},
+    ]
+    if with_mwcats:
+        sections.append(
+            {"name": ".mwcats", "type": SHT_PROGBITS, "data": struct.pack("<II", 0, 0x39C)}
+        )
+    symtab_index = len(sections) + 1
+    strtab_index = symtab_index + 1
+    sections.append(
+        {"name": ".symtab", "type": SHT_SYMTAB, "data": symtab, "link": strtab_index, "info": 1, "entsize": 16}
     )
+    sections.append({"name": ".strtab", "type": SHT_STRTAB, "data": strtab, "align": 1})
+    return build_elf32(sections=sections)
 
 
 def _linked_elf_bytes(
@@ -187,6 +201,43 @@ def test_entry_destinations_flag_case_bodies_and_account_every_entry() -> None:
     wrong[3] = 0x3E0
     with pytest.raises(probe.ProbeError, match="does not map"):
         probe.validate_case_destinations(wrong)
+
+
+def test_compare_table_entries_reports_multiple_divergent_entries() -> None:
+    divergent = list(TABLE_ENTRIES)
+    divergent[2] = 0x3E0
+    divergent[3] = 0x3E8
+    differences = probe.compare_table_entries(TABLE_ENTRIES, divergent)
+    assert len(differences) == 2
+    assert differences == [
+        {"entry_index": 2, "original": "0x000003e4", "linked": "0x000003e0"},
+        {"entry_index": 3, "original": "0x000003ec", "linked": "0x000003e8"},
+    ]
+
+
+def test_validate_structural_destinations_accepts_valid_divergence_and_rejects_structural_faults() -> None:
+    probe.validate_structural_destinations(TABLE_ENTRIES)
+    divergent = list(TABLE_ENTRIES)
+    divergent[3] = 0x3E0
+    probe.validate_structural_destinations(divergent)
+
+    misaligned = list(TABLE_ENTRIES)
+    misaligned[3] = 0x3E1
+    with pytest.raises(probe.ProbeError, match="outside aligned function code"):
+        probe.validate_structural_destinations(misaligned)
+
+    out_of_bounds_high = list(TABLE_ENTRIES)
+    out_of_bounds_high[3] = 0x414
+    with pytest.raises(probe.ProbeError, match="outside aligned function code"):
+        probe.validate_structural_destinations(out_of_bounds_high)
+
+    out_of_bounds_low = list(TABLE_ENTRIES)
+    out_of_bounds_low[3] = 0x398
+    with pytest.raises(probe.ProbeError, match="outside aligned function code"):
+        probe.validate_structural_destinations(out_of_bounds_low)
+
+    with pytest.raises(probe.ProbeError, match="expected 6 table entries"):
+        probe.validate_structural_destinations(TABLE_ENTRIES[:-1])
 
 
 def test_equivalence_claim_never_promotes_controlled_equality() -> None:
@@ -409,15 +460,17 @@ def _with_table_relocations(module, transform) -> elf.ElfFile:
 
 def test_candidate_table_relocations_reject_wrong_count_and_type() -> None:
     module = _with_table_relocations(elf.parse(_candidate_object_bytes()), lambda rels: [])
-    with pytest.raises(probe.ProbeError, match="relocations, expected 6"):
+    with pytest.raises(probe.ProbeError, match="relocations, expected 6") as count_exc:
         probe.candidate_table_relocations(module, symbol="func_0000039C")
+    assert count_exc.value.status == "UNSUPPORTED"
 
     other = _with_table_relocations(
         elf.parse(_candidate_object_bytes()),
         lambda rels: [replace(relocation, type=R_MIPS_26) for relocation in rels],
     )
-    with pytest.raises(probe.ProbeError, match="expected R_MIPS_32"):
+    with pytest.raises(probe.ProbeError, match="expected R_MIPS_32") as type_exc:
         probe.candidate_table_relocations(other, symbol="func_0000039C")
+    assert type_exc.value.status == "UNSUPPORTED"
 
 
 def test_candidate_table_relocations_reject_unexpected_symbol() -> None:
@@ -425,8 +478,9 @@ def test_candidate_table_relocations_reject_unexpected_symbol() -> None:
         elf.parse(_candidate_object_bytes()),
         lambda rels: [replace(relocation, symbol="func_00002364") for relocation in rels],
     )
-    with pytest.raises(probe.ProbeError, match="expected 'func_0000039C'"):
+    with pytest.raises(probe.ProbeError, match="expected 'func_0000039C'") as exc_info:
         probe.candidate_table_relocations(module, symbol="func_0000039C")
+    assert exc_info.value.status == "UNSUPPORTED"
 
 
 def test_candidate_table_requires_a_full_rodata_section() -> None:
@@ -444,6 +498,54 @@ def test_candidate_table_requires_a_full_rodata_section() -> None:
     }
     with pytest.raises(probe.ProbeError, match="size is 0xc"):
         probe.candidate_table_relocations(short, symbol="func_0000039C")
+
+
+def test_validate_candidate_table_invariants_accepts_valid_divergence() -> None:
+    module = elf.parse(_candidate_object_bytes(offsets=(0x38, 0x40, 0x48, 0x44, 0x58, 0x60)))
+    _section, relocations, words = probe.candidate_table_entries(module, symbol="func_0000039C")
+    addends = probe.validate_candidate_table_invariants(relocations, words)
+    assert addends == (0x38, 0x40, 0x48, 0x44, 0x58, 0x60)
+
+
+def test_validate_candidate_table_invariants_rejects_misaligned_addend() -> None:
+    module = elf.parse(_candidate_object_bytes(offsets=(0x38, 0x40, 0x48, 0x41, 0x58, 0x60)))
+    _section, relocations, words = probe.candidate_table_entries(module, symbol="func_0000039C")
+    with pytest.raises(probe.ProbeError, match="outside aligned function code") as exc_info:
+        probe.validate_candidate_table_invariants(relocations, words)
+    assert exc_info.value.status == "FAIL"
+
+
+def test_validate_candidate_table_invariants_rejects_out_of_bounds_addend() -> None:
+    module = elf.parse(_candidate_object_bytes(offsets=(0x38, 0x40, 0x48, 0x78, 0x58, 0x60)))
+    _section, relocations, words = probe.candidate_table_entries(module, symbol="func_0000039C")
+    with pytest.raises(probe.ProbeError, match="outside aligned function code") as exc_info:
+        probe.validate_candidate_table_invariants(relocations, words)
+    assert exc_info.value.status == "FAIL"
+
+
+def test_validate_candidate_table_invariants_rejects_word_disagreement() -> None:
+    module = elf.parse(_candidate_object_bytes())
+    _section, relocations, words = probe.candidate_table_entries(module, symbol="func_0000039C")
+    tampered_words = list(words)
+    tampered_words[3] = 0x44
+    with pytest.raises(probe.ProbeError, match="table words disagree with relocation addends") as exc_info:
+        probe.validate_candidate_table_invariants(relocations, tampered_words)
+    assert exc_info.value.status == "FAIL"
+
+
+def test_validate_candidate_table_invariants_rejects_invalid_relocation_addend() -> None:
+    module = elf.parse(_candidate_object_bytes())
+    _section, relocations, words = probe.candidate_table_entries(module, symbol="func_0000039C")
+    invalid_relocations = list(relocations)
+    invalid_relocations[3] = replace(invalid_relocations[3], addend_valid=False)
+    with pytest.raises(probe.ProbeError, match="invalid table relocation addend") as exc_info:
+        probe.validate_candidate_table_invariants(invalid_relocations, words)
+    assert exc_info.value.status == "UNSUPPORTED"
+
+
+# The relocation count/type/symbol is enforced upstream by candidate_table_relocations
+# (see test_candidate_table_relocations_reject_wrong_count_and_type); the invariant
+# helper assumes that validated list and does not repeat the count check.
 
 
 # ------------------------------------------------------------- PSP relocation model
@@ -599,6 +701,21 @@ def test_finalize_classifies_valid_comparisons(
     assert report["original_match_status"] == "INCONCLUSIVE"
     assert report["promoted_to_matched"] is False
     assert report["independent_identity_proven"] is False
+
+
+def test_finalize_never_passes_when_counts_and_differences_disagree() -> None:
+    # A false PASS must be impossible: if the word/entry counts read "equal" while the
+    # difference lists are non-empty, the classification must fail conservatively.
+    report = _report_with(equal_words=30, equal_entries=6, controls={})
+    report["code"]["differences"] = [
+        {"word_index": 0, "address": "0x39c", "original": "0x27bdfff0", "linked": "0x27bdfff1"}
+    ]
+    report["jump_table"]["differences"] = [
+        {"entry_index": 3, "original": "0x000003ec", "linked": "0x000003e0"}
+    ]
+    exit_code = probe.finalize_experiment_report(report)
+    assert exit_code == probe.DIVERGENCE_EXIT_CODE
+    assert report["experiment_status"] == "DIVERGENCE"
 
 
 @pytest.mark.parametrize(
@@ -796,3 +913,273 @@ def test_invalid_build_root_never_writes_report_to_symlink_target(tmp_path, monk
     assert "PASS" not in captured.out
     assert sentinel.read_text(encoding="utf-8") == "keep"
     assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+
+
+def _setup_synthetic_experiment_env(tmp_path, monkeypatch, *, candidate_offsets, linked_entries_a=None):
+    repo = tmp_path / "repo"
+    (repo / "build/seto015").mkdir(parents=True)
+    (repo / "decomp/src").mkdir(parents=True)
+    (repo / "config/wsl").mkdir(parents=True)
+    (repo / "private/original/PSP_GAME/USRDIR/gmodule").mkdir(parents=True)
+
+    source_path = repo / "decomp/src/func_0000039C.c"
+    source_path.write_text("// dummy source\n", encoding="utf-8")
+    config_path = repo / "config/wsl/seto.toml"
+    config_path.write_text("[tools]\n", encoding="utf-8")
+
+    prx_path = repo / "private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx"
+    prx_bytes = build_elf32(
+        e_type=ET_MIPS_PSP_PRX,
+        sections=[
+            {
+                "name": ".text",
+                "type": SHT_PROGBITS,
+                "flags": SHF_ALLOC | SHF_EXECINSTR,
+                "addr": 0x39C,
+                "size": 0x78,
+                "data": _u32_words(FUNCTION_WORDS),
+            },
+        ],
+    )
+    prx_path.write_bytes(prx_bytes)
+
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    # The synthetic experiment never runs the real GNU MIPSel tools; stub only the
+    # availability gate so the flow reaches the linker/compare stage.
+    monkeypatch.setattr(probe.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    candidate_bytes = _candidate_object_bytes(offsets=candidate_offsets)
+
+    def fake_run(argv, *, cwd=None, timeout=300, env=None):
+        if "scripts/match_function.py" in argv:
+            candidate_dir = repo / "build/seto015/experiment/candidate"
+            candidate_dir.mkdir(parents=True, exist_ok=True)
+            candidate_path = candidate_dir / f"{source_path.stem}.o"
+            candidate_path.write_bytes(candidate_bytes)
+
+            match_record_path = candidate_dir / "match-record.json"
+            record = {
+                "function": "func_0000039C",
+                "address": "0x39c",
+                "section": ".text",
+                "status": "INCONCLUSIVE",
+                "match": {
+                    "status": "INCONCLUSIVE",
+                    "matching_words": 28,
+                    "total_words": 30,
+                    "difference_count": 0,
+                    "relocation_issues": [],
+                },
+                "provenance": {
+                    "source": probe._relative(source_path),
+                    "object": probe._relative(candidate_path),
+                    "object_sha256": probe.sha256_file(candidate_path),
+                    "source_sha256": probe.sha256_file(source_path),
+                    "flags": ["-O4,p", "-sdatathreshold", "0"],
+                },
+            }
+            match_record_path.write_text(
+                json.dumps({key: value for key, value in record.items() if key != "match"}),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(args=argv, returncode=5, stdout=json.dumps(record), stderr="")
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="fake", stderr="")
+
+    monkeypatch.setattr(probe, "_run", fake_run)
+    monkeypatch.setattr(
+        probe,
+        "_toolchain_versions",
+        lambda config_path, logs_dir, build_root, env: ("GNU ld 2.40", "mwccpsp 3.0.1", "wibo 0.4.0"),
+    )
+    monkeypatch.setattr(
+        probe,
+        "_original_table_evidence",
+        lambda module, words: {
+            "section": ".data",
+            "offset": "0x8",
+            "address": "0x4770",
+            "entries": [f"0x{value:08x}" for value in TABLE_ENTRIES],
+            "entries_match_recorded_baseline": True,
+            "size": 24,
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_original_call_evidence",
+        lambda module: {
+            "call_index": 2,
+            "site": "0x3a4",
+            "target": "0x2364",
+            "symbol": "func_00002364",
+        },
+    )
+    monkeypatch.setattr(
+        probe,
+        "_psp_region_relocations",
+        lambda module, section_name, *, section_offset, size, words: {
+            "section": section_name,
+            "coordinate_system": "model",
+            "load_base_zero_is_model_only": True,
+            "relocations": [],
+            "runtime_comparison": "NOT_DEMONSTRATED",
+        },
+    )
+
+    def fake_link(*, object_path, script_path, output_path, table_address, call_target, logs_dir, label):
+        # Faithful mini-linker: place the object's own .text (patching the HI16/LO16
+        # destination word for the assigned .rodata address) and resolve the table's
+        # R_MIPS_32 addends over the positioned function, so the controls that tamper
+        # the object are reflected in the linked output.
+        module = elf.parse(object_path)
+        text_words = list(
+            mips.decode_words(module.section_data(module.require_section(".text")), "candidate text")
+        )
+        text_words[9] = (text_words[9] & 0xFFFF0000) | (table_address & 0xFFFF)
+        _section, relocations, _words = probe.candidate_table_entries(module, symbol=probe.FUNCTION_NAME)
+        resolved = tuple(
+            probe.FUNCTION_ADDRESS + (relocation.addend & 0xFFFFFFFF) for relocation in relocations
+        )
+        entries = tuple(linked_entries_a) if linked_entries_a is not None else resolved
+        output_path.write_bytes(
+            _linked_elf_bytes(text_words=text_words, entries=entries, table_address=table_address)
+        )
+        linked = elf.parse(output_path)
+        build_root = probe._validated_build_root()
+        probe._write_build_text(logs_dir / f"{label}.readelf.txt", "readelf", build_root)
+        probe._write_build_text(logs_dir / f"{label}.objdump.txt", "objdump", build_root)
+        probe._write_build_text(logs_dir / f"{label}.file.txt", "file", build_root)
+        return linked, {"argv": ["mipsel-linux-gnu-ld"], "returncode": 0}
+
+    monkeypatch.setattr(probe, "_link", fake_link)
+
+    out_path = repo / "build/seto015/jump-table-equivalence.json"
+    arguments = probe.build_parser().parse_args([
+        "--prx", str(prx_path),
+        "--source", str(source_path),
+        "--config", str(config_path),
+        "--out", str(out_path),
+    ])
+    return arguments, out_path
+
+
+def test_run_experiment_reports_valid_divergence(tmp_path, monkeypatch) -> None:
+    # The synthetic linker derives the linked table from the object's own addends.
+    divergent_offsets = (0x38, 0x40, 0x48, 0x44, 0x58, 0x60)
+    arguments, out_path = _setup_synthetic_experiment_env(
+        tmp_path, monkeypatch, candidate_offsets=divergent_offsets
+    )
+
+    exit_code, report = probe.run_experiment(arguments)
+
+    assert exit_code == 3
+    assert report["experiment_status"] == "DIVERGENCE"
+    assert report["equivalence_claim"] == "DIVERGENCE_UNDER_CONTROLLED_ASSIGNMENTS"
+    assert report["original_match_status"] == "INCONCLUSIVE"
+    assert report["promoted_to_matched"] is False
+    assert report["independent_identity_proven"] is False
+
+    # Code words: 30/30 equal, zero differences
+    assert report["code"]["equal_words"] == 30
+    assert report["code"]["total_words"] == 30
+    assert report["code"]["differences"] == []
+
+    # Table entries: 5/6 equal, difference at entry 3
+    assert report["jump_table"]["equal_entries"] == 5
+    assert report["jump_table"]["entry_count"] == 6
+    assert report["jump_table"]["differences"] == [
+        {"entry_index": 3, "original": "0x000003ec", "linked": "0x000003e0"}
+    ]
+
+    # Entry destinations: entry 3 inside_function=True, matches_expected_case=False
+    destinations = report["linker"]["variants"]["A"]["entry_destinations"]
+    assert destinations[3] == {
+        "entry_index": 3,
+        "address": "0x3e0",
+        "expected_case_address": "0x3ec",
+        "inside_function": True,
+        "matches_expected_case": False,
+    }
+
+    # Controls C, D, E are recorded as NOT_RUN
+    assert report["controls"]["C"] == {
+        "status": "NOT_RUN",
+        "reason": "baseline comparison diverged",
+        "detected": False,
+        "promoted_to_matched": False,
+    }
+    assert report["controls"]["D"]["status"] == "NOT_RUN"
+    assert report["controls"]["E"]["status"] == "NOT_RUN"
+
+    # Only controls that actually ran are advertised: B (layout) is always validated,
+    # while the NOT_RUN C/D/E placeholders must not be claimed as false-positive evidence.
+    assert report["code"]["false_positive_controls"] == []
+    assert report["jump_table"]["false_positive_controls"] == ["B"]
+
+    # Report was written to disk
+    assert out_path.is_file()
+    written = json.loads(out_path.read_text(encoding="utf-8"))
+    assert written["experiment_status"] == "DIVERGENCE"
+    assert written["jump_table"]["differences"] == report["jump_table"]["differences"]
+
+
+def test_run_experiment_rejects_linker_resolution_disagreeing_with_addends(tmp_path, monkeypatch) -> None:
+    divergent_offsets = (0x38, 0x40, 0x48, 0x44, 0x58, 0x60)
+    # Linked entries have 0x3EC at index 3 instead of resolving candidate addend 0x44 (which would be 0x3E0)
+    disagreeing_linked_entries = TABLE_ENTRIES
+    arguments, _out_path = _setup_synthetic_experiment_env(
+        tmp_path, monkeypatch, candidate_offsets=divergent_offsets, linked_entries_a=disagreeing_linked_entries
+    )
+
+    with pytest.raises(probe.ProbeError, match="linked table differs from candidate relocation resolution") as exc_info:
+        probe.run_experiment(arguments)
+    assert exc_info.value.status == "FAIL"
+
+
+def test_run_experiment_reports_pass_for_matching_baseline(tmp_path, monkeypatch) -> None:
+    # The recorded baseline still yields PASS with the controls preserved.
+    arguments, out_path = _setup_synthetic_experiment_env(
+        tmp_path, monkeypatch, candidate_offsets=OBJECT_OFFSETS
+    )
+
+    exit_code, report = probe.run_experiment(arguments)
+
+    assert exit_code == 0
+    assert report["experiment_status"] == "PASS"
+    assert report["equivalence_claim"] == "ASSUMPTION_DEPENDENT"
+    assert report["original_match_status"] == "INCONCLUSIVE"
+    assert report["promoted_to_matched"] is False
+    assert report["independent_identity_proven"] is False
+    assert report["code"]["equal_words"] == 30
+    assert report["code"]["differences"] == []
+    assert report["jump_table"]["equal_entries"] == 6
+    assert report["jump_table"]["differences"] == []
+    # Controls are exercised on the equal baseline, and only executed controls are advertised.
+    assert report["controls"]["C"]["detected"] is True
+    assert report["controls"]["D"]["detected"] is True
+    assert report["controls"]["E"]["detected"] is True
+    assert report["code"]["false_positive_controls"] == ["E"]
+    assert report["jump_table"]["false_positive_controls"] == ["B", "C", "D"]
+    assert report["linker"]["variants"]["B"]["hi16_lo16_effective_address"] == "0x4774"
+    assert out_path.is_file()
+    assert json.loads(out_path.read_text(encoding="utf-8"))["experiment_status"] == "PASS"
+
+
+def test_run_experiment_preserves_multiple_valid_divergences(tmp_path, monkeypatch) -> None:
+    # Two valid divergent entries (3 and 5) must both survive into the report.
+    divergent_offsets = (0x38, 0x40, 0x48, 0x44, 0x58, 0x68)
+    arguments, _out_path = _setup_synthetic_experiment_env(
+        tmp_path, monkeypatch, candidate_offsets=divergent_offsets
+    )
+
+    exit_code, report = probe.run_experiment(arguments)
+
+    assert exit_code == 3
+    assert report["experiment_status"] == "DIVERGENCE"
+    assert report["code"]["equal_words"] == 30
+    assert report["jump_table"]["equal_entries"] == 4
+    assert report["jump_table"]["differences"] == [
+        {"entry_index": 3, "original": "0x000003ec", "linked": "0x000003e0"},
+        {"entry_index": 5, "original": "0x000003fc", "linked": "0x00000404"},
+    ]
+    assert report["code"]["false_positive_controls"] == []
+    assert report["jump_table"]["false_positive_controls"] == ["B"]

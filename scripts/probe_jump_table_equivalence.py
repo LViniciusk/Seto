@@ -186,10 +186,32 @@ def entry_destination_rows(entries: Sequence[int]) -> list[dict[str, object]]:
 
 
 def validate_case_destinations(entries: Sequence[int]) -> None:
-    """Require every linked entry to land on the expected case body inside .text."""
+    """Historical-equality helper: every linked entry must land on its recorded case body.
+
+    The experiment no longer gates on recorded-case equality (a valid but different
+    destination is a DIVERGENCE, not a failure); this stays available where historical
+    equality is genuinely a precondition.  ``validate_structural_destinations`` is what
+    the experiment uses for the baseline.
+    """
     invalid = [row for row in entry_destination_rows(entries) if not row["matches_expected_case"]]
     if invalid:
         raise ProbeError("FAIL", f"linked jump table does not map to the expected case bodies: {invalid}")
+
+
+def validate_structural_destinations(entries: Sequence[int]) -> None:
+    """Require every linked entry to land at an aligned address inside the function."""
+    if len(entries) != TABLE_ENTRIES:
+        raise ProbeError(
+            "FAIL",
+            f"expected {TABLE_ENTRIES} table entries, got {len(entries)}",
+        )
+    for index, address in enumerate(entries):
+        if address % 4 != 0 or not (FUNCTION_ADDRESS <= address < FUNCTION_ADDRESS + FUNCTION_SIZE):
+            raise ProbeError(
+                "FAIL",
+                f"linked jump table entry {index} at 0x{address:x} is outside aligned function code "
+                f"[0x{FUNCTION_ADDRESS:x}:0x{FUNCTION_ADDRESS + FUNCTION_SIZE:x})",
+            )
 
 
 def equivalence_claim(equal_words: int, equal_entries: int) -> str:
@@ -344,6 +366,31 @@ def candidate_table_entries(module: elf.ElfFile, *, symbol: str) -> tuple[elf.Se
     if len(words) != TABLE_ENTRIES:
         raise ParseError(f"candidate table decoded {len(words)} words, expected {TABLE_ENTRIES}")
     return section, relocations, words
+
+
+def validate_candidate_table_invariants(
+    table_relocations: Sequence[elf.Relocation],
+    table_words: Sequence[int],
+) -> tuple[int, ...]:
+    """Structural invariants of the candidate table not guaranteed by the caller.
+
+    ``table_relocations`` comes from ``candidate_table_relocations()``, which already
+    enforces the count, type, symbol and ordering, so this checks only the remaining
+    content-independent invariants: decodable addends, coherence with the stored
+    words, and aligned in-function targets.  A table whose values merely differ from
+    the recorded baseline passes here and is classified later as a DIVERGENCE.
+    """
+    if any(not relocation.addend_valid for relocation in table_relocations):
+        raise ProbeError("UNSUPPORTED", "invalid table relocation addend")
+
+    addends = tuple(relocation.addend & 0xFFFFFFFF for relocation in table_relocations)
+    if addends != tuple(table_words):
+        raise ProbeError("FAIL", "table words disagree with relocation addends")
+
+    if any(offset % 4 != 0 or offset >= FUNCTION_SIZE for offset in addends):
+        raise ProbeError("FAIL", "table target is outside aligned function code")
+
+    return addends
 
 
 def linked_table_entries(module: elf.ElfFile, *, table_address: int) -> tuple[int, ...]:
@@ -937,12 +984,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         raise ProbeError("UNSUPPORTED", "fresh candidate HI16/LO16 pairing is not proven")
 
     table_section, table_relocations, table_words = candidate_table_entries(candidate, symbol=FUNCTION_NAME)
-    addends = tuple(relocation.addend & 0xFFFFFFFF for relocation in table_relocations)
-    if addends != EXPECTED_OFFSETS or table_words != EXPECTED_OFFSETS:
-        raise ProbeError(
-            "FAIL",
-            f"fresh candidate table symbol-relative offsets {addends} differ from the recorded baseline {EXPECTED_OFFSETS}",
-        )
+    addends = validate_candidate_table_invariants(table_relocations, table_words)
 
     original_table = _original_table_evidence(original, original_words)
     original_entries = tuple(int(value, 16) for value in original_table["entries"])
@@ -993,7 +1035,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
     if not baseline["hi16_lo16_reconstructs_table"] or not baseline["call_is_controlled_target"]:
         raise ProbeError("FAIL", "linked baseline did not reconstruct the table address or the controlled call target")
     baseline_entries = tuple(int(value, 16) for value in baseline["linked_entries"])
-    validate_case_destinations(baseline_entries)
+    validate_structural_destinations(baseline_entries)
 
     # Cross-check (necessary consistency, not by itself proof of provenance): the
     # linked entries must equal the candidate object's own R_MIPS_32 addends applied
@@ -1003,7 +1045,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
     if resolved_entries != baseline_entries:
         raise ProbeError(
             "FAIL",
-            "linked table differs from the candidate object's own R_MIPS_32 addends applied over .text",
+            "linked table differs from candidate relocation resolution",
         )
 
     a_words = tuple(int(word, 16) for word in variants["A"]["linked_words"])
@@ -1154,6 +1196,13 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
     validate_recorded_hash("source during experiment", sha256_file(source_path), source_hash)
     validate_recorded_hash("fresh object during experiment", sha256_file(object_path), object_hash)
 
+    # Only controls that actually ran and were detected count as false-positive
+    # evidence.  A diverging baseline records C/D/E as NOT_RUN placeholders, which
+    # must not be advertised as executed controls.
+    executed_controls = {
+        label for label, record in control_records.items() if record.get("detected")
+    }
+
     report = {
         "schema_version": 1,
         "function": FUNCTION_NAME,
@@ -1165,7 +1214,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             "total_words": FUNCTION_WORDS,
             "differences": baseline["differences"],
             "file_byte_comparison": True,
-            "false_positive_controls": ["E"] if "E" in control_records else [],
+            "false_positive_controls": ["E"] if "E" in executed_controls else [],
         },
         "jump_table": {
             "original_address": f"0x{TABLE_ORIGINAL_ADDRESS:x}",
@@ -1179,7 +1228,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             "candidate_address": variants["A"]["assigned_table_address"],
             "file_byte_comparison": True,
             # B (layout) is always validated; C/D only when the baseline is equal.
-            "false_positive_controls": ["B"] + [label for label in ("C", "D") if label in control_records],
+            "false_positive_controls": ["B"] + [label for label in ("C", "D") if label in executed_controls],
         },
         "baseline": {
             "status": matching.INCONCLUSIVE,
