@@ -310,3 +310,46 @@ def test_invalid_build_root_never_writes_report_to_symlink_target(
     assert sentinel.read_text(encoding="utf-8") == "keep"
     assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
     assert not (outside / "link-equivalence.json").exists()
+
+
+@pytest.mark.parametrize(
+    "log_name",
+    ["seto-toolchain.stdout.txt", "seto-toolchain.stderr.txt"],
+)
+def test_toolchain_log_write_rejects_preexisting_file_symlinks(
+    tmp_path, log_name
+) -> None:
+    repo = tmp_path / "repo"
+    build_root = repo / "build" / "seto014"
+    logs = build_root / "logs"
+    outside = tmp_path / "outside"
+    logs.mkdir(parents=True)
+    outside.mkdir()
+    sentinel = outside / log_name
+    sentinel.write_text("sentinel", encoding="utf-8")
+    log_path = logs / log_name
+    try:
+        log_path.symlink_to(sentinel)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"platform does not permit local file symlink creation: {exc}")
+
+    with pytest.raises(probe.ProbeError, match="build output may not be a symlink"):
+        probe._write_build_text(log_path, "would overwrite", build_root.resolve())
+    assert sentinel.read_text(encoding="utf-8") == "sentinel"
+
+
+@pytest.mark.parametrize(
+    "log_name",
+    ["seto-toolchain.stdout.txt", "seto-toolchain.stderr.txt"],
+)
+def test_toolchain_log_write_succeeds_for_regular_build_files(tmp_path, log_name) -> None:
+    build_root = tmp_path / "repo" / "build" / "seto014"
+    logs = build_root / "logs"
+    logs.mkdir(parents=True)
+    log_path = logs / log_name
+
+    probe._write_build_text(log_path, "normal toolchain output\n", build_root.resolve())
+
+    assert log_path.is_file()
+    assert not log_path.is_symlink()
+    assert log_path.read_text(encoding="utf-8") == "normal toolchain output\n"

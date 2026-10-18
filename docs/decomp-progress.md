@@ -2158,9 +2158,10 @@ determinístico e com o mesmo SHA-256; nenhum teste altera o PRX ou o objeto fon
 Essas verificações protegem contra redirecionamentos já existentes na árvore local;
 **não** alegam proteção contra alterações concorrentes (TOCTOU) do filesystem.
 
-Neste hardening: `tests/test_probe_link_equivalence.py` passou 27/27 em Windows e
-WSL2; a suíte Windows passou 593 testes (21 skips), e a integração WSL2 R2 passou
-39 testes (3 skips). A suíte WSL2 completa preserva as 9 falhas/8 skips ambientais
-já descritos acima; elas não envolvem os caminhos alterados. Reviewer: `APPROVE`;
+Neste hardening: `tests/test_probe_link_equivalence.py` passou 31/31 em Windows e
+WSL2; a suíte Windows passou 597 testes (21 skips), a integração Windows passou
+23/19 e a integração WSL2 R2 passou 39/3. A suíte WSL2 completa teve 601 passes,
+9 falhas e 8 skips; são as mesmas falhas ambientais já descritas acima e não
+envolvem os caminhos alterados. Reviewer: `APPROVE`;
 Test-Auditor: sem bloqueios, revisão estática. CI Ubuntu/Windows Python 3.11/3.12
 do commit de hardening `2003b35` passou 8/8.
