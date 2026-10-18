@@ -10,7 +10,6 @@ build path safety.
 from __future__ import annotations
 
 import importlib.util
-import json
 import struct
 import sys
 from pathlib import Path
@@ -23,7 +22,7 @@ for _p in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from seto import elf, mips
+from seto import elf, imports, mips
 from seto.binio import ParseError
 
 SCRIPT = REPO_ROOT / "scripts" / "probe_integrated_module_equivalence.py"
@@ -43,13 +42,23 @@ from conftest import (  # noqa: E402
     SHT_STRTAB,
     SHT_SYMTAB,
     build_elf32,
+    build_call_object,
     build_symbols,
+    jal,
     word,
 )
 
 
 def _u32_words(values: Sequence[int]) -> bytes:
     return b"".join(word(value) for value in values)
+
+
+def _mwcats_records(cases: Sequence[tuple[int, str, str, int, int]]) -> bytes:
+    """Canonical Metrowerks metadata: ``(size << 16) | tag`` then the function pointer."""
+    return b"".join(
+        struct.pack("<II", ((total_w * 4) << 16) | probe.MWCATS_FUNCTION_TAG, addr)
+        for addr, _c_name, _status, _mw, total_w in cases
+    )
 
 
 def _synthetic_linked_elf(
@@ -66,6 +75,8 @@ def _synthetic_linked_elf(
     displaced_addr: int = 0x1000,
     controlled_symbols: dict[str, int] | None = None,
     with_mwcats: bool = True,
+    mwcats_bytes: bytes | None = None,
+    mwcats_flags: int = 0,
     undefined_symbol: str | None = None,
     with_unconsumed_relocations: bool = False,
 ) -> bytes:
@@ -161,14 +172,14 @@ def _synthetic_linked_elf(
     ]
 
     if with_mwcats:
-        mwcats_size = len(cases) * 8
+        mwcats_data = mwcats_bytes if mwcats_bytes is not None else _mwcats_records(cases)
         sections.append(
             {
                 "name": ".mwcats",
                 "type": SHT_PROGBITS,
-                "flags": 0,
+                "flags": mwcats_flags,
                 "addr": 0,
-                "data": b"\x00" * mwcats_size,
+                "data": mwcats_data,
                 "link": 0,
                 "info": 0,
                 "addralign": 4,
@@ -605,4 +616,337 @@ def test_validate_link_has_no_unresolved_rejects_unconsumed_relocations_and_unde
     mod_undef = elf.parse(undef_elf)
     with pytest.raises(probe.ProbeError, match=r"linked ELF has undefined symbols: \['D_UNRESOLVED'\]"):
         validate_link_has_no_unresolved(mod_undef)
+
+
+# ---------------------------------------------------------------------------
+# 10. R2 hardening: mandatory .mwcats metadata
+# ---------------------------------------------------------------------------
+
+
+def test_validate_linked_structure_requires_mwcats_metadata_and_records() -> None:
+    cases = probe.ordered_inventory()
+    records = _mwcats_records(cases)
+
+    # Canonical metadata is accepted and tied to every object.
+    good = elf.parse(_synthetic_linked_elf(cases=cases, mwcats_bytes=records))
+    probe.validate_linked_structure(good, label="good-mwcats", expected_cases=cases)
+
+    # Absence of the section is rejected outright.
+    missing = elf.parse(_synthetic_linked_elf(cases=cases, with_mwcats=False))
+    with pytest.raises(probe.ProbeError, match="does not preserve the .mwcats"):
+        probe.validate_linked_structure(missing, label="no-mwcats", expected_cases=cases)
+
+    # Incompatible total size.
+    short = elf.parse(_synthetic_linked_elf(cases=cases, mwcats_bytes=records[:-8]))
+    with pytest.raises(probe.ProbeError, match=r"\.mwcats size is"):
+        probe.validate_linked_structure(short, label="short-mwcats", expected_cases=cases)
+
+    # Structurally incorrect record: wrong tag.
+    bad_tag = bytearray(records)
+    bad_tag[0] = probe.MWCATS_FUNCTION_TAG + 1
+    tag_mod = elf.parse(_synthetic_linked_elf(cases=cases, mwcats_bytes=bytes(bad_tag)))
+    with pytest.raises(probe.ProbeError, match="carries tag"):
+        probe.validate_linked_structure(tag_mod, label="tag-mwcats", expected_cases=cases)
+
+    # Structurally incorrect record: size field disagrees with the object.
+    bad_size = bytearray(records)
+    bad_size[2:4] = struct.pack("<H", 0x10)
+    size_mod = elf.parse(_synthetic_linked_elf(cases=cases, mwcats_bytes=bytes(bad_size)))
+    with pytest.raises(probe.ProbeError, match="declares size"):
+        probe.validate_linked_structure(size_mod, label="size-mwcats", expected_cases=cases)
+
+    # Structurally incorrect record: pointer no longer resolves to its object.
+    bad_ptr = bytearray(records)
+    bad_ptr[2 * probe.MWCATS_RECORD_SIZE + 4 : 2 * probe.MWCATS_RECORD_SIZE + 8] = struct.pack("<I", 0x999)
+    ptr_mod = elf.parse(_synthetic_linked_elf(cases=cases, mwcats_bytes=bytes(bad_ptr)))
+    with pytest.raises(probe.ProbeError, match="points at"):
+        probe.validate_linked_structure(ptr_mod, label="ptr-mwcats", expected_cases=cases)
+
+
+# ---------------------------------------------------------------------------
+# 11. R2 hardening: R_MIPS_26 reconciliation and controlled imports
+# ---------------------------------------------------------------------------
+
+
+def _stub_import(address: int, library: str, nid: int) -> imports.PspImport:
+    return imports.PspImport(
+        library=library, nid=nid, stub_address=address, stub_index=0, table_offset=0
+    )
+
+
+def _call(
+    address: int, target: int, kind: str, imported: imports.PspImport | None = None
+) -> imports.CallReference:
+    return imports.CallReference(
+        address=address, target=target, relocation_type="R_MIPS_26", kind=kind, imported=imported
+    )
+
+
+def test_reconcile_call_inventory_proves_sites_against_prx_and_link() -> None:
+    stub = 0x20
+    imported = _stub_import(stub, "sceTest", 0xABCD0001)
+    table = imports.ImportTable(
+        module="m", imports={stub: imported}, code_range=(probe.TEXT_START, probe.TEXT_SIZE)
+    )
+    words = [0] * probe.TEXT_WORDS
+    words[0x8 // 4] = jal(stub)
+    words[0x10 // 4] = jal(0x100)
+    prx_calls = (_call(0x8, stub, "import", imported), _call(0x10, 0x100, "local"))
+    candidate_sites = {0x8: "func_00000020", 0x10: "func_00000100"}
+    linked_symbols = {"func_00000100": 0x100}
+    controlled = {"func_00000020": stub}
+
+    rows = probe.reconcile_call_inventory(
+        candidate_sites, linked_symbols, words, prx_calls, table, controlled
+    )
+    assert [row["kind"] for row in rows] == ["import", "local"]
+    assert rows[0]["imported_library"] == "sceTest"
+    assert rows[0]["imported_nid"] == "0xabcd0001"
+    assert rows[0]["linked_call_target"] == f"0x{stub:x}"
+    assert rows[1]["callee_address"] == "0x100"
+    assert rows[1]["linked_call_target"] == "0x100"
+
+    # The two inventories must describe the same sites.
+    with pytest.raises(probe.ProbeError, match="does not match the PRX calls"):
+        probe.reconcile_call_inventory(
+            {0x8: "func_00000020"}, linked_symbols, words, prx_calls, table, controlled
+        )
+    with pytest.raises(probe.ProbeError, match="does not match the PRX calls"):
+        probe.reconcile_call_inventory(
+            {**candidate_sites, 0x14: "func_00000100"},
+            linked_symbols,
+            words,
+            prx_calls,
+            table,
+            controlled,
+        )
+
+    # An import symbol must name a stub the PRX import table actually resolves.
+    with pytest.raises(probe.ProbeError, match="does not name a stub"):
+        probe.reconcile_call_inventory(
+            {0x8: "func_00000030", 0x10: "func_00000100"},
+            linked_symbols,
+            words,
+            prx_calls,
+            table,
+            {"func_00000030": 0x30},
+        )
+
+    # A local call symbol must be a defined function of the linked module.
+    with pytest.raises(probe.ProbeError, match="not a defined function"):
+        probe.reconcile_call_inventory(
+            candidate_sites, {}, words, prx_calls, table, controlled
+        )
+
+    # The local PRX target and the symbol address must agree.
+    wrong_local = (_call(0x8, stub, "import", imported), _call(0x10, 0x104, "local"))
+    with pytest.raises(probe.ProbeError, match="targets 0x104"):
+        probe.reconcile_call_inventory(
+            candidate_sites, linked_symbols, words, wrong_local, table, controlled
+        )
+
+    # The linked instruction must be the jal that was actually produced.
+    non_jal = list(words)
+    non_jal[0x8 // 4] = 0
+    with pytest.raises(probe.ProbeError, match="is not a jal"):
+        probe.reconcile_call_inventory(
+            candidate_sites, linked_symbols, non_jal, prx_calls, table, controlled
+        )
+    wrong_jal = list(words)
+    wrong_jal[0x8 // 4] = jal(0x30)
+    with pytest.raises(probe.ProbeError, match="does not jump to"):
+        probe.reconcile_call_inventory(
+            candidate_sites, linked_symbols, wrong_jal, prx_calls, table, controlled
+        )
+
+
+def test_validate_controlled_imports_matches_the_prx_import_table() -> None:
+    imported_a = _stub_import(0x20, "sceA", 0x11)
+    imported_b = _stub_import(0x24, "sceB", 0x22)
+    calls = (_call(0x8, 0x20, "import", imported_a), _call(0xC, 0x24, "import", imported_b))
+
+    probe.validate_controlled_imports(calls, {"func_00000020": 0x20, "func_00000024": 0x24})
+
+    with pytest.raises(probe.ProbeError, match="missing"):
+        probe.validate_controlled_imports(calls, {"func_00000020": 0x20})
+    with pytest.raises(probe.ProbeError, match="excess"):
+        probe.validate_controlled_imports(
+            calls, {"func_00000020": 0x20, "func_00000024": 0x24, "func_00000028": 0x28}
+        )
+    with pytest.raises(probe.ProbeError, match="incorrect"):
+        probe.validate_controlled_imports(calls, {"func_00000020": 0x20, "func_00000024": 0x28})
+
+
+# ---------------------------------------------------------------------------
+# 12. R2 hardening: fail-closed finalization and record provenance
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_experiment_report_rejects_incomplete_and_inconsistent_reports() -> None:
+    jump_table = {"equal_entries": 13, "entry_count": 13, "differences": []}
+
+    with pytest.raises(probe.ProbeError, match="structured code and jump_table"):
+        probe.finalize_experiment_report({})
+    with pytest.raises(probe.ProbeError, match="structured code and jump_table"):
+        probe.finalize_experiment_report(
+            {"code": {"equal_words": 509, "total_words": 509, "differences": []}}
+        )
+    with pytest.raises(probe.ProbeError, match="integer field"):
+        probe.finalize_experiment_report(
+            {"code": {"equal_words": None, "total_words": 509, "differences": []}, "jump_table": jump_table}
+        )
+    with pytest.raises(probe.ProbeError, match="integer field"):
+        probe.finalize_experiment_report(
+            {"code": {"equal_words": True, "total_words": 509, "differences": []}, "jump_table": jump_table}
+        )
+    with pytest.raises(probe.ProbeError, match="difference lists"):
+        probe.finalize_experiment_report(
+            {"code": {"equal_words": 509, "total_words": 509, "differences": "x"}, "jump_table": jump_table}
+        )
+    with pytest.raises(probe.ProbeError, match="exactly 509 words and 13 entries"):
+        probe.finalize_experiment_report(
+            {"code": {"equal_words": 508, "total_words": 508, "differences": []}, "jump_table": jump_table}
+        )
+    with pytest.raises(probe.ProbeError, match="code equal-count disagrees"):
+        probe.finalize_experiment_report(
+            {"code": {"equal_words": 508, "total_words": 509, "differences": []}, "jump_table": jump_table}
+        )
+    with pytest.raises(probe.ProbeError, match="jump-table equal-count disagrees"):
+        probe.finalize_experiment_report(
+            {
+                "code": {"equal_words": 509, "total_words": 509, "differences": []},
+                "jump_table": {"equal_entries": 12, "entry_count": 13, "differences": []},
+            }
+        )
+
+
+def _match_record(
+    compiler: str, loader: Sequence[str], flags: Sequence[str], includes: Sequence[str]
+) -> dict[str, object]:
+    return {
+        "provenance": {
+            "compiler": compiler,
+            "loader": list(loader),
+            "flags": list(flags),
+            "includes": list(includes),
+        }
+    }
+
+
+def test_consistent_provenance_reads_and_sanitizes_the_match_records() -> None:
+    cases = probe.ordered_inventory()
+    records = {
+        c_name: _match_record(
+            "/mnt/c/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+            ["/home/user/.local/bin/wibo"],
+            ["-O4,p", "-sdatathreshold", "0"],
+            ["decomp/include"],
+        )
+        for _addr, c_name, *_rest in cases
+    }
+
+    provenance = probe.consistent_provenance(records, cases)
+    assert provenance["compiler"] == "mwccpsp.exe"
+    assert provenance["loader"] == ["wibo"]
+    assert provenance["flags"] == ["-O4,p", "-sdatathreshold", "0"]
+    assert provenance["includes"] == ["decomp/include"]
+
+    divergent = dict(records)
+    divergent[cases[0][1]] = _match_record(
+        "/mnt/c/tools/mwccpsp_3.0.1_219/other.exe",
+        ["/home/user/.local/bin/wibo"],
+        ["-O4,p", "-sdatathreshold", "0"],
+        ["decomp/include"],
+    )
+    with pytest.raises(probe.ProbeError, match="compiler is not consistent"):
+        probe.consistent_provenance(divergent, cases)
+
+    broken = dict(records)
+    broken[cases[1][1]] = {}
+    with pytest.raises(probe.ProbeError, match="no provenance block"):
+        probe.consistent_provenance(broken, cases)
+
+    no_flags = dict(records)
+    no_flags[cases[2][1]] = {
+        "provenance": {
+            "compiler": "mwccpsp.exe",
+            "loader": ["wibo"],
+            "includes": ["decomp/include"],
+        }
+    }
+    with pytest.raises(probe.ProbeError, match="no flags list"):
+        probe.consistent_provenance(no_flags, cases)
+
+    other_loader = dict(records)
+    other_loader[cases[3][1]] = _match_record(
+        "/mnt/c/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        ["/home/user/.local/bin/wibo-ng"],
+        ["-O4,p", "-sdatathreshold", "0"],
+        ["decomp/include"],
+    )
+    with pytest.raises(probe.ProbeError, match="loader is not consistent"):
+        probe.consistent_provenance(other_loader, cases)
+
+    other_includes = dict(records)
+    other_includes[cases[4][1]] = _match_record(
+        "/mnt/c/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        ["/home/user/.local/bin/wibo"],
+        ["-O4,p", "-sdatathreshold", "0"],
+        ["decomp/include", "decomp/extra"],
+    )
+    with pytest.raises(probe.ProbeError, match="includes is not consistent"):
+        probe.consistent_provenance(other_includes, cases)
+
+
+# ---------------------------------------------------------------------------
+# 13. R2 hardening: candidate R_MIPS_26 collection and executable metadata
+# ---------------------------------------------------------------------------
+
+
+def _single_case_object(tmp_path: Path, code: bytes, calls: Sequence[tuple[int, str]]) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    obj_path = tmp_path / "func_00000100.o"
+    obj_path.write_bytes(build_call_object(code, calls))
+    return obj_path
+
+
+def test_collect_candidate_call_sites_reads_the_object_relocations(tmp_path: Path) -> None:
+    cases = [(0x100, "func_00000100.c", "MATCHED", 16, 4)]
+    obj = _single_case_object(tmp_path, word(0) + word(jal(0)) + word(0) + word(0), [(4, "func_00000200")])
+    objects = {"func_00000100.c": obj}
+
+    assert probe.collect_candidate_call_sites(cases, objects) == {0x104: "func_00000200"}
+
+    # A relocation inside .text but past the declared function is rejected.
+    outside = _single_case_object(tmp_path / "n", word(0) * 6, [(20, "func_00000200")])
+    with pytest.raises(probe.ProbeError, match="outside its function"):
+        probe.collect_candidate_call_sites(cases, {"func_00000100.c": outside})
+
+    # A relocation past the object's own .text has no validated section offset.
+    past_end = _single_case_object(tmp_path / "e", word(0) * 4, [(0x40, "func_00000200")])
+    with pytest.raises(probe.ProbeError, match="no validated section offset"):
+        probe.collect_candidate_call_sites(cases, {"func_00000100.c": past_end})
+
+    # A non-zero in-place addend is rejected.
+    addended = _single_case_object(tmp_path / "a", word(0) + word(jal(4)) + word(0) + word(0), [(4, "func_00000200")])
+    with pytest.raises(probe.ProbeError, match="carries an in-place addend"):
+        probe.collect_candidate_call_sites(cases, {"func_00000100.c": addended})
+
+    # The same site emitted by two objects is ambiguous.
+    with pytest.raises(probe.ProbeError, match="emitted by more than one object"):
+        probe.collect_candidate_call_sites(
+            [
+                (0x100, "func_00000100.c", "MATCHED", 16, 4),
+                (0x100, "func_00000100b.c", "MATCHED", 16, 4),
+            ],
+            {"func_00000100.c": obj, "func_00000100b.c": obj},
+        )
+
+
+def test_validate_linked_structure_rejects_executable_mwcats() -> None:
+    cases = probe.ordered_inventory()
+    elf_bytes = _synthetic_linked_elf(cases=cases, mwcats_flags=SHF_ALLOC | SHF_EXECINSTR)
+    module = elf.parse(elf_bytes)
+    with pytest.raises(probe.ProbeError, match="executable sections"):
+        probe.validate_linked_structure(module, label="exec-mwcats", expected_cases=cases)
 

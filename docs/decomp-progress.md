@@ -2781,9 +2781,9 @@ Todos os controles B, C, D e E confirmam a sensibilidade e especificidade da son
 |---|---|
 | PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
 | Linker script (`build/seto017/integrated.ld`) SHA-256 | `015f10cce6f726eab12661e09639b1e8af98ffd82e3aaa65cd10413af193317a` |
-| ELF linkado integrado SHA-256 | `4488ae63d41071d0b30bb2a62888bf4f73809633e25b3991207e9d722d42aa52` |
-| Relatório canônico (`integrated-module-equivalence.json`) SHA-256 | Determinístico e idêntico em execuções repetidas |
-| Compilador / Loader / Flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+| ELF linkado integrado SHA-256 | `4488ae63d41071d0b30bb2a62888bf4f73809633e25b3991207e9d722d42aa52` (**obsoleto**; ver correção na seção SETO-DECOMP-017-R2, valor reproduzido `6b447e5e4c543a1cf55db84c8d8f9b48140a71fbf19695fd627bdb2bb935d239`) |
+| Relatório canônico (`integrated-module-equivalence.json`) SHA-256 | `7a3ddf01ee9d8d683b5ec960931d40fa7e4bd5c197a2ef58719f0cc319c96556` (determinístico e idêntico em execuções repetidas) |
+| Compilador / Loader / Flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` (forma da 017; a 017-R2 passa a derivar dos 15 registros: `mwccpsp.exe` / `wibo` / mesmas flags) |
 | Linker / Emulação | GNU ld (GNU Binutils for Ubuntu) 2.42 / `elf32ltsmip` |
 
 ### 6. Limites Epistemológicos e Probabilidade Científica
@@ -2805,4 +2805,127 @@ Todos os controles B, C, D e E confirmam a sensibilidade e especificidade da son
 | Windows / `pytest -q` | 707 passaram, 27 ignorados |
 | WSL2 suíte real 014 + 015 + 016 + 017 | 8 passaram |
 | Standalone probe (`probe_integrated_module_equivalence.py`) | Exit code 0, canonical JSON emitido e verificado |
+| `compileall -q src scripts tests` / `git diff --check` | clean / clean |
+
+## SETO-DECOMP-017-R2 — Endurecimento Semântico Final
+
+**Resultado operacional: `PASS`; a mesma comparação integrada (`509/509` words de
+`.text` e `13/13` entradas de `.rodata` literalmente idênticas ao PRX) permanece;
+alegação inalterada (`ASSUMPTION_DEPENDENT`); 7 `MATCHED`, 8 `INCONCLUSIVE`,
+0 `NONMATCHING`.** Esta revisão fecha quatro lacunas objetivas apontadas pela
+auditoria ao experimento 017 sem alterar a semântica estrita do matcher, as fontes
+C, o comparador, os parsers ELF/relocation nem os probes anteriores. O ELF linkado
+é **byte-a-byte idêntico** ao produzido pelo script em `a592e32` (confirmado
+restaurando o script antigo sobre os mesmos objetos e comparando `sha256`), de modo
+que nenhum byte do artefato observado mudou.
+
+### 1. Reconciliação do inventário `R_MIPS_26` e resolução de chamadas
+
+O inventário de chamadas deixou de ser um par de contagens constantes e passou a ser
+reconciliado a partir das evidências efetivas:
+
+- `collect_candidate_call_sites()` percorre os 15 objetos candidatos, coleta cada
+  `R_MIPS_26` de `.text` e o mapeia ao endereço de módulo (início da função + offset
+  de seção), exigindo que o sítio caia dentro da própria função, com addend in-place
+  nulo, símbolo nomeado e sem sítios duplicados entre objetos, produzindo
+  exatamente **72 sítios**.
+- `reconcile_call_inventory()` exige que o conjunto de sítios dos objetos seja
+  **idêntico** ao das 72 chamadas recuperadas do PRX (`set` simétrico) e, por sítio:
+  - **chamada local:** o símbolo precisa ser uma função **definida** do módulo
+    linkado (símbolo de `.text`), o alvo recuperado do PRX precisa coincidir com o
+    endereço final do símbolo, e a instrução efetivamente linkada precisa ser um
+    `jal` com `jump_target` igual a esse endereço;
+  - **importação:** o símbolo `func_<stub>` precisa nomear exatamente o stub
+    (`parse_function_name`), o stub precisa resolver na tabela de imports do PRX
+    (`seto.imports.ImportTable.resolve`) devolvendo uma identidade
+    `(library, NID)` definida e igual à da chamada do PRX, e o destino controlado
+    (`--defsym`) precisa ser o próprio stub com a instrução `jal` correspondente.
+- `validate_controlled_imports()` compara `CONTROLLED_IMPORTS` com o mapa derivado
+  da tabela recuperada do PRX (`{func_<stub>: stub}` para as 50 chamadas de
+  importação) e **rejeita entradas ausentes, excedentes ou incorretas** — os 35
+  stubs declarados coincidem exatamente com os 35 stubs reais.
+
+As linhas reconciliadas (sítio, tipo, símbolo, stub/alvo, biblioteca, NID, alvo da
+instrução linkada) são emitidas em `calls.reconciled_call_sites`; nenhuma flag
+booleana pré-definida substitui a verificação.
+
+### 2. Preservação obrigatória de `.mwcats`
+
+`validate_linked_structure()` agora **exige** a seção `.mwcats` e a associa aos
+objetos que a produziram:
+
+- ausência da seção, `size` incompatível (diferente de `15 × 8 = 0x78`) ou seção
+  executável são rejeitadas;
+- cada um dos 15 registros de 8 bytes é decodificado como
+  `(size_bytes << 16) | tag` seguido de um ponteiro `R_MIPS_32` relocado, e precisa
+  casar **com o objeto daquele índice**: `tag = 0x2`, `size_bytes` igual ao tamanho
+  real da função e ponteiro igual ao endereço final da função.
+
+Os 15 registros reais foram verificados contra o PRX (tag `0x2`, `size` idêntico ao
+símbolo e ponteiro resolvido ao endereço do intervalo). Nada é reinterpretado como
+código executável.
+
+### 3. Finalização fail-closed
+
+`finalize_experiment_report()` foi reescrita para rejeitar relatórios incompletos:
+`{}`, ausência de `code`/`jump_table`, campos nulos, campos de tipo inválido
+(`bool`/`str`), totais diferentes de **509 words e 13 entradas**, contagens iguais
+fora da faixa e inconsistências entre `equal_*` e o tamanho das listas de diferenças
+(`len(differences) == total − equal`) elevam `ProbeError("FAIL")`. Um relatório só
+retorna `PASS` quando `equal_words == 509` e `equal_entries == 13` com listas de
+diferenças vazias e coerentes; uma divergência genuína e completa preserva o exit
+code `3` (`DIVERGENCE_EXIT_CODE`) e o relatório integral.
+
+### 4. Proveniência e segurança
+
+- `consistent_provenance()` extrai **compilador, loader, flags e includes dos 15
+  registros reais** de `match_function.py`, exige que os 15 concordem
+  (divergência → `FAIL`) e reduz caminhos absolutos a basenames
+  (`mwccpsp.exe`, `wibo`), mantendo o JSON canônico sanitizado; nenhuma versão ou
+  parâmetro é inventado como fallback.
+- O JSON canônico passa a incluir caminho e `sha256` do **ELF integrado** e de
+  **cada artefato linkado** (`variant-a` e os controles `control-b`…`control-e`),
+  além do `sha256` do linker script.
+- `prepare_build_file()` é chamado **antes do linker** para cada caminho de saída
+  (inclusive os das variantes), rejeitando symlinks e saídas inesperadas.
+- Duas execuções frescas completas produzem relatórios **idênticos** (inclusive os
+  `sha256` dos ELFs), comprovando determinismo.
+
+### 5. Limpeza
+
+Removidos: o dicionário `func_symbols` não consumido, as cópias duplicadas dos
+inventários de tabela (`table_relocs_39c/414`, `table_words_39c/414`), o bloco
+`compiler_info` com parâmetros sintetizados, a invocação de `seto toolchain` usada
+para sintetizar versões, os valores de retorno (`cmd_a`…`_cmd_e`) não utilizados de
+`_execute_link`, as constantes `READELF`/`OBJDUMP`/`FILE` não referenciadas, a
+verificação redundante de executabilidade de `.mwcats` (já coberta pelo invariante
+de que apenas `.text` é executável) e o `import json` não usado nos testes.
+
+### 6. Artefatos e hashes (R2)
+
+| Artefato / Parâmetro | Valor / Hash |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Linker script (`build/seto017/integrated.ld`) SHA-256 | `015f10cce6f726eab12661e09639b1e8af98ffd82e3aaa65cd10413af193317a` |
+| ELF integrado (`build/seto017/links/variant-a/linked.elf`) SHA-256 | `6b447e5e4c543a1cf55db84c8d8f9b48140a71fbf19695fd627bdb2bb935d239` |
+| Relatório canônico (`integrated-module-equivalence.json`) SHA-256 | `7a3ddf01ee9d8d683b5ec960931d40fa7e4bd5c197a2ef58719f0cc319c96556` |
+| Compilador / Loader / Flags | `mwccpsp.exe` / `wibo` / `-O4,p -sdatathreshold 0` (derivados dos 15 registros) |
+| Linker / Emulação | GNU ld (GNU Binutils for Ubuntu) 2.42 / `elf32ltsmip` |
+
+> Correção de registro: o digest do ELF integrado anotado na seção 017 anterior
+> (`4488ae63…`) estava obsoleto. O valor acima é o do link reproduzido, confirmado
+> **idêntico** ao gerado pelo script em `a592e32` sobre os mesmos objetos.
+
+### 7. Validação desta rodada (R2)
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_integrated_module_equivalence.py` | 24 passaram (Windows e WSL2) |
+| Regressões 014–016 (`test_probe_link/jump_table/multi_reference_equivalence.py`) | 124 passaram (31 + 66 + 27) |
+| Probes 014–017 juntos | 148 passaram (31 + 66 + 27 + 24) |
+| Integração GNU sintética (`tests/integration`, sem opt-in) | 41 passaram, 7 ignorados |
+| WSL2 real 014 + 015 + 016 + 017 (opt-ins ligados) | 45 passaram, 3 ignorados |
+| Windows `pytest -q` | 714 passaram, 27 ignorados |
+| WSL2 `pytest -q` | 720 passaram, 12 ignorados, 9 falhas ambiente pré-existentes (`test_match_script`, `test_smoke`, `test_toolchain`, `test_toolchain_bootstrap`; arquivos não tocados, reproduzidas em worktree limpo do baseline) |
+| Probe standalone (`probe_integrated_module_equivalence.py`) | exit code `0`, relatório canônico determinístico |
 | `compileall -q src scripts tests` / `git diff --check` | clean / clean |
