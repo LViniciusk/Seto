@@ -8,6 +8,7 @@ relocation handling, the negative controls and the build-path confinement.
 from __future__ import annotations
 
 import importlib.util
+import json
 import struct
 import sys
 from dataclasses import replace
@@ -207,6 +208,46 @@ def test_layout_control_changes_only_the_lo16_word() -> None:
     changed_elsewhere[0] ^= 1
     with pytest.raises(probe.ProbeError, match="only the HI16/LO16"):
         probe.validate_layout_control(baseline, changed_elsewhere)
+
+
+def test_control_b_reconstructs_its_own_assigned_address() -> None:
+    baseline = list(FUNCTION_WORDS)
+    moved = list(FUNCTION_WORDS)
+    moved[9] = _addiu(3, 3, 0x4774)
+    differences = probe.validate_layout_destination(baseline, moved, assigned_address=0x4774)
+    assert [row["word_index"] for row in differences] == [9]
+    assert probe.paired_effective_address(moved[7], moved[9]) == 0x4774
+
+
+def test_control_b_rejects_a_pair_that_reconstructs_a_different_address() -> None:
+    baseline = list(FUNCTION_WORDS)
+    moved = list(FUNCTION_WORDS)
+    moved[9] = _addiu(3, 3, 0x4778)
+    # The LO16 word differs from A at the expected index, yet the pair reconstructs
+    # 0x4778: differing from A is not enough, so control B must be rejected.
+    assert [row["word_index"] for row in probe.compare_word_sequences(baseline, moved)] == [9]
+    assert probe.paired_effective_address(moved[7], moved[9]) == 0x4778
+    with pytest.raises(probe.ProbeError, match="reconstructs 0x4778, expected 0x4774"):
+        probe.validate_layout_destination(baseline, moved, assigned_address=0x4774)
+
+
+def test_control_b_rejects_an_invalid_hi16_lo16_pair() -> None:
+    with pytest.raises(ParseError, match="not a LUI"):
+        probe.paired_effective_address(0x00000000, _addiu(3, 3, 0x4774))
+    with pytest.raises(ParseError, match="not an ADDIU"):
+        probe.paired_effective_address(_lui(3, 0), 0x00000000)
+
+
+def test_control_b_propagates_an_invalid_pair_through_its_validator() -> None:
+    # An invalid HI16/LO16 pair reaches paired_effective_address through the
+    # composed validator and keeps raising ParseError (no silent acceptance).
+    baseline = list(FUNCTION_WORDS)
+    baseline[7] = 0x00000000  # not a LUI, in both artifacts
+    moved = list(baseline)
+    moved[9] = _addiu(3, 3, 0x4774)
+    assert [row["word_index"] for row in probe.compare_word_sequences(baseline, moved)] == [9]
+    with pytest.raises(ParseError, match="not a LUI"):
+        probe.validate_layout_destination(baseline, moved, assigned_address=0x4774)
 
 
 def test_table_swap_is_detected_at_exactly_the_swapped_entries() -> None:
@@ -491,6 +532,136 @@ def test_report_classification_never_promotes_controlled_equality() -> None:
     assert report["jump_table"]["layout_assignment"] == "CONTROLLED"
     assert report["independent_identity_proven"] is False
     assert report["promoted_to_matched"] is False
+
+
+def _not_run_controls() -> dict[str, dict[str, object]]:
+    # The exact shape run_experiment must record for the baseline-dependent
+    # controls when artifact A does not equal the original (see not_run_controls).
+    return {
+        label: {
+            "status": "NOT_RUN",
+            "reason": "baseline comparison diverged",
+            "detected": False,
+            "promoted_to_matched": False,
+        }
+        for label in ("C", "D", "E")
+    }
+
+
+def test_not_run_controls_never_claims_a_baseline_dependent_control_passed() -> None:
+    assert probe.not_run_controls() == _not_run_controls()
+    for control in probe.not_run_controls().values():
+        assert control["status"] == "NOT_RUN"
+        assert control["detected"] is False
+        assert control["promoted_to_matched"] is False
+
+
+def _report_with(
+    *,
+    equal_words: int,
+    equal_entries: int,
+    controls: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    report = probe._base_report()
+    report["code"] = {
+        "equal_words": equal_words,
+        "total_words": 30,
+        "differences": []
+        if equal_words == 30
+        else [{"word_index": 0, "address": "0x39c", "original": "0x27bdfff0", "linked": "0x27bdfff1"}],
+    }
+    report["jump_table"]["equal_entries"] = equal_entries
+    report["jump_table"]["differences"] = (
+        []
+        if equal_entries == 6
+        else [{"entry_index": 3, "original": "0x000003ec", "linked": "0x000003e0"}]
+    )
+    report["controls"] = controls
+    return report
+
+
+@pytest.mark.parametrize(
+    ("equal_words", "equal_entries", "expected_status", "expected_exit"),
+    [
+        (30, 6, "PASS", 0),
+        (29, 6, "DIVERGENCE", 3),
+        (30, 5, "DIVERGENCE", 3),
+        (29, 5, "DIVERGENCE", 3),
+    ],
+)
+def test_finalize_classifies_valid_comparisons(
+    equal_words, equal_entries, expected_status, expected_exit
+) -> None:
+    report = _report_with(equal_words=equal_words, equal_entries=equal_entries, controls={})
+    exit_code = probe.finalize_experiment_report(report)
+    assert exit_code == expected_exit
+    assert report["experiment_status"] == expected_status
+    assert report["original_match_status"] == "INCONCLUSIVE"
+    assert report["promoted_to_matched"] is False
+    assert report["independent_identity_proven"] is False
+
+
+@pytest.mark.parametrize(
+    ("equal_words", "equal_entries", "expected_status", "expected_exit"),
+    [
+        (30, 6, "PASS", 0),
+        (29, 6, "DIVERGENCE", 3),
+        (30, 5, "DIVERGENCE", 3),
+        (29, 5, "DIVERGENCE", 3),
+    ],
+)
+def test_finalize_and_write_report_never_drops_divergence_evidence(
+    tmp_path, monkeypatch, equal_words, equal_entries, expected_status, expected_exit
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "build").mkdir(parents=True)
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    out = repo / "build/seto015/report.json"
+
+    controls = (
+        _not_run_controls()
+        if expected_status != "PASS"
+        else {label: {"detected": True, "promoted_to_matched": False} for label in ("C", "D", "E")}
+    )
+    report = _report_with(equal_words=equal_words, equal_entries=equal_entries, controls=controls)
+    exit_code = probe.finalize_experiment_report(report)
+    probe._write_report(out, report)
+
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert written["experiment_status"] == expected_status
+    assert written["equivalence_claim"] == probe.equivalence_claim(equal_words, equal_entries)
+    assert written["original_match_status"] == "INCONCLUSIVE"
+    assert written["promoted_to_matched"] is False
+    assert written["independent_identity_proven"] is False
+    assert exit_code == expected_exit == (0 if expected_status == "PASS" else probe.DIVERGENCE_EXIT_CODE)
+    # All 30 words and all 6 entries are preserved, with the exact differences.
+    assert written["code"]["equal_words"] == equal_words
+    assert len(written["code"]["differences"]) == 30 - equal_words
+    assert written["jump_table"]["equal_entries"] == equal_entries
+    assert len(written["jump_table"]["differences"]) == 6 - equal_entries
+    assert written["controls"] == controls
+
+
+def test_invalid_layout_is_not_reported_as_a_divergence() -> None:
+    # Structural integrity failures keep failing immediately as ProbeError; they are
+    # never converted into the DIVERGENCE classification of a valid comparison.
+    with pytest.raises(probe.ProbeError) as unsupported:
+        probe.validate_table_section(
+            elf.parse(_linked_elf_bytes(with_rodata=False)), table_address=0x4770, label="test"
+        )
+    assert unsupported.value.status == "UNSUPPORTED"
+    with pytest.raises(probe.ProbeError) as failed:
+        probe.validate_linked_structure(
+            elf.parse(_linked_elf_bytes(with_metadata=False)), label="test"
+        )
+    assert failed.value.status == "FAIL"
+
+
+def test_divergence_exit_code_matches_the_repository_mismatch_convention() -> None:
+    from seto.cli import EXIT_BLOCKED, EXIT_ERROR, EXIT_INCONCLUSIVE, EXIT_MISMATCH, EXIT_OK
+
+    assert probe.DIVERGENCE_EXIT_CODE == EXIT_MISMATCH == 3
+    assert probe.DIVERGENCE_EXIT_CODE not in (EXIT_OK, EXIT_ERROR, EXIT_BLOCKED, EXIT_INCONCLUSIVE)
 
 
 def test_canonical_json_is_stable_and_sorted() -> None:

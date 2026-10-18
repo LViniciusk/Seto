@@ -334,6 +334,8 @@ def test_real_metrowerks_prx_jump_table_comparison_is_controlled_and_determinist
     assert variants["A"]["call_is_controlled_target"] is True
     assert variants["A"]["linked_entries"] == ["0x000003d4", "0x000003dc", "0x000003e4", "0x000003ec", "0x000003f4", "0x000003fc"]
     assert variants["B"]["linked_entries"] == variants["A"]["linked_entries"]
+    assert variants["B"]["hi16_lo16_reconstructs_table"] is True
+    assert variants["B"]["hi16_lo16_effective_address"] == "0x4774"
     layout_differences = report["linker"]["layout_control_b_vs_a"]
     assert [row["word_index"] for row in layout_differences] == [9]
     assert layout_differences[0]["address"] == "0x3c0"
