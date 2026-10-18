@@ -1885,3 +1885,289 @@ certificadas, 60 pendentes, 30 pares, 72 chamadas, 1268 imports, 181 relocations
 evidência `PASS` vem do Windows (`win32`) e as tentativas `BLOCKED` seguem
 registradas. Sem prova independente de identidade, os 60 índices pendentes e os 8
 `INCONCLUSIVE` permanecem inalterados.
+
+## SETO-DECOMP-014 — Link-Time Equivalence Feasibility
+
+**Resultado: `BLOCKED` por ausência de linker MIPS utilizável no ambiente
+inspecionado.** O compilador produziu um candidato novo e o matching preservou o
+baseline `INCONCLUSIVE` de `func_000004B8`; nenhuma linkedição foi executada, nenhum
+endereço foi imposto e não há resultado pós-link. Ausência de ferramenta não é
+evidência de incompatibilidade do objeto nem divergência de código.
+
+### Inventário e diagnóstico reproduzível
+
+| Ferramenta examinada | Versão/estado observado | Capacidade relevante comprovada |
+|---|---|---|
+| Metrowerks `mwccpsp` | 3.0.1 build 219, instalado | Compila o candidato MIPS/PSP; a instalação contém `mwccpsp.exe` e `LMGR8C.DLL`, sem `mwld` ou outro linker encontrado na árvore do toolchain. |
+| `wibo` | 1.2.0, configurado | Executa o compilador Win32 em WSL2; não é linker. |
+| GNU `ld` em WSL2 | Binutils 2.42 | `ld -V` lista apenas emulações x86-64/i386; `mips*-linux-gnu-ld` não está instalado. |
+| GNU `ld.exe`/`ld.bfd.exe` em MSYS2 UCRT64 e MINGW64 | Binutils 2.46 | `-V` lista somente `i386pep`/`i386pe`; nenhum alvo MIPS. |
+| LLVM em MSYS2 UCRT64 | 21.1.8 | `llvm-objdump` registra alvos MIPS/MIPSel e pode ser usado para análise; não há `ld.lld.exe`/`lld.exe` instalado. A presença de suporte MIPS no disassembler não prova capacidade de linkedição. |
+| Pacote `binutils-mips-linux-gnu` no apt do WSL2 | Candidato 2.42-2ubuntu1cross5; não instalado | Não faz parte das ferramentas presentes e verificadas nesta rodada. Não foi instalado um novo toolchain para contornar o STOP obrigatório por ausência de ferramenta essencial. |
+
+Verificações para reproduzir o diagnóstico, sem alterar o repositório:
+
+```bash
+# WSL2
+command -v ld.lld lld mipsel-linux-gnu-ld mips-linux-gnu-ld
+ld --version
+ld -V
+apt-cache policy binutils-mips-linux-gnu
+
+# Windows / MSYS2 UCRT64
+C:\msys64\ucrt64\bin\ld.exe -V
+C:\msys64\ucrt64\bin\llvm-objdump.exe --version
+```
+
+Os comandos `-V` não apresentam emulação MIPS nos linkers encontrados. Portanto,
+não existe executável elegível para o smoke test exigido (objeto MIPS sintético com
+par HI16/LO16), e esse smoke test **não foi executado**. Não se conclui que GNU
+MIPS binutils seria incompatível com o ET_REL Metrowerks: essa compatibilidade
+continua **não testada**. Também não foi gerado `build/seto014/link-equivalence.json`,
+pois não há um resultado de link a relatar.
+
+### Compilação fresca e baseline observado
+
+A compilação foi feita nesta rodada, sem reutilizar o objeto de execuções
+anteriores. Nesta máquina, `python3` no comando abaixo corresponde ao ambiente
+`/home/vinicius/.seto/venvs/seto008-test/bin/python` do WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/match_function.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --function 0x4B8 \
+  --source decomp/src/func_000004B8.c \
+  --out build/seto014/f4b8 \
+  --json
+```
+
+O comando terminou com código 5, o resultado normal para o baseline `INCONCLUSIVE`,
+não com erro de compilação. Proveniência observada:
+
+| Item | Valor |
+|---|---|
+| SHA-256 do PRX | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| SHA-256 de `func_000004B8.c` | `71b84bca92e2f2fd084e0a4a18849a6c7bc169e07faf856d9d808068bf52e9a8` |
+| SHA-256 do objeto fresco `func_000004B8.o` | `17cce92e8424bfded12b9ee4a26363ec7ac19c36f8bf795af02d05a22904425f` |
+| Compilador / loader / flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+| Matching original | `INCONCLUSIVE`, 18/20 palavras, 0 diferenças, 0 problemas de relocation, 4 chamadas resolvidas pelo comparador, 0 referências de dados resolvidas |
+
+O objeto candidato é ELF32 `ET_REL`, little-endian, máquina MIPS R3000, flags
+`0x10970001` (`noreorder`, `mips2`). Em `.rel.text` há seis entradas: `R_MIPS_HI16`
+no offset de objeto `0x0C` e `R_MIPS_LO16` em `0x18`, ambas para o símbolo undefined
+`D_00004830`; quatro `R_MIPS_26` para `func_00000894`, `func_00000854`,
+`func_00002D0C` e `func_000008A4`. `.rel.mwcats` contém ainda um `R_MIPS_32` de
+metadados para o símbolo definido `func_000004B8`. Os quatro endereços de chamada
+que o comparador resolve no baseline são, respectivamente, `0x894`, `0x854`,
+`0x2D0C` e `0x8A4`; essa resolução do matcher não é uma linkedição do objeto.
+
+### Alcance probatório e próxima etapa
+
+No PRX, as instruções originais em `0x4C4` (`lui $a1`) e `0x4D0`
+(`addiu $a1,$a1,0x4830`) formam o par HI16/LO16 já associado pelo fluxo de
+registradores. A referência original recuperada é `.data+0xC8`, VA `0x4830`; os
+bytes nesse objeto de dados, no offset de arquivo `0x4890`, são `/PSP/SAVEDATA/`.
+Isso prova o destino numérico e o conteúdo do PRX, não que o símbolo candidato
+`D_00004830` seja a identidade do objeto/string original. O relatório atual ainda
+registra zero dados resolvidos e mantém os dois words pendentes.
+
+Não há instruções “depois do link”, endereço efetivo produzido pelo linker,
+comparação pós-link, execução dos controles negativos `0x4830` versus `0x4834`,
+nem teste positivo/negativo de linker nesta rodada. Não se atribuiu endereço a
+`D_00004830` nem às chamadas e não se fabricaram stubs. Se uma futura rodada
+obtiver um linker validado e impor essas definições, tal igualdade será
+`ASSUMPTION_DEPENDENT`; atribuir `D_00004830 -> 0x4830` não estabelece identidade
+independente. A diferença entre o endereço virtual escolhido para linkedição e a
+base após carregamento do PRX, incluindo relocations de runtime, também terá de ser
+tratada antes de comparar codificações como se ambas usassem a mesma base.
+
+Assim, a conclusão desta investigação é **viabilidade não determinada** (não
+`UNSUPPORTED`): não foi possível testar a compatibilidade do formato/ABI/relocations
+Metrowerks com GNU MIPS binutils ou LLD porque nenhum linker MIPS estava disponível.
+Não há evidência nova que altere os baselines 013: 7 `MATCHED`, 8 `INCONCLUSIVE`,
+0 `NONMATCHING` e 60 words pendentes. Próxima ação técnica: disponibilizar e
+autorizar uma instalação isolada de um linker MIPS real; primeiro executar o smoke
+test HI16/LO16 com saída ELF e relocation efetivamente aplicada, e só então decidir
+se o objeto Metrowerks pode ser linkado para este experimento. Mesmo se esse teste
+passar, a identidade original de `D_00004830` continuará sem prova independente.
+
+### Gates de repositório desta rodada
+
+Estes gates verificam o estado do repositório; eles **não** substituem o smoke test
+de linker, que permanece não executado pelo bloqueio acima.
+
+| Gate | Resultado |
+|---|---|
+| Windows / `pytest -q` | 566 passaram, 19 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 17 ignorados |
+| WSL2 / `pytest -m integration -q` | 37 passaram, 3 ignorados |
+| `compileall -q src scripts tests` | clean |
+| `seto verify` | ISO OK (`FB22D0F0…C906`) |
+| Linker smoke HI16/LO16 e controles `0x4830`/`0x4834` | Não executados: linker MIPS ausente; nenhum resultado afirmado |
+
+### R2 — Controlled Link-Time Comparison
+
+**Resultado operacional: `PASS`; comparação A: 20/20 words iguais sob endereços
+controlados; alegação: `ASSUMPTION_DEPENDENT`.** Esta continuação usa o linker GNU
+MIPSel validado na ENV-014, recompila o candidato neste próprio run e compara
+literalmente os 20 words do ELF linkado com os bytes file-backed do PRX em
+`.text[0x4B8:0x508]`. Não altera o comparador nem os relatórios oficiais de
+matching.
+
+#### Compilação fresca e proveniência
+
+Comando reproduzível nesta configuração WSL2:
+
+```bash
+PYTHONPATH=src python3 scripts/probe_link_equivalence.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --source decomp/src/func_000004B8.c \
+  --build-dir build/seto014/r2/integration-real \
+  --out build/seto014/link-equivalence.json
+```
+
+O script remove o objeto de saída local antes de invocar `scripts/match_function.py`;
+esse último só compara depois de validar o exit code zero do compilador. A invocação
+completa terminou em 5, que é o exit code esperado do matcher para `INCONCLUSIVE`.
+O relatório JSON confirmou 18/20 words, zero diferenças e zero problemas de
+relocation no baseline estrito.
+
+| Artefato/parâmetro | Valor observado |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Fonte C SHA-256 | `71b84bca92e2f2fd084e0a4a18849a6c7bc169e07faf856d9d808068bf52e9a8` |
+| Objeto fresco SHA-256 | `17cce92e8424bfded12b9ee4a26363ec7ac19c36f8bf795af02d05a22904425f` |
+| Linker script SHA-256 | `8d62c76a039a7fde59be6d80515610c7ce859aa9adb8cc29ae8eb023edceffaa` |
+| GNU linker/emulação | GNU ld 2.42 / `elf32ltsmip` |
+| Compilador/loader/flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+
+O objeto novo foi conferido como ELF32 little-endian MIPS `ET_REL`; contém o par
+`R_MIPS_HI16`/`R_MIPS_LO16` para `D_00004830`, quatro `R_MIPS_26` de chamadas e
+`.rel.mwcats` com `R_MIPS_32` para `func_000004B8`. Esse SHA coincide com o artefato
+anterior porque o compilador reproduziu os mesmos bytes; o run atual removeu e
+recriou o objeto e validou seu hash contra o registro de `match_function.py`.
+
+#### Linkedição e comparação observada
+
+O script temporário, gerado somente sob `build/seto014/`, fixa
+`.text 0x4B8 : SUBALIGN(4)`, exige tamanho `0x50` e endereço do símbolo, mantém
+`.mwcats` e verifica que apenas `.text` é executável. O linker não inseriu código,
+stubs ou trampolins; o ELF de saída é ELF32 little-endian MIPS `ET_EXEC`, com 20
+words e sem relocations remanescentes ou símbolos indefinidos. Os únicos símbolos
+externos definidos para a linkedição foram:
+
+```text
+D_00004830      = 0x4830   (varia para B/C)
+func_00000894   = 0x894
+func_00000854   = 0x854
+func_00002D0C   = 0x2D0C
+func_000008A4   = 0x8A4
+```
+
+As quatro chamadas foram correlacionadas com entradas `libehsys` do import table
+original (`0x894`/NID `0xEC6F1CF2`, `0x854`/`0x10F3BB61`, `0x2D0C`/`0x57018B7C`,
+`0x8A4`/`0x476FD94A`). Os endereços fornecidos ao linker continuam sendo
+**atribuições controladas** para o candidato, não prova de identidade dos seus
+símbolos.
+
+| Caso | Atribuição de `D_00004830` | Comparação literal com PRX | HI16/LO16 observado |
+|---|---:|---:|---|
+| A | `0x4830` | **20/20 iguais**, nenhuma diferença | HI `0x0000`, LO `0x4830`, efetivo `0x4830` |
+| B | `0x4834` | **19/20 iguais**, word `0x4D0`: `0x24A54830` → `0x24A54834` | LO muda; o par, como unidade semântica, passa a apontar a `0x4834` |
+| C | `0x8004` | **18/20 iguais**, words `0x4C4` e `0x4D0` diferem | HI `0x0001`, LO `0x8004`, signed LO `-32764`, efetivo `0x8004` |
+
+O controle adicional copiou o objeto fresco e alterou somente o word não relocável em
+`0x4B8` (`0x27BDFFD0` → `0x27BDFFD1`). A comparação detectou exatamente essa
+diferença; o objeto original e a fonte C não foram alterados. O caso C valida carry,
+não representa uma hipótese sobre o endereço real.
+
+#### Coordenadas do PRX e alcance probatório
+
+As APIs existentes do Seto confirmaram o par original em `0x4C4`/`0x4D0`, com
+pareamento por fluxo de registradores, e o destino original `.data+0xC8`, VA
+`0x4830`, offset de arquivo `0x4890`. Os 14 bytes foram lidos diretamente da seção
+original e são `/PSP/SAVEDATA/`; nenhum dado foi copiado para o candidato. A
+identidade entre o símbolo candidato `D_00004830` e esse objeto original continua
+**não comprovada**.
+
+As seis relocations PSP no intervalo (`HI16`, `LO16` e quatro `R_MIPS_26`) referem-se
+ao segmento relativo 0. `psp_reloc.relative_base(..., load_base=0)` e
+`apply_relocation()` registram apenas o modelo module-relative, que preserva os
+words file-backed; isso não afirma que o módulo seja carregado em base zero. A base
+real em runtime não foi inferida. Portanto, os 20/20 de A são uma comparação válida
+dos bytes no arquivo sob o layout escolhido, mas **não demonstram equivalência de
+runtime**. As relocations PSP não foram aplicadas uma segunda vez aos bytes
+linkados.
+
+O relatório canônico `build/seto014/link-equivalence.json` tem SHA-256
+`ebffa9dcb227071c58f0e8e3d7fead35ad94544e060268a9e2ee56cf7ba098f6`. Duas execuções
+frescas produziram JSONs byte a byte idênticos. O status estrito original permanece
+`INCONCLUSIVE`; o resultado não usa `MATCHED`, `verified_decompilation=True`, nem
+identidade verificada.
+
+### Testes, gates e revisão da R2
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_link_equivalence.py` | 27 passaram |
+| WSL2 integração R2 (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram; smoke GNU + compile/link/compare real e determinismo |
+| Windows / `pytest -q` | 593 passaram, 21 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 19 ignorados |
+| WSL2 / `pytest -m integration -q` com opt-in real | 39 passaram, 3 ignorados |
+| `compileall -q src scripts tests` | clean |
+| `seto verify` | ISO OK (`FB22D0F0…C906`) |
+| Auditoria global 013, saída separada em `build/` | `PASS`, hash inalterado `108ae293…d8c1e653` |
+| CI GitHub Ubuntu / Python 3.11 e 3.12 | 4/4 checks passaram |
+| CI GitHub Windows / Python 3.11 e 3.12 | 4/4 checks passaram |
+
+No `pytest -q` completo em WSL2 sobre este checkout montado pelo Windows, foram
+observados 597 passes, 9 falhas e 8 skips. As falhas foram nos testes não alterados
+`test_match_script::test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces`,
+cinco casos de `test_smoke.py`, um de `test_toolchain.py` que observou Wibo visível
+neste WSL, e os dois testes POSIX de `test_toolchain_bootstrap.py` que receberam
+scripts `.sh` com CRLF no checkout montado. Nenhum código ou configuração alheios à
+R2 foi alterado para mascarar essas falhas. A suíte completa Windows passou; a CI
+Ubuntu/Windows do PR #13 passou integralmente (8/8 checks).
+
+**Test-Auditor:** não encontrou lacunas materiais após a revisão dos controles e
+proveniência; confirmou que as atribuições não promovem identidade. A revisão foi
+estática e não executou os artifacts independentemente. **Reviewer:** `APPROVE`;
+após correção do offset do controle tamper, a ferramenta exige `.text` de `0x50`
+bytes com o símbolo-alvo no offset zero e o teste verifica o ELF linkado negativo.
+
+**Próximo passo técnico:** obter evidência independente que relacione
+`D_00004830` ao objeto original (por exemplo, objeto/linker map ou metadados de
+debug autenticados) e, para uma conclusão de runtime, o load base real usado pelo
+PSP. Os 20/20 words sob as hipóteses atuais não bastam para avançar a classificação
+estrita nem justificam ampliar esta rodada às outras funções.
+
+**Hardening local dos artefatos R2:** `scripts/probe_link_equivalence.py` agora
+valida `build` e `build/seto014` antes de resolver a raiz; symlinks existentes ou
+quebrados e arquivos no lugar de diretórios são rejeitados. A raiz ausente é aceita
+sem criação pelo helper. `_validate_arguments`, linkedição, inspeção, gravação de
+relatório e o tratamento de erro usam o helper único. Se a raiz for inválida, o
+erro original vai para stderr com exit não zero e o programa não tenta gravar
+relatório ali nem escolhe outro destino.
+
+Os testes cobrem raiz real/ausente, symlinks externos/quebrados em ambos os níveis,
+arquivos nos caminhos de raiz e uma chamada pelo fluxo de `main()` com sentinela
+externa intacta e nenhuma escrita redirecionada. O experimento R2 permanece
+determinístico e com o mesmo SHA-256; nenhum teste altera o PRX ou o objeto fonte.
+Essas verificações protegem contra redirecionamentos já existentes na árvore local;
+**não** alegam proteção contra alterações concorrentes (TOCTOU) do filesystem.
+
+O output dos logs `seto-toolchain.stdout.txt`/`.stderr.txt` agora usa
+`_write_build_text()`: symlinks preexistentes para cada arquivo são rejeitados e
+arquivos regulares legítimos continuam sendo gravados. A gravação redundante
+posterior de `controlled-link.ld` foi removida; o script é criado uma vez através
+do helper protegido.
+
+Neste hardening: `tests/test_probe_link_equivalence.py` passou 31/31 em Windows e
+WSL2; a suíte Windows passou 597 testes (21 skips), a integração Windows passou
+23/19 e a integração WSL2 R2 passou 39/3. A suíte WSL2 completa teve 601 passes,
+9 falhas e 8 skips; são as mesmas falhas ambientais já descritas acima e não
+envolvem os caminhos alterados. Reviewer: `APPROVE`;
+Test-Auditor: sem bloqueios, revisão estática. CI Ubuntu/Windows Python 3.11/3.12
+do commit `a895c35` passou 8/8.
