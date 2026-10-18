@@ -2695,3 +2695,293 @@ candidato e **não promove `func_00000414` de `INCONCLUSIVE` para `MATCHED`**
 | WSL2 integração 014 + 015 + 016 reais | 6 passaram |
 | Relatórios canônicos 015 / 016 | `6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c` (inalterado) / `469865af2d6632ec0969a819c6eaff6b5fc87a2a36aa9061e498b34970647d35` (determinístico em 2 runs frescos); `probe_common.py` e 014 intocados |
 | `compileall -q src scripts tests` / `git diff --check` | clean / clean |
+
+## SETO-DECOMP-017 — Integrated Module Reconstruction & Link-Time Equivalence
+
+**Resultado operacional: `PASS`; comparação A: 509/509 words de `.text` e 13/13
+entradas de jump table em `.rodata` literalmente idênticos ao PRX sob layout e
+símbolos controlados; alegação: `ASSUMPTION_DEPENDENT`.** O experimento conclui a
+integração global de todo o módulo `.text` (`[0x0, 0x7F4)`, 2036 bytes, 509 words),
+reunindo os 15 objetos candidatos compilados de C (`REAL_MATCH_CASES`), o
+fragmento não-reconstruído em `0x84–0x8C` (`jr $ra; nop`), as duas jump tables
+geradas pelo compilador em `.rodata` (`0x4770`, 13 entradas, 52 bytes), a resolução
+cruzada de 22 chamadas locais entre os próprios objetos, 50 chamadas de importação
+resolvidas via 35 stubs de biblioteca derivadas da tabela de imports do PRX, e 11
+símbolos externos de dados (`D_...`). Não altera o comparador estrito, os parsers
+ELF/relocation, as fontes C nem os probes anteriores (`probe_common.py`,
+`probe_link_equivalence.py`, `probe_jump_table_equivalence.py`,
+`probe_multi_reference_equivalence.py`); as 15 funções preservam rigorosamente seus
+status originais (7 `MATCHED`, 8 `INCONCLUSIVE`).
+
+### 1. Metodologia de reconstrução integrada e layout global
+
+A compilação fresca de todas as 15 fontes C em `decomp/src/` é realizada
+diretamente via Metrowerks 3.0.1 build 219 (`-O4,p -sdatathreshold 0`) sob wibo no
+WSL2. O script `scripts/probe_integrated_module_equivalence.py` valida primeiro o
+baseline individual de cada objeto contra `REAL_MATCH_CASES` (7 `MATCHED`, 8
+`INCONCLUSIVE`), exigindo zero diferenças e zero `relocation_issues` antes de admitir
+os objetos à linkagem integrada.
+
+O layout de `.text` é particionado em 16 intervalos disjuntos e contíguos que cobrem
+estritamente `[0x0, 0x7F4)`:
+
+| Intervalo VA | Tamanho | Símbolo de entrada | Classificação | Status baseline | Relocations `.rel.text` no PRX |
+|---|---:|---|---|---|---:|
+| `0x000–0x034` | 52 B (13 w) | `func_00000000` | Reconstrução C | `INCONCLUSIVE` (7/13) | 7 (1 call, 3 HI/LO) |
+| `0x034–0x084` | 80 B (20 w) | `func_00000034` | Reconstrução C | `MATCHED` (20/20) | 5 (5 calls) |
+| `0x084–0x08C` | 8 B (2 w) | `func_00000084` | Fragmento original | `ORIGINAL_UNRECONSTRUCTED_FRAGMENT` | 0 |
+| `0x08C–0x134` | 168 B (42 w) | `func_0000008C` | Reconstrução C | `MATCHED` (42/42) | 7 (7 calls) |
+| `0x134–0x178` | 68 B (17 w) | `func_00000134` | Reconstrução C | `MATCHED` (17/17) | 6 (6 calls) |
+| `0x178–0x244` | 204 B (51 w) | `func_00000178` | Reconstrução C | `MATCHED` (51/51) | 9 (9 calls) |
+| `0x244–0x278` | 52 B (13 w) | `func_00000244` | Reconstrução C | `MATCHED` (13/13) | 4 (4 calls) |
+| `0x278–0x358` | 224 B (56 w) | `func_00000278` | Reconstrução C | `MATCHED` (56/56) | 10 (10 calls) |
+| `0x358–0x39C` | 68 B (17 w) | `func_00000358` | Reconstrução C | `MATCHED` (17/17) | 6 (6 calls) |
+| `0x39C–0x414` | 120 B (30 w) | `func_0000039C` | Reconstrução C | `INCONCLUSIVE` (28/30) | 3 (1 call, 1 HI/LO) |
+| `0x414–0x4B8` | 164 B (41 w) | `func_00000414` | Reconstrução C | `INCONCLUSIVE` (31/41) | 15 (5 calls, 5 HI/LO) |
+| `0x4B8–0x508` | 80 B (20 w) | `func_000004B8` | Reconstrução C | `INCONCLUSIVE` (18/20) | 6 (4 calls, 1 HI/LO) |
+| `0x508–0x634` | 300 B (75 w) | `func_00000508` | Reconstrução C | `INCONCLUSIVE` (63/75) | 18 (6 calls, 6 HI/LO) |
+| `0x634–0x6E4` | 176 B (44 w) | `func_00000634` | Reconstrução C | `INCONCLUSIVE` (42/44) | 6 (4 calls, 1 HI/LO) |
+| `0x6E4–0x704` | 32 B (8 w) | `func_000006E4` | Reconstrução C | `INCONCLUSIVE` (2/8) | 6 (0 calls, 3 HI/LO) |
+| `0x704–0x7F4` | 240 B (60 w) | `func_00000704` | Reconstrução C | `INCONCLUSIVE` (40/60) | 24 (4 calls, 10 HI/LO) |
+| **Total** | **2036 B (509 w)** | — | **15 C + 1 fragmento** | **7 M, 8 I, 0 NM** | **132 relocations `.text` (72 calls, 30 HI, 30 LO)** |
+
+O fragmento `0x84–0x8C` é inserido diretamente no linker script com `. = 0x84; LONG(0x03E00008); LONG(0x00000000);` e o símbolo local `func_00000084 = 0x84;`, de modo que `func_00000000` (que toma o endereço `0x84` como argumento `$a1` para `libehsys`) resolve sua referência sem criar uma função C falsa. O fragmento é explicitamente classificado como `ORIGINAL_UNRECONSTRUCTED_FRAGMENT` e nunca recebe status `MATCHED`.
+
+### 2. Resolução de chamadas locais, imports e dados externos
+
+O módulo possui 72 chamadas `jal` (`R_MIPS_26`):
+- **22 chamadas locais:** resolvidas pelo GNU linker através das definições reais dos símbolos exportados pelos 15 objetos candidatos no layout (por exemplo, `func_0000008C` chamando `func_00000134`, `func_00000178` chamando `func_00000244`, `func_00000278` chamando `func_0000008C`, `func_00000178` e `func_00000358`, `func_00000508` chamando `func_0000039C`, `func_00000414` e `func_000004B8`, e `func_00000704` chamando `func_00000278`, `func_00000508`, `func_00000634` e `func_00000358`).
+- **50 chamadas de importação:** resolvidas via `--defsym` apontando para os 35 stubs de importação no segmento de stubs do PRX (`libehsys`, `sceUtility`, `sceHttp`, `sceSsl`, `sceNet`, `sceNetInet`, `sceNetResolver`, `sceNetApctl`).
+
+Todas as 11 referências a símbolos de dados externos emitidos pelos candidatos (`D_000047A4`, `D_000047D0`, `D_00004800`, `D_00004830`, `D_00004850`, `D_00004860`, `D_00604860`, `D_00604864`, `D_00604918`, `D_00604B18`, `D_00604B9C`) são atribuídas via `--defsym` aos seus endereços correspondentes demonstrados no PRX.
+
+### 3. Coexistência de Jump Tables em `.rodata` (`0x4770`)
+
+As duas jump tables geradas pelo compilador são co-linkadas em uma única seção `.rodata` contígua iniciando em `0x4770` com tamanho total de `0x34` (52 bytes, 13 palavras de 32 bits):
+1. **`func_0000039C` (`0x4770–0x4788`, 24 B / 6 entradas):** entradas `0..5` direcionadas a `[0x3D4, 0x3DC, 0x3E4, 0x3EC, 0x3F4, 0x3FC]`.
+2. **`func_00000414` (`0x4788–0x47A4`, 28 B / 7 entradas):** entradas `0..6` direcionadas a `[0x450, 0x468, 0x480, 0x480, 0x480, 0x480, 0x480]`.
+
+O linker script posiciona `*func_0000039C*(.rodata)` seguido imediatamente por `*func_00000414*(.rodata)`, reproduzindo a sequência exata de 13 entradas observada em `libhtml_view.prx`. Ambas as funções referenciam suas respectivas tabelas através de pares `R_MIPS_HI16`/`R_MIPS_LO16` que resolvem corretamente para `0x4770` e `0x4788`.
+
+### 4. Controles Negativos A–E
+
+| Controle | Manipulação | Resultado observado |
+|---|---|---|
+| **A (Baseline)** | Layout e símbolos nominais | **509/509 words de `.text` e 13/13 entradas de jump table iguais** |
+| **B (Dados externos)** | `D_000047D0` alterado de `0x47D0` para `0x47D4` via `--defsym` | Mudança isolada exatamente nos 2 sítios `LO16` que consom `D_000047D0` em `func_00000414` (endereços `0x474` e `0x4A4`); 0 divergências na jump table |
+| **C (Jump table)** | Addends in-place das entradas 0 e 1 de `func_00000414.o` trocados em `.rodata` | Diferença isolada nas entradas de índice global 6 e 7 da jump table (`0x4788` e `0x478C`); 0 divergências em `.text` |
+| **D (Word não-relocado)** | Bit 0 invertido no word 0 de `func_00000034.o` (`0x27BDFFE8` → `0x27BDFFE9`) | Diferença isolada no endereço `0x34` (word 13 do módulo); 0 divergências na jump table |
+| **E (Chamada local cruzada)** | Chamada local em `func_0000008C.o` mutada de `func_00000134` para `func_00000244` | Diferença isolada no sítio de chamada `0x118` (instrução muda de `jal 0x134` para `jal 0x244`); 0 divergências na jump table |
+
+Todos os controles B, C, D e E confirmam a sensibilidade e especificidade da sonda: nenhuma mutação escapa e nenhuma causa falsos positivos em regiões não relacionadas.
+
+### 5. Proveniência e Parâmetros da Execução
+
+| Artefato / Parâmetro | Valor / Hash |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Linker script (`build/seto017/integrated.ld`) SHA-256 | `015f10cce6f726eab12661e09639b1e8af98ffd82e3aaa65cd10413af193317a` |
+| ELF linkado integrado SHA-256 | `4488ae63d41071d0b30bb2a62888bf4f73809633e25b3991207e9d722d42aa52` (**obsoleto**; ver correção na seção SETO-DECOMP-017-R2, valor reproduzido `6b447e5e4c543a1cf55db84c8d8f9b48140a71fbf19695fd627bdb2bb935d239`) |
+| Relatório canônico (`integrated-module-equivalence.json`) SHA-256 | `7a3ddf01ee9d8d683b5ec960931d40fa7e4bd5c197a2ef58719f0cc319c96556` (determinístico e idêntico em execuções repetidas) |
+| Compilador / Loader / Flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` (forma da 017; a 017-R2 passa a derivar dos 15 registros: `mwccpsp.exe` / `wibo` / mesmas flags) |
+| Linker / Emulação | GNU ld (GNU Binutils for Ubuntu) 2.42 / `elf32ltsmip` |
+
+### 6. Limites Epistemológicos e Probabilidade Científica
+
+1. **Ausência de promoção:** Nenhuma das 8 funções classificadas como `INCONCLUSIVE` foi promovida a `MATCHED` (`original_match_status` preservado; `promoted_to_matched = false`).
+2. **Identidade não-independente:** A equivalência em tempo de linkagem é demonstrada exclusivamente sob o conjunto controlado de layout e atribuições (`equivalence_claim = "ASSUMPTION_DEPENDENT"`, `independent_identity_proven = false`).
+3. **Fragmento `0x84–0x8C`:** As duas palavras `0x03E00008` (`jr $ra`) e `0x00000000` (`nop`) permanecem classificadas como `ORIGINAL_UNRECONSTRUCTED_FRAGMENT`. O projeto não alega ter decompilado este fragmento como C.
+4. **Comparação de runtime:** `runtime_comparison = "NOT_DEMONSTRATED"`. As asserções são restritas à equivalência estática dos bytes resultantes da linkagem em coordenadas module-relative.
+
+### 7. Validação desta rodada
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_integrated_module_equivalence.py` | 17 passaram (Windows e WSL2) |
+| `tests/integration/test_integrated_module_equivalence_real.py` | 2 passaram (GNU sintético sem `private/` + Metrowerks/PRX real e determinismo) |
+| `tests/test_probe_multi_reference_equivalence.py` | 27 passaram (sem regressão) |
+| `tests/test_probe_jump_table_equivalence.py` | 66 passaram (sem regressão) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram (sem regressão) |
+| Windows / `pytest -q` | 707 passaram, 27 ignorados |
+| WSL2 suíte real 014 + 015 + 016 + 017 | 8 passaram |
+| Standalone probe (`probe_integrated_module_equivalence.py`) | Exit code 0, canonical JSON emitido e verificado |
+| `compileall -q src scripts tests` / `git diff --check` | clean / clean |
+
+## SETO-DECOMP-017-R2 — Endurecimento Semântico Final
+
+**Resultado operacional: `PASS`; a mesma comparação integrada (`509/509` words de
+`.text` e `13/13` entradas de `.rodata` literalmente idênticas ao PRX) permanece;
+alegação inalterada (`ASSUMPTION_DEPENDENT`); 7 `MATCHED`, 8 `INCONCLUSIVE`,
+0 `NONMATCHING`.** Esta revisão fecha quatro lacunas objetivas apontadas pela
+auditoria ao experimento 017 sem alterar a semântica estrita do matcher, as fontes
+C, o comparador, os parsers ELF/relocation nem os probes anteriores. O ELF linkado
+é **byte-a-byte idêntico** ao produzido pelo script em `a592e32` (confirmado
+restaurando o script antigo sobre os mesmos objetos e comparando `sha256`), de modo
+que nenhum byte do artefato observado mudou.
+
+### 1. Reconciliação do inventário `R_MIPS_26` e resolução de chamadas
+
+O inventário de chamadas deixou de ser um par de contagens constantes e passou a ser
+reconciliado a partir das evidências efetivas:
+
+- `collect_candidate_call_sites()` percorre os 15 objetos candidatos, coleta cada
+  `R_MIPS_26` de `.text` e o mapeia ao endereço de módulo (início da função + offset
+  de seção), exigindo que o sítio caia dentro da própria função, com addend in-place
+  nulo, símbolo nomeado e sem sítios duplicados entre objetos, produzindo
+  exatamente **72 sítios**.
+- `reconcile_call_inventory()` exige que o conjunto de sítios dos objetos seja
+  **idêntico** ao das 72 chamadas recuperadas do PRX (`set` simétrico) e, por sítio:
+  - **chamada local:** o símbolo precisa ser uma função **definida** do módulo
+    linkado (símbolo de `.text`), o alvo recuperado do PRX precisa coincidir com o
+    endereço final do símbolo, e a instrução efetivamente linkada precisa ser um
+    `jal` com `jump_target` igual a esse endereço;
+  - **importação:** o símbolo `func_<stub>` precisa nomear exatamente o stub
+    (`parse_function_name`), o stub precisa resolver na tabela de imports do PRX
+    (`seto.imports.ImportTable.resolve`) devolvendo uma identidade
+    `(library, NID)` definida e igual à da chamada do PRX, e o destino controlado
+    (`--defsym`) precisa ser o próprio stub com a instrução `jal` correspondente.
+- `validate_controlled_imports()` compara `CONTROLLED_IMPORTS` com o mapa derivado
+  da tabela recuperada do PRX (`{func_<stub>: stub}` para as 50 chamadas de
+  importação) e **rejeita entradas ausentes, excedentes ou incorretas** — os 35
+  stubs declarados coincidem exatamente com os 35 stubs reais.
+
+As linhas reconciliadas (sítio, tipo, símbolo, stub/alvo, biblioteca, NID, alvo da
+instrução linkada) são emitidas em `calls.reconciled_call_sites`; nenhuma flag
+booleana pré-definida substitui a verificação.
+
+### 2. Preservação obrigatória de `.mwcats`
+
+`validate_linked_structure()` agora **exige** a seção `.mwcats` e a associa aos
+objetos que a produziram:
+
+- ausência da seção, `size` incompatível (diferente de `15 × 8 = 0x78`) ou seção
+  executável são rejeitadas;
+- cada um dos 15 registros de 8 bytes é decodificado como
+  `(size_bytes << 16) | tag` seguido de um ponteiro `R_MIPS_32` relocado, e precisa
+  casar **com o objeto daquele índice**: `tag = 0x2`, `size_bytes` igual ao tamanho
+  real da função e ponteiro igual ao endereço final da função.
+
+Os 15 registros reais foram verificados contra o PRX (tag `0x2`, `size` idêntico ao
+símbolo e ponteiro resolvido ao endereço do intervalo). Nada é reinterpretado como
+código executável.
+
+### 3. Finalização fail-closed
+
+`finalize_experiment_report()` foi reescrita para rejeitar relatórios incompletos:
+`{}`, ausência de `code`/`jump_table`, campos nulos, campos de tipo inválido
+(`bool`/`str`), totais diferentes de **509 words e 13 entradas**, contagens iguais
+fora da faixa e inconsistências entre `equal_*` e o tamanho das listas de diferenças
+(`len(differences) == total − equal`) elevam `ProbeError("FAIL")`. Um relatório só
+retorna `PASS` quando `equal_words == 509` e `equal_entries == 13` com listas de
+diferenças vazias e coerentes; uma divergência genuína e completa preserva o exit
+code `3` (`DIVERGENCE_EXIT_CODE`) e o relatório integral.
+
+### 4. Proveniência e segurança
+
+- `consistent_provenance()` extrai **compilador, loader, flags e includes dos 15
+  registros reais** de `match_function.py`, exige que os 15 concordem
+  (divergência → `FAIL`) e reduz caminhos absolutos a basenames
+  (`mwccpsp.exe`, `wibo`), mantendo o JSON canônico sanitizado; nenhuma versão ou
+  parâmetro é inventado como fallback.
+- O JSON canônico passa a incluir caminho e `sha256` do **ELF integrado** e de
+  **cada artefato linkado** (`variant-a` e os controles `control-b`…`control-e`),
+  além do `sha256` do linker script.
+- `prepare_build_file()` é chamado **antes do linker** para cada caminho de saída
+  (inclusive os das variantes), rejeitando symlinks e saídas inesperadas.
+- Duas execuções frescas completas produzem relatórios **idênticos** (inclusive os
+  `sha256` dos ELFs), comprovando determinismo.
+
+### 5. Limpeza
+
+Removidos: o dicionário `func_symbols` não consumido, as cópias duplicadas dos
+inventários de tabela (`table_relocs_39c/414`, `table_words_39c/414`), o bloco
+`compiler_info` com parâmetros sintetizados, a invocação de `seto toolchain` usada
+para sintetizar versões, os valores de retorno (`cmd_a`…`_cmd_e`) não utilizados de
+`_execute_link`, as constantes `READELF`/`OBJDUMP`/`FILE` não referenciadas, a
+verificação redundante de executabilidade de `.mwcats` (já coberta pelo invariante
+de que apenas `.text` é executável) e o `import json` não usado nos testes.
+
+### 6. Artefatos e hashes (R2)
+
+| Artefato / Parâmetro | Valor / Hash |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Linker script (`build/seto017/integrated.ld`) SHA-256 | `015f10cce6f726eab12661e09639b1e8af98ffd82e3aaa65cd10413af193317a` |
+| ELF integrado (`build/seto017/links/variant-a/linked.elf`) SHA-256 | `6b447e5e4c543a1cf55db84c8d8f9b48140a71fbf19695fd627bdb2bb935d239` |
+| Relatório canônico (`integrated-module-equivalence.json`) SHA-256 | `7a3ddf01ee9d8d683b5ec960931d40fa7e4bd5c197a2ef58719f0cc319c96556` |
+| Compilador / Loader / Flags | `mwccpsp.exe` / `wibo` / `-O4,p -sdatathreshold 0` (derivados dos 15 registros) |
+| Linker / Emulação | GNU ld (GNU Binutils for Ubuntu) 2.42 / `elf32ltsmip` |
+
+> Correção de registro: o digest do ELF integrado anotado na seção 017 anterior
+> (`4488ae63…`) estava obsoleto. O valor acima é o do link reproduzido, confirmado
+> **idêntico** ao gerado pelo script em `a592e32` sobre os mesmos objetos.
+
+### 7. Validação desta rodada (R2)
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_integrated_module_equivalence.py` | 24 passaram (Windows e WSL2) |
+| Regressões 014–016 (`test_probe_link/jump_table/multi_reference_equivalence.py`) | 124 passaram (31 + 66 + 27) |
+| Probes 014–017 juntos | 148 passaram (31 + 66 + 27 + 24) |
+| Integração GNU sintética (`tests/integration`, sem opt-in) | 41 passaram, 7 ignorados |
+| WSL2 real 014 + 015 + 016 + 017 (opt-ins ligados) | 45 passaram, 3 ignorados |
+| Windows `pytest -q` | 714 passaram, 27 ignorados |
+| WSL2 `pytest -q` | 720 passaram, 12 ignorados, 9 falhas ambiente pré-existentes (`test_match_script`, `test_smoke`, `test_toolchain`, `test_toolchain_bootstrap`; arquivos não tocados, reproduzidas em worktree limpo do baseline) |
+| Probe standalone (`probe_integrated_module_equivalence.py`) | exit code `0`, relatório canônico determinístico |
+| `compileall -q src scripts tests` / `git diff --check` | clean / clean |
+
+## SETO-DECOMP-017-R3 — Guarda de Caminho de Saída
+
+**Resultado: `PASS` (inalterado); nenhum resultado científico mudou.** Fecha uma
+lacuna objetiva de confinamento de escrita em `build/seto017/`.
+
+### 1. Vulnerabilidade
+
+Antes de invocar `match_function.py` por função, a sonda apagava os artefatos
+antigos com `if obj_path.exists(): obj_path.unlink()` (e o mesmo para
+`report_path`). Como `Path.exists()` segue symlinks, um symlink **quebrado** é
+invisível para ele: o wipe não acontece, e `relative(report_path, REPO_ROOT)`
+resolve o link para o seu alvo. Se o alvo estiver dentro do repositório, mas
+fora de `build/seto017/`, o subprocesso grava o relatório nesse alvo — **fora
+da árvore de build permitida** — e as verificações seguintes
+(`report_path.is_file()` / `read_text()`) leem de volta através do link, de modo
+que a fuga passa despercebida e o experimento ainda termina com sucesso.
+
+Demonstração A/B (symlink quebrado para `<repo>/build/r3-escape-demo.json`):
+
+| Versão | Exit code | Arquivo externo criado |
+|---|---|---|
+| `7216376` (pré-R3) | `0` (sucesso silencioso) | **sim** — `build/r3-escape-demo.json` |
+| R3 | `1` (`FAIL`) | **não** |
+
+### 2. Correção
+
+Nova função `_wipe_stale_build_artifacts(paths, build_root)` reutiliza
+`prepare_build_file()` (que rejeita symlink — quebrado ou não — via
+`is_symlink()`, caminhos fora de `build_root` e não-arquivos regulares) **antes**
+de `unlink(missing_ok=True)`. Ela é aplicada aos caminhos do objeto e do
+relatório antes de `match_function.py`, exatamente como o idioma já usado pelos
+probes 014 (`probe_link_equivalence.py:590-593`) e 016
+(`probe_multi_reference_equivalence.py:1200-1204`). A recompilação fresca é
+preservada (o arquivo regular obsoleto continua sendo removido).
+
+### 3. Testes
+
+- `test_wipe_stale_build_artifacts_rejects_broken_symlink_without_creating_target`: symlink quebrado → falha fechada, destino externo inexistente permanece inexistente.
+- `test_wipe_stale_build_artifacts_rejects_when_the_report_path_is_a_symlink`: comprova a guarda do caminho vulnerável do relatório, antes de invocar o subprocesso.
+- `test_wipe_stale_build_artifacts_rejects_valid_symlink_and_preserves_target`: symlink válido → rejeitado, alvo intacto.
+- `test_wipe_stale_build_artifacts_removes_stale_regular_files_for_fresh_compilation`: objetos/relatórios regulares obsoletos → removidos; idempotente.
+- `test_wipe_stale_build_artifacts_rejects_a_path_outside_the_build_root`: caminho fora de `build_root` → rejeitado.
+- `test_wipe_stale_build_artifacts_rejects_a_directory_at_the_output_path`: diretório no caminho de saída → rejeitado.
+
+### 4. Portões (R3)
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `tests/test_probe_integrated_module_equivalence.py` | Windows & WSL2 | **30/30** |
+| Suíte completa | Windows (`pytest -q`) | 720 passaram, 27 ignorados |
+| Suíte completa | WSL2 (`pytest -q`) | 726 passaram, 12 ignorados, 9 falhas ambiente pré-existentes |
+| Integração real 014 + 015 + 016 + 017 (opt-ins ligados) | WSL2 | 45 passaram, 3 ignorados |
+| Relatório canônico / ELF integrado | WSL2 | `7a3ddf01…` / `6b447e5e…` (inalterados) |
+| A/B com symlink quebrado para arquivo dentro do repositório | WSL2 | Pré-R3: `rc=0`, arquivo fora de `build/seto017/` criado; R3: `rc=1`, nenhum arquivo fora da árvore de build criado |
+| `compileall -q src scripts tests` / `git diff --check` | Windows | clean / clean |
