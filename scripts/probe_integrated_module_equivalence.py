@@ -11,6 +11,21 @@ resolves external un-reconstructed data symbols via controlled --defsym, compare
 entire 509 words and 13 jump table entries against libhtml_view.prx, executes negative
 controls A through E, and emits canonical JSON to build/seto017/integrated-module-equivalence.json.
 
+SETO-DECOMP-017-R2 hardens the same experiment without changing the strict matcher:
+
+* the 72 ``R_MIPS_26`` entries the 15 candidate objects actually emit are reconciled
+  against the PRX's recovered calls: every site's defined symbol, target function,
+  final address and linked ``jal`` instruction is checked, and the controlled import
+  inventory is required to equal the PRX's own import table (no constant counts and no
+  pre-set boolean in place of that evidence);
+* the Metrowerks ``.mwcats`` metadata section is mandatory and each of its 15 records
+  is tied to the object that produced it (tag, size and relocated function pointer);
+* ``finalize_experiment_report`` is fail-closed: an incomplete, null-typed or
+  count/difference-inconsistent report can never be promoted to ``PASS``;
+* compiler, loader, flags and includes are read from the 15 real match records and
+  required to agree; the integrated ELF and its variants are hashed into the report and
+  every linker output is screened by ``prepare_build_file`` before the linker runs.
+
 Equality under controlled assignments remains ASSUMPTION_DEPENDENT and never promotes
 INCONCLUSIVE functions to MATCHED, nor does it certify the 2-word fragment as C decompilation.
 """
@@ -25,7 +40,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 for _path in (REPO_ROOT / "src", REPO_ROOT / "scripts"):
@@ -38,6 +53,7 @@ from probe_common import (  # noqa: E402
     canonical_json,
     compare_word_sequences as _compare_word_sequences,
     ensure_build_dir,
+    prepare_build_file,
     relative,
     repo_path,
     require_mips_elf,
@@ -88,6 +104,13 @@ TOTAL_TABLE_ENTRIES = TABLE_39C_ENTRIES + TABLE_414_ENTRIES  # 13 entries
 TOTAL_CALLS = 72
 LOCAL_CALLS = 22
 IMPORT_CALLS = 50
+
+# Metrowerks ``.mwcats`` metadata: one 8-byte record per compiled object.  Every one
+# of the 15 real records carries ``(bytes << 16) | 0x2`` followed by a relocated
+# ``R_MIPS_32`` pointer to the function, so the section is exactly 15 * 8 bytes long
+# and each record ties back to the object (and the layout interval) that produced it.
+MWCATS_RECORD_SIZE = 8
+MWCATS_FUNCTION_TAG = 0x2
 
 # 35 distinct import stub targets derived from PRX import table and sce_stubs.h.
 CONTROLLED_IMPORTS: dict[str, int] = {
@@ -147,9 +170,6 @@ SHARED_DATA_SYMBOL = "D_000047D0"
 SHARED_DATA_MUTATED_ADDRESS = 0x47D4
 
 LINKER = "mipsel-linux-gnu-ld"
-READELF = "mipsel-linux-gnu-readelf"
-OBJDUMP = "mipsel-linux-gnu-objdump"
-FILE = "file"
 DIVERGENCE_EXIT_CODE = 3
 
 
@@ -417,14 +437,45 @@ def validate_linked_structure(
             "FAIL", f"{label} layout symbol {FRAGMENT_SYMBOL} is at 0x{frag_sym.value:x}, expected 0x{FRAGMENT_START:x}"
         )
 
-    # Validate .mwcats if present
+    # Validate the mandatory Metrowerks .mwcats metadata and tie every record to its object
     mwcats = module.section(".mwcats")
-    if mwcats is not None:
-        expected_mwcats_size = len(expected_cases) * 8
-        if mwcats.size != expected_mwcats_size:
+    if mwcats is None:
+        raise ProbeError("FAIL", f"{label} does not preserve the .mwcats metadata section")
+    expected_mwcats_size = len(expected_cases) * MWCATS_RECORD_SIZE
+    if mwcats.size != expected_mwcats_size:
+        raise ProbeError(
+            "FAIL",
+            f"{label} .mwcats size is 0x{mwcats.size:x}, expected 0x{expected_mwcats_size:x}",
+        )
+    metadata = module.section_data(mwcats)
+    if len(metadata) != expected_mwcats_size:
+        raise ProbeError(
+            "FAIL",
+            f"{label} .mwcats carries {len(metadata)} bytes, expected {expected_mwcats_size}",
+        )
+    for index, (addr, c_name, _status, _mw, total_w) in enumerate(expected_cases):
+        record = metadata[index * MWCATS_RECORD_SIZE : (index + 1) * MWCATS_RECORD_SIZE]
+        descriptor = int.from_bytes(record[0:4], "little")
+        pointer = int.from_bytes(record[4:MWCATS_RECORD_SIZE], "little")
+        tag = descriptor & 0xFFFF
+        size_bytes = descriptor >> 16
+        if tag != MWCATS_FUNCTION_TAG:
             raise ProbeError(
                 "FAIL",
-                f"{label} .mwcats size is 0x{mwcats.size:x}, expected 0x{expected_mwcats_size:x}",
+                f"{label} .mwcats record {index} ({c_name}) carries tag 0x{tag:x}, "
+                f"expected 0x{MWCATS_FUNCTION_TAG:x}",
+            )
+        if size_bytes != total_w * 4:
+            raise ProbeError(
+                "FAIL",
+                f"{label} .mwcats record {index} ({c_name}) declares size 0x{size_bytes:x}, "
+                f"expected 0x{total_w * 4:x}",
+            )
+        if pointer != addr:
+            raise ProbeError(
+                "FAIL",
+                f"{label} .mwcats record {index} ({c_name}) points at 0x{pointer:x}, "
+                f"expected 0x{addr:x}",
             )
 
     return text, rodata
@@ -509,25 +560,49 @@ def _base_report() -> dict[str, object]:
     }
 
 
+def _require_int(value: object, label: str) -> int:
+    """Return ``value`` only when it is a genuine integer (never a bool or ``None``)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ProbeError("FAIL", f"finalization requires the integer field {label}")
+    return value
+
+
 def finalize_experiment_report(report: dict[str, object]) -> int:
-    """Classify the integrated experiment report and enforce conditional invariants."""
-    code = report.get("code", {})
-    jump_table = report.get("jump_table", {})
-    equal_words = code.get("equal_words")
-    total_words = code.get("total_words")
-    code_diffs = code.get("differences", [])
-    equal_entries = jump_table.get("equal_entries")
-    total_entries = jump_table.get("entry_count")
-    table_diffs = jump_table.get("differences", [])
+    """Classify the integrated experiment report, rejecting anything incomplete.
 
-    is_equal = (
-        equal_words == total_words
-        and len(code_diffs) == 0
-        and equal_entries == total_entries
-        and len(table_diffs) == 0
-    )
+    A valid integrated comparison must carry exactly ``TEXT_WORDS`` words and
+    ``TOTAL_TABLE_ENTRIES`` entries whose equal-counts agree with the difference
+    lists.  ``{}`` or a partially filled report raises instead of ever reaching
+    ``PASS``; a genuine, fully evidenced divergence keeps exit code ``3`` and the
+    complete report.
+    """
+    code = report.get("code")
+    jump_table = report.get("jump_table")
+    if not isinstance(code, dict) or not isinstance(jump_table, dict):
+        raise ProbeError(
+            "FAIL", "finalization requires structured code and jump_table evidence"
+        )
+    equal_words = _require_int(code.get("equal_words"), "code.equal_words")
+    total_words = _require_int(code.get("total_words"), "code.total_words")
+    equal_entries = _require_int(jump_table.get("equal_entries"), "jump_table.equal_entries")
+    total_entries = _require_int(jump_table.get("entry_count"), "jump_table.entry_count")
+    code_diffs = code.get("differences")
+    table_diffs = jump_table.get("differences")
+    if not isinstance(code_diffs, list) or not isinstance(table_diffs, list):
+        raise ProbeError("FAIL", "finalization requires code and jump_table difference lists")
+    if total_words != TEXT_WORDS or total_entries != TOTAL_TABLE_ENTRIES:
+        raise ProbeError(
+            "FAIL",
+            f"finalization requires exactly {TEXT_WORDS} words and {TOTAL_TABLE_ENTRIES} entries",
+        )
+    if not 0 <= equal_words <= total_words or not 0 <= equal_entries <= total_entries:
+        raise ProbeError("FAIL", "finalization requires equal counts within their totals")
+    if len(code_diffs) != total_words - equal_words:
+        raise ProbeError("FAIL", "code equal-count disagrees with the word difference list")
+    if len(table_diffs) != total_entries - equal_entries:
+        raise ProbeError("FAIL", "jump-table equal-count disagrees with the entry difference list")
 
-    if is_equal:
+    if equal_words == total_words and equal_entries == total_entries:
         report["experiment_status"] = "PASS"
         report["equivalence_claim"] = "ASSUMPTION_DEPENDENT"
         exit_code = 0
@@ -540,6 +615,207 @@ def finalize_experiment_report(report: dict[str, object]) -> int:
     report["promoted_to_matched"] = False
     report["runtime_comparison"] = "NOT_DEMONSTRATED"
     return exit_code
+
+
+def validate_controlled_imports(
+    prx_import_calls: Sequence[imports.CallReference],
+    controlled_imports: dict[str, int],
+) -> None:
+    """Require the controlled imports to equal the stubs the PRX's own code calls.
+
+    The PRX resolves its 50 import calls through its recovered stub table, and each
+    call names a stub address, so the derived map ``func_<stub> -> stub`` must agree
+    with the controlled assignments exactly.  (The recovered table holds 1268 stubs
+    overall; only those the module's ``.text`` actually reaches are controlled.)  A
+    missing, excessive or incorrect entry is a divergence between what the probe
+    assumes and what the module declares.
+    """
+    expected = {mips.function_name(call.target): call.target for call in prx_import_calls}
+    missing = sorted(set(expected) - set(controlled_imports))
+    excess = sorted(set(controlled_imports) - set(expected))
+    incorrect = sorted(
+        name
+        for name in set(expected) & set(controlled_imports)
+        if expected[name] != controlled_imports[name]
+    )
+    if missing or excess or incorrect:
+        raise ProbeError(
+            "FAIL",
+            "CONTROLLED_IMPORTS does not match the recovered PRX import table: "
+            f"missing={missing} excess={excess} incorrect={incorrect}",
+        )
+
+
+def collect_candidate_call_sites(
+    cases: Sequence[tuple[int, str, str, int, int]],
+    candidate_objects: Mapping[str, Path],
+) -> dict[int, str]:
+    """The ``R_MIPS_26`` call sites the 15 candidate objects actually emit.
+
+    Each relocation is mapped to the module address it will occupy (function start
+    plus section offset) and must land inside its own function with a zero in-place
+    addend and a named symbol, so the inventory is the objects' evidence rather than
+    a constant.
+    """
+    sites: dict[int, str] = {}
+    for addr, c_name, _status, _mw, total_w in cases:
+        module = elf.parse(candidate_objects[c_name])
+        for relocation in module.relocations_for(".text"):
+            if relocation.type != elf.R_MIPS_26:
+                continue
+            if relocation.section_offset is None:
+                raise ProbeError("FAIL", f"{c_name} R_MIPS_26 entry has no validated section offset")
+            site = addr + relocation.section_offset
+            if not addr <= site < addr + total_w * 4:
+                raise ProbeError(
+                    "FAIL", f"{c_name} call relocation at 0x{site:x} is outside its function"
+                )
+            if relocation.addend:
+                raise ProbeError(
+                    "FAIL", f"{c_name} call relocation at 0x{site:x} carries an in-place addend"
+                )
+            if relocation.symbol is None:
+                raise ProbeError(
+                    "FAIL", f"{c_name} call relocation at 0x{site:x} names no symbol"
+                )
+            if site in sites:
+                raise ProbeError("FAIL", f"call site 0x{site:x} is emitted by more than one object")
+            sites[site] = relocation.symbol
+    return sites
+
+
+def reconcile_call_inventory(
+    candidate_sites: Mapping[int, str],
+    linked_text_symbols: Mapping[str, int],
+    linked_words: Sequence[int],
+    prx_calls: Sequence[imports.CallReference],
+    import_table: imports.ImportTable,
+    controlled_imports: Mapping[str, int],
+) -> list[dict[str, object]]:
+    """Reconcile every candidate call site against the PRX and the linked instruction.
+
+    The two inventories must describe the same 72 sites.  A local call is proven by a
+    defined function symbol of the linked module, its final address and the ``jal``
+    that was actually linked; an import is proven by the ``(library, NID)`` its stub
+    resolves to, the stub address and the controlled destination the link produced.
+    """
+    prx_sites = {call.address: call for call in prx_calls}
+    if len(prx_sites) != len(prx_calls):
+        raise ProbeError("FAIL", "the PRX call inventory contains duplicate site addresses")
+    candidate_only = sorted(set(candidate_sites) - set(prx_sites))
+    prx_only = sorted(set(prx_sites) - set(candidate_sites))
+    if candidate_only or prx_only:
+        raise ProbeError(
+            "FAIL",
+            "the candidate R_MIPS_26 inventory does not match the PRX calls: "
+            f"candidate_only={[hex(a) for a in candidate_only]} "
+            f"prx_only={[hex(a) for a in prx_only]}",
+        )
+
+    rows: list[dict[str, object]] = []
+    for site in sorted(candidate_sites):
+        symbol = candidate_sites[site]
+        reference = prx_sites[site]
+        if symbol in controlled_imports:
+            stub = controlled_imports[symbol]
+            resolved = import_table.resolve(stub)
+            if resolved is None:
+                raise ProbeError(
+                    "FAIL", f"import symbol {symbol} does not name a stub of the PRX import table"
+                )
+            if mips.parse_function_name(symbol) != stub:
+                raise ProbeError(
+                    "FAIL", f"import symbol {symbol} does not name its stub 0x{stub:x}"
+                )
+            if reference.kind != "import" or reference.target != stub or reference.imported is None:
+                raise ProbeError(
+                    "FAIL", f"call site 0x{site:x} is not the import the object names ({symbol})"
+                )
+            target = stub
+            row: dict[str, object] = {
+                "site_address": f"0x{site:x}",
+                "kind": "import",
+                "symbol": symbol,
+                "stub_address": f"0x{stub:x}",
+                "imported_library": resolved.library,
+                "imported_nid": f"0x{resolved.nid:08x}",
+            }
+        else:
+            target = linked_text_symbols.get(symbol)
+            if target is None:
+                raise ProbeError(
+                    "FAIL", f"call symbol {symbol} is not a defined function of the linked module"
+                )
+            if reference.kind != "local" or reference.target != target:
+                raise ProbeError(
+                    "FAIL",
+                    f"call site 0x{site:x} targets 0x{reference.target:x}, "
+                    f"but symbol {symbol} sits at 0x{target:x}",
+                )
+            row = {
+                "site_address": f"0x{site:x}",
+                "kind": "local",
+                "symbol": symbol,
+                "callee_address": f"0x{target:x}",
+            }
+
+        word = linked_words[site // 4]
+        if mips.opcode(word) != mips.OP_JAL:
+            raise ProbeError("FAIL", f"linked instruction at 0x{site:x} is not a jal")
+        if mips.jump_target(word, site) != target:
+            raise ProbeError(
+                "FAIL", f"linked call at 0x{site:x} does not jump to 0x{target:x}"
+            )
+        row["linked_call_target"] = f"0x{target:x}"
+        rows.append(row)
+    return rows
+
+
+def consistent_provenance(
+    match_records: Mapping[str, Mapping[str, object]],
+    cases: Sequence[tuple[int, str, str, int, int]],
+) -> dict[str, object]:
+    """Read compiler, loader, flags and includes from the 15 real match records.
+
+    The identity must be present and identical across every record; nothing is
+    invented as a fallback.  Absolute tool paths are reduced to their basenames so
+    the canonical report stays sanitized.
+    """
+    seen: dict[str, set[object]] = {key: set() for key in ("compiler", "loader", "flags", "includes")}
+    for _addr, c_name, _status, _mw, _tw in cases:
+        record = match_records[c_name]
+        provenance = record.get("provenance")
+        if not isinstance(provenance, dict):
+            raise ProbeError("FAIL", f"{c_name} match record carries no provenance block")
+        compiler = provenance.get("compiler")
+        loader = provenance.get("loader")
+        flags = provenance.get("flags")
+        includes = provenance.get("includes")
+        if not isinstance(compiler, str) or not compiler:
+            raise ProbeError("FAIL", f"{c_name} provenance has no compiler")
+        if not isinstance(loader, list) or not all(isinstance(item, str) for item in loader):
+            raise ProbeError("FAIL", f"{c_name} provenance has no loader list")
+        if not isinstance(flags, list) or not all(isinstance(item, str) for item in flags):
+            raise ProbeError("FAIL", f"{c_name} provenance has no flags list")
+        if not isinstance(includes, list) or not all(isinstance(item, str) for item in includes):
+            raise ProbeError("FAIL", f"{c_name} provenance has no includes list")
+        seen["compiler"].add(Path(compiler).name)
+        seen["loader"].add(tuple(sorted(Path(item).name for item in loader)))
+        seen["flags"].add(tuple(flags))
+        seen["includes"].add(tuple(includes))
+    for key in ("compiler", "loader", "flags", "includes"):
+        if len(seen[key]) != 1:
+            raise ProbeError(
+                "FAIL",
+                f"provenance {key} is not consistent across the 15 match records: "
+                f"{sorted(seen[key])!r}",
+            )
+    return {
+        "compiler": next(iter(seen["compiler"])),
+        "loader": list(next(iter(seen["loader"]))),
+        "flags": list(next(iter(seen["flags"]))),
+        "includes": list(next(iter(seen["includes"]))),
+    }
 
 
 def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object]]:
@@ -598,35 +874,10 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         else LINKER
     )
 
-    # Toolchain version identification
-    import re
-
-    mw_version = "Metrowerks 3.0.1 build 219"
-    wibo_version = "wibo"
-    toolchain_result = run(
-        [sys.executable, "-m", "seto", "--config", relative(config_path, REPO_ROOT), "toolchain"],
-        cwd=REPO_ROOT,
-        timeout=120,
-        env=env,
-    )
-    write_build_text(logs_dir / "seto-toolchain.stdout.txt", toolchain_result.stdout, build_root)
-    write_build_text(logs_dir / "seto-toolchain.stderr.txt", toolchain_result.stderr, build_root)
-    for line in toolchain_result.stdout.splitlines():
-        if line.lstrip().startswith("mwccpsp") and (found := re.search(r"\bVersion\s+([0-9.]+\s+build\s+\d+)", line)):
-            mw_version = f"Metrowerks {found.group(1)}"
-        elif line.lstrip().startswith("wibo") and (found := re.search(r"\bwibo\s+([0-9.]+)", line)):
-            wibo_version = f"wibo {found.group(1)}"
-
     # 1. Compile all 15 functions fresh and validate individual baselines
     candidate_objects: dict[str, Path] = {}
     candidate_hashes: dict[str, str] = {}
     match_records: dict[str, dict[str, object]] = {}
-    compiler_info: dict[str, object] = {
-        "compiler": mw_version,
-        "loader": wibo_version,
-        "flags": ["-O4,p", "-sdatathreshold", "0"],
-        "includes": ["decomp/include"],
-    }
 
     for addr, c_name, expected_status, expected_matching, total_w in cases:
         src = REPO_ROOT / "decomp" / "src" / c_name
@@ -704,22 +955,14 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         match_records[c_name] = m_rec
 
     # Validate individual candidate object structural invariants
-    func_symbols: dict[str, elf.Symbol] = {}
-    table_relocs_39c: tuple[elf.Relocation, ...] = ()
-    table_words_39c: tuple[int, ...] = ()
-    table_relocs_414: tuple[elf.Relocation, ...] = ()
-    table_words_414: tuple[int, ...] = ()
-
     for addr, c_name, _status, _mw, total_w in cases:
         obj_path = candidate_objects[c_name]
         c_mod = elf.parse(obj_path)
         require_mips_elf(c_mod, file_type=elf.ET_REL, label=f"candidate object {c_name}")
-        c_text = c_mod.require_section(".text")
         func_name = mips.function_name(addr)
         syms = [s for s in c_mod.symbols if s.name == func_name]
         if len(syms) != 1 or not syms[0].is_defined or syms[0].size != total_w * 4:
             raise ProbeError("FAIL", f"{c_name} does not define {func_name} with size 0x{total_w * 4:x}")
-        func_symbols[func_name] = syms[0]
 
         if c_name == "func_0000039C.c":
             rodata_sec = c_mod.section(".rodata")
@@ -730,8 +973,6 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             validate_candidate_table_invariants(
                 t_rels, t_words, function_symbol=func_name, expected_entries=TABLE_39C_ENTRIES, function_size=total_w * 4
             )
-            table_relocs_39c = t_rels
-            table_words_39c = t_words
         elif c_name == "func_00000414.c":
             rodata_sec = c_mod.section(".rodata")
             if rodata_sec is None or rodata_sec.size != TABLE_414_SIZE:
@@ -741,8 +982,6 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             validate_candidate_table_invariants(
                 t_rels, t_words, function_symbol=func_name, expected_entries=TABLE_414_ENTRIES, function_size=total_w * 4
             )
-            table_relocs_414 = t_rels
-            table_words_414 = t_words
         else:
             if c_mod.section(".rodata") is not None and c_mod.section(".rodata").size > 0:
                 raise ProbeError("UNSUPPORTED", f"unexpected .rodata in {c_name}")
@@ -798,13 +1037,16 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         raise ProbeError("FAIL", f"expected {TOTAL_CALLS} PRX calls, got {len(prx_calls)}")
     prx_local_calls = [r for r in prx_calls if r.kind == "local"]
     prx_import_calls = [r for r in prx_calls if r.kind == "import"]
-    prx_unresolved_calls = [r for r in prx_calls if r.kind == "unresolved"]
+    prx_unresolved_calls = [r for r in prx_calls if r.kind == "unknown"]
 
     if len(prx_local_calls) != LOCAL_CALLS or len(prx_import_calls) != IMPORT_CALLS or prx_unresolved_calls:
         raise ProbeError(
             "FAIL",
             f"call classification mismatch: {len(prx_local_calls)} local, {len(prx_import_calls)} import, {len(prx_unresolved_calls)} unresolved",
         )
+
+    # The controlled import assignments must equal the PRX's own import table.
+    validate_controlled_imports(prx_import_calls, CONTROLLED_IMPORTS)
 
     # 2. Linker scripts and Controlled Link
     script_text = generate_linker_script(cases, rodata_address=RODATA_START)
@@ -817,16 +1059,20 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
     controlled_symbols_a.update(CONTROLLED_DATA_SYMBOLS)
 
     ordered_obj_paths = [candidate_objects[c_name] for _addr, c_name, _st, _mw, _tw in cases]
+    linked_artifacts: dict[str, Path] = {}
 
     def _execute_link(
         variant_name: str,
         script_file: Path,
         symbols_map: dict[str, int],
         objects_list: Sequence[Path],
-    ) -> tuple[Path, elf.ElfFile, list[str]]:
+    ) -> elf.ElfFile:
         v_dir = links_dir / variant_name
         ensure_build_dir(v_dir, build_root)
         out_elf = v_dir / "linked.elf"
+        # Reject a symlinked or unexpected linker output before it is written, for
+        # every variant path, not only the baseline.
+        prepare_build_file(out_elf, build_root)
         cmd = [
             LINKER,
             "-EL",
@@ -851,17 +1097,46 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         require_mips_elf(linked_mod, file_type=elf.ET_EXEC, label=f"linked ELF {variant_name}")
         validate_link_has_no_unresolved(linked_mod)
         validate_linked_controlled_symbols(linked_mod, symbols_map)
-        return out_elf, linked_mod, cmd
+        linked_artifacts[variant_name] = out_elf
+        return linked_mod
 
     # Link Variant A (Baseline)
-    elf_a_path, elf_a_mod, cmd_a = _execute_link(
-        "variant-a", script_path, controlled_symbols_a, ordered_obj_paths
-    )
+    elf_a_mod = _execute_link("variant-a", script_path, controlled_symbols_a, ordered_obj_paths)
     sec_a_text, sec_a_rodata = validate_linked_structure(
         elf_a_mod, label="variant-a", expected_cases=cases
     )
     words_a = tuple(mips.decode_words(elf_a_mod.section_data(sec_a_text), "Variant A text"))
     entries_a = tuple(mips.decode_words(elf_a_mod.section_data(sec_a_rodata), "Variant A rodata"))
+
+    # Reconcile the R_MIPS_26 entries the candidate objects emit against the PRX's
+    # recovered calls, using the linked module's own defined symbols and instruction
+    # words as the final evidence.
+    candidate_call_sites = collect_candidate_call_sites(cases, candidate_objects)
+    linked_text_symbols = {
+        symbol.name: symbol.value
+        for symbol in elf_a_mod.symbols
+        if symbol.name and symbol.shndx == sec_a_text.index
+    }
+    reconciled_calls = reconcile_call_inventory(
+        candidate_call_sites,
+        linked_text_symbols,
+        words_a,
+        prx_calls,
+        import_table,
+        CONTROLLED_IMPORTS,
+    )
+    reconciled_local_calls = sum(1 for row in reconciled_calls if row["kind"] == "local")
+    reconciled_import_calls = sum(1 for row in reconciled_calls if row["kind"] == "import")
+    if (
+        len(reconciled_calls) != TOTAL_CALLS
+        or reconciled_local_calls != LOCAL_CALLS
+        or reconciled_import_calls != IMPORT_CALLS
+    ):
+        raise ProbeError(
+            "FAIL",
+            "reconciled call inventory disagrees with the documented counts: "
+            f"{len(reconciled_calls)} total, {reconciled_local_calls} local, {reconciled_import_calls} import",
+        )
 
     # Compare Variant A against PRX
     text_diffs = compare_word_sequences(prx_text_words, words_a)
@@ -914,7 +1189,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         # Control B: Mutate shared symbol D_000047D0 from 0x47D0 to 0x47D4
         controlled_symbols_b = dict(controlled_symbols_a)
         controlled_symbols_b[SHARED_DATA_SYMBOL] = SHARED_DATA_MUTATED_ADDRESS
-        elf_b_path, elf_b_mod, _cmd_b = _execute_link(
+        elf_b_mod = _execute_link(
             "control-b", script_path, controlled_symbols_b, ordered_obj_paths
         )
         sec_b_text, sec_b_rodata = validate_linked_structure(
@@ -974,7 +1249,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         c_obj_list = [
             c_tampered_obj if p.name == "func_00000414.o" else p for p in ordered_obj_paths
         ]
-        elf_c_path, elf_c_mod, _cmd_c = _execute_link(
+        elf_c_mod = _execute_link(
             "control-c", script_path, controlled_symbols_a, c_obj_list
         )
         sec_c_text, sec_c_rodata = validate_linked_structure(
@@ -1014,7 +1289,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         d_obj_list = [
             d_tampered_obj if p.name == "func_00000034.o" else p for p in ordered_obj_paths
         ]
-        elf_d_path, elf_d_mod, _cmd_d = _execute_link(
+        elf_d_mod = _execute_link(
             "control-d", script_path, controlled_symbols_a, d_obj_list
         )
         sec_d_text, sec_d_rodata = validate_linked_structure(
@@ -1054,7 +1329,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         e_obj_list = [
             e_tampered_obj if p.name == "func_0000008C.o" else p for p in ordered_obj_paths
         ]
-        elf_e_path, elf_e_mod, _cmd_e = _execute_link(
+        elf_e_mod = _execute_link(
             "control-e", script_path, controlled_symbols_a, e_obj_list
         )
         sec_e_text, sec_e_rodata = validate_linked_structure(
@@ -1101,6 +1376,14 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
 
     # Compile final canonical report
     executed_controls = [lbl for lbl, rec in control_records.items() if rec.get("detected")]
+    compiler_provenance = consistent_provenance(match_records, cases)
+    linked_artifact_hashes = {
+        name: {
+            "path": relative(path, REPO_ROOT),
+            "sha256": sha256_file(path),
+        }
+        for name, path in sorted(linked_artifacts.items())
+    }
 
     report = {
         "schema_version": 1,
@@ -1127,9 +1410,9 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             "functions_matched": sum(1 for c in cases if c[2] == "MATCHED"),
             "functions_inconclusive": sum(1 for c in cases if c[2] == "INCONCLUSIVE"),
             "functions_nonmatching": 0,
-            "total_calls": TOTAL_CALLS,
-            "local_calls": LOCAL_CALLS,
-            "import_calls": IMPORT_CALLS,
+            "total_calls": len(reconciled_calls),
+            "local_calls": reconciled_local_calls,
+            "import_calls": reconciled_import_calls,
         },
         "fragment_0x84": {
             "address": f"0x{FRAGMENT_START:x}",
@@ -1144,14 +1427,15 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         "provenance": {
             "prx_path": relative(prx_path, REPO_ROOT),
             "prx_sha256": prx_hash,
-            "compiler": compiler_info.get("compiler"),
-            "loader": compiler_info.get("loader"),
-            "flags": compiler_info.get("flags"),
-            "includes": compiler_info.get("includes"),
+            "compiler": compiler_provenance["compiler"],
+            "loader": compiler_provenance["loader"],
+            "flags": compiler_provenance["flags"],
+            "includes": compiler_provenance["includes"],
             "linker": linker_version,
             "linker_emulation": "elf32ltsmip",
             "linker_script_path": relative(script_path, REPO_ROOT),
             "linker_script_sha256": script_hash,
+            "linked_artifacts": linked_artifact_hashes,
             "candidate_sources": {
                 c_name: {"path": f"decomp/src/{c_name}", "sha256": h}
                 for c_name, h in sorted(source_hashes.items())
@@ -1223,30 +1507,10 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             },
         },
         "calls": {
-            "total_calls": TOTAL_CALLS,
-            "local_calls_count": LOCAL_CALLS,
-            "import_calls_count": IMPORT_CALLS,
-            "local_calls_resolved_by_candidate_symbols": True,
-            "local_calls": [
-                {
-                    "site_address": f"0x{c.address:x}",
-                    "caller": next(iv.symbol for iv in intervals if iv.start <= c.address < iv.end),
-                    "callee": mips.function_name(c.target),
-                    "callee_address": f"0x{c.target:x}",
-                }
-                for c in prx_local_calls
-            ],
-            "import_calls": [
-                {
-                    "site_address": f"0x{c.address:x}",
-                    "caller": next(iv.symbol for iv in intervals if iv.start <= c.address < iv.end),
-                    "stub_symbol": mips.function_name(c.target),
-                    "stub_address": f"0x{c.target:x}",
-                    "imported_library": c.imported.library if c.imported else None,
-                    "imported_nid": f"0x{c.imported.nid:08x}" if c.imported else None,
-                }
-                for c in prx_import_calls
-            ],
+            "total_calls": len(reconciled_calls),
+            "local_calls_count": reconciled_local_calls,
+            "import_calls_count": reconciled_import_calls,
+            "reconciled_call_sites": reconciled_calls,
         },
         "code": {
             "total_words": TEXT_WORDS,

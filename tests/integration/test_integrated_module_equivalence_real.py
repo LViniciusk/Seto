@@ -106,11 +106,11 @@ def _assemble_synthetic_candidate(
         for off in has_rodata_entries:
             lines.append(f"    .word {func_name} + 0x{off:x}")
 
-    # .mwcats metadata
+    # .mwcats metadata: (size << 16) | category tag, then the relocated function pointer
     lines.append('.section .mwcats,"",@progbits')
     lines.append(".align 2")
+    lines.append(f"    .word 0x{((total_w * 4) << 16) | probe.MWCATS_FUNCTION_TAG:x}")
     lines.append(f"    .word {func_name}")
-    lines.append(f"    .word 0x{total_w * 4:x}")
 
     write_build_text(s_path, "\n".join(lines) + "\n", build_root)
     proc = subprocess.run(
