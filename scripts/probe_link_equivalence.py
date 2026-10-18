@@ -184,6 +184,18 @@ def _inside(path: Path, root: Path) -> bool:
     return True
 
 
+def _validated_build_root() -> Path:
+    """Reject redirected build roots before resolving any path components."""
+    build = REPO_ROOT / "build"
+    root = build / "seto014"
+    for path in (build, root):
+        if path.is_symlink():
+            raise ProbeError("FAIL", f"build directory must not be a symlink: {path}")
+        if path.exists() and not path.is_dir():
+            raise ProbeError("FAIL", f"build path is not a directory: {path}")
+    return root.resolve()
+
+
 def _ensure_build_dir(path: Path, build_root: Path) -> None:
     if path.is_symlink():
         raise ProbeError("FAIL", f"build directory may not be a symlink: {path.as_posix()}")
@@ -488,7 +500,7 @@ def _link(
     logs_dir: Path,
     label: str,
 ) -> tuple[elf.ElfFile, dict[str, object]]:
-    build_root = (REPO_ROOT / "build/seto014").resolve()
+    build_root = _validated_build_root()
     _prepare_build_file(output_path, build_root)
     args = [
         LINKER,
@@ -557,7 +569,7 @@ def _inspection_output(executable: str, args: list[str], logs_dir: Path, name: s
     _write_build_text(
         logs_dir / f"{name}.stderr.txt",
         result.stderr,
-        (REPO_ROOT / "build/seto014").resolve(),
+        _validated_build_root(),
     )
     if result.returncode != 0:
         raise ProbeError("FAIL", f"{executable} failed ({result.returncode}): {result.stderr.strip()}")
@@ -622,13 +634,13 @@ def _linked_projection(
 
 
 def _write_report(out: Path, report: dict[str, object]) -> None:
-    build_root = (REPO_ROOT / "build/seto014").resolve()
+    build_root = _validated_build_root()
     _ensure_build_dir(out.parent, build_root)
     _write_build_text(out, canonical_json(report), build_root)
 
 
 def _validate_arguments(arguments: argparse.Namespace) -> tuple[Path, Path, Path, Path, Path, Path]:
-    build_root = (REPO_ROOT / "build/seto014").resolve()
+    build_root = _validated_build_root()
     build_dir = _repo_path(arguments.build_dir, allowed_root=build_root)
     out = _repo_path(arguments.out, allowed_root=build_root)
     prx = _repo_path(arguments.prx, allowed_root=(REPO_ROOT / "private").resolve())
@@ -1115,7 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
         report["experiment_status"] = exc.status
         report["error"] = str(exc)
         try:
-            out = _repo_path(arguments.out, allowed_root=(REPO_ROOT / "build/seto014").resolve())
+            out = _repo_path(arguments.out, allowed_root=_validated_build_root())
             _write_report(out, report)
         except ProbeError:
             pass
@@ -1126,7 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
         report["experiment_status"] = "FAIL"
         report["error"] = str(exc)
         try:
-            out = _repo_path(arguments.out, allowed_root=(REPO_ROOT / "build/seto014").resolve())
+            out = _repo_path(arguments.out, allowed_root=_validated_build_root())
             _write_report(out, report)
         except ProbeError:
             pass
