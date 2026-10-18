@@ -82,6 +82,12 @@ READELF = "mipsel-linux-gnu-readelf"
 OBJDUMP = "mipsel-linux-gnu-objdump"
 FILE = "file"
 
+# A valid comparison that finds code or table differences is a first-class
+# outcome, not an operational failure: reuse the repository's documented mismatch
+# code (``seto.cli.EXIT_MISMATCH``) so that divergence is distinct from error (1)
+# and blocked (4).
+DIVERGENCE_EXIT_CODE = 3
+
 
 # --------------------------------------------------------------------------- #
 # Reused helper bindings (probe_common), kept behind the local names so both    #
@@ -198,6 +204,25 @@ def validate_layout_control(baseline: Sequence[int], moved: Sequence[int]) -> li
     differences = compare_word_sequences(baseline, moved)
     if [row["word_index"] for row in differences] != [LO_INDEX]:
         raise ProbeError("FAIL", "moving .rodata did not change only the HI16/LO16 destination word")
+    return differences
+
+
+def validate_layout_destination(
+    baseline_words: Sequence[int], moved_words: Sequence[int], *, assigned_address: int
+) -> list[dict[str, object]]:
+    """Control B: the moved HI16/LO16 pair must reconstruct its assigned address.
+
+    Diffs against A alone cannot show *which* address B points at, so the effective
+    destination is recomputed from the linked instructions with the shared
+    ``paired_effective_address`` decoder rather than trusting the assignment.
+    """
+    differences = validate_layout_control(baseline_words, moved_words)
+    effective = paired_effective_address(moved_words[HI_INDEX], moved_words[LO_INDEX])
+    if effective != assigned_address:
+        raise ProbeError(
+            "FAIL",
+            f"moved .rodata reconstructs 0x{effective:x}, expected 0x{assigned_address:x}",
+        )
     return differences
 
 
@@ -675,6 +700,40 @@ def _validate_arguments(
     return build_root, build_dir, out, prx, source, config
 
 
+def finalize_experiment_report(report: dict[str, object]) -> int:
+    """Set the terminal classification of a fully-built report and return the exit code.
+
+    Equality holds only under the imposed layout, so a PASS never promotes the
+    original match.  A valid comparison that found differences is a DIVERGENCE:
+    its ``code``/``jump_table`` evidence stays in the report and the exit code is
+    ``DIVERGENCE_EXIT_CODE``.  Invalid ELF/relocation/layout inputs never reach
+    here; they still fail immediately as ``ProbeError``.
+    """
+    code = report["code"]
+    table = report["jump_table"]
+    code_equal = code["equal_words"] == FUNCTION_WORDS and not code["differences"]
+    table_equal = table["equal_entries"] == TABLE_ENTRIES and not table["differences"]
+    report["equivalence_claim"] = equivalence_claim(code["equal_words"], table["equal_entries"])
+    if code_equal and table_equal:
+        report["experiment_status"] = "PASS"
+        return 0
+    report["experiment_status"] = "DIVERGENCE"
+    return DIVERGENCE_EXIT_CODE
+
+
+def not_run_controls() -> dict[str, dict[str, object]]:
+    """Baseline-dependent controls, recorded when A is not equal to the original."""
+    return {
+        label: {
+            "status": "NOT_RUN",
+            "reason": "baseline comparison diverged",
+            "detected": False,
+            "promoted_to_matched": False,
+        }
+        for label in ("C", "D", "E")
+    }
+
+
 def _base_report() -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -931,10 +990,6 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
         variants[case] = projection
 
     baseline = variants["A"]
-    if baseline["equal_words"] != FUNCTION_WORDS or baseline["differences"]:
-        raise ProbeError("FAIL", "linked baseline .text does not equal the original PRX function")
-    if baseline["equal_entries"] != TABLE_ENTRIES or baseline["table_differences"]:
-        raise ProbeError("FAIL", "linked baseline jump table does not equal the original PRX table")
     if not baseline["hi16_lo16_reconstructs_table"] or not baseline["call_is_controlled_target"]:
         raise ProbeError("FAIL", "linked baseline did not reconstruct the table address or the controlled call target")
     baseline_entries = tuple(int(value, 16) for value in baseline["linked_entries"])
@@ -953,128 +1008,147 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
 
     a_words = tuple(int(word, 16) for word in variants["A"]["linked_words"])
     b_words = tuple(int(word, 16) for word in variants["B"]["linked_words"])
-    b_vs_a = validate_layout_control(a_words, b_words)
+    b_vs_a = validate_layout_destination(a_words, b_words, assigned_address=TABLE_LAYOUTS[1][1])
+    if not variants["B"]["hi16_lo16_reconstructs_table"]:
+        raise ProbeError("FAIL", "control B does not reconstruct its assigned table address")
+    if variants["B"]["hi16_lo16_effective_address"] != f"0x{TABLE_LAYOUTS[1][1]:x}":
+        raise ProbeError(
+            "FAIL",
+            "control B effective address is "
+            f"{variants['B']['hi16_lo16_effective_address']}, expected 0x{TABLE_LAYOUTS[1][1]:x}",
+        )
     if variants["B"]["linked_entries"] != variants["A"]["linked_entries"]:
         raise ProbeError("FAIL", "moving .rodata changed the table entries, which are .text-relative")
 
+    # A valid comparison that finds code or table differences is a DIVERGENCE, not
+    # an operational failure: keep the evidence and let the finalizer classify it.
+    code_equal = baseline["equal_words"] == FUNCTION_WORDS and not baseline["differences"]
+    table_equal = baseline["equal_entries"] == TABLE_ENTRIES and not baseline["table_differences"]
+    baseline_equal = code_equal and table_equal
+
     # ---- Controls C/D/E: pre-link tampering of explicitly-derived copies. ----
-    object_bytes = bytearray(object_path.read_bytes())
-    table_file_offset = table_section.offset
+    # They presuppose that artifact A is intact and equal to the original, so a
+    # diverging baseline records them as NOT_RUN instead of claiming they passed.
     control_records: dict[str, dict[str, object]] = {}
+    if baseline_equal:
+        object_bytes = bytearray(object_path.read_bytes())
+        table_file_offset = table_section.offset
 
-    def _tampered_object(label: str, mutations: list[tuple[int, int]]) -> tuple[Path, elf.ElfFile]:
-        data = bytearray(object_bytes)
-        for offset, value in mutations:
-            _write_u32(data, offset, value)
-        path = build_dir / f"tampered-{label}.o"
-        _write_build_bytes(path, bytes(data), build_root)
-        module = elf.parse(path)
-        sites = matching.relocation_sites(module.relocations_for(".text"), candidate_offset, FUNCTION_SIZE)
-        if sites.sites != candidate_sites.sites:
-            raise ProbeError("FAIL", f"control {label} changed the .text relocation inventory")
-        relocations = candidate_table_relocations(module, symbol=FUNCTION_NAME)
-        if tuple(
-            (relocation.type, relocation.section_offset, relocation.symbol) for relocation in relocations
-        ) != tuple(
-            (relocation.type, relocation.section_offset, relocation.symbol) for relocation in table_relocations
-        ):
-            raise ProbeError("FAIL", f"control {label} changed the table relocation inventory")
-        return path, module
+        def _tampered_object(label: str, mutations: list[tuple[int, int]]) -> tuple[Path, elf.ElfFile]:
+            data = bytearray(object_bytes)
+            for offset, value in mutations:
+                _write_u32(data, offset, value)
+            path = build_dir / f"tampered-{label}.o"
+            _write_build_bytes(path, bytes(data), build_root)
+            module = elf.parse(path)
+            sites = matching.relocation_sites(module.relocations_for(".text"), candidate_offset, FUNCTION_SIZE)
+            if sites.sites != candidate_sites.sites:
+                raise ProbeError("FAIL", f"control {label} changed the .text relocation inventory")
+            relocations = candidate_table_relocations(module, symbol=FUNCTION_NAME)
+            if tuple(
+                (relocation.type, relocation.section_offset, relocation.symbol) for relocation in relocations
+            ) != tuple(
+                (relocation.type, relocation.section_offset, relocation.symbol) for relocation in table_relocations
+            ):
+                raise ProbeError("FAIL", f"control {label} changed the table relocation inventory")
+            return path, module
 
-    def _link_control(label: str, object_module_path: Path, table_address: int) -> dict[str, object]:
-        variant_dir = links_dir / f"control-{label}"
-        _ensure_build_dir(variant_dir, build_root)
-        output_path = variant_dir / "linked.elf"
-        linked, command_info = _link(
-            object_path=object_module_path,
-            script_path=script_paths["A"],
-            output_path=output_path,
-            table_address=table_address,
-            call_target=CALL_TARGET,
-            logs_dir=logs_dir,
-            label=f"control-{label}",
+        def _link_control(label: str, object_module_path: Path, table_address: int) -> dict[str, object]:
+            variant_dir = links_dir / f"control-{label}"
+            _ensure_build_dir(variant_dir, build_root)
+            output_path = variant_dir / "linked.elf"
+            linked, command_info = _link(
+                object_path=object_module_path,
+                script_path=script_paths["A"],
+                output_path=output_path,
+                table_address=table_address,
+                call_target=CALL_TARGET,
+                logs_dir=logs_dir,
+                label=f"control-{label}",
+            )
+            projection = _linked_projection(
+                original_words, original_entries, linked, label=f"control {label}", table_address=table_address
+            )
+            projection["linked_elf_path"] = _relative(output_path)
+            projection["linked_elf_sha256"] = sha256_file(output_path)
+            projection["link_command"] = command_info
+            return projection
+
+        # Control C: swap the in-place addends of entries 0 and 1.
+        swap_mutations = [
+            (table_file_offset + 0, EXPECTED_OFFSETS[1]),
+            (table_file_offset + 4, EXPECTED_OFFSETS[0]),
+        ]
+        c_path, _c_module = _tampered_object("swap-entries", swap_mutations)
+        c_projection = _link_control("swap-entries", c_path, 0x4770)
+        c_entries = tuple(int(value, 16) for value in c_projection["linked_entries"])
+        c_vs_original = validate_table_swap(original_entries, c_entries)
+        if c_projection["equal_words"] != FUNCTION_WORDS or c_projection["differences"]:
+            raise ProbeError("FAIL", "control C changed the code; the control must isolate the table")
+        control_records["C"] = {
+            "mutation_stage": "pre_link_object_copy",
+            "relocation_inventory_preserved": True,
+            "mutation": "swapped the in-place addends of table entries 0 and 1",
+            "linked_entries": c_projection["linked_entries"],
+            "equal_words": c_projection["equal_words"],
+            "table_differences": c_vs_original,
+            "detected": True,
+            "promoted_to_matched": False,
+        }
+
+        # Control D: point entry 3 at a wrong but in-function address.
+        tampered_entry_value = 0x44
+        wrong_address = FUNCTION_ADDRESS + tampered_entry_value
+        d_mutations = [(table_file_offset + 12, tampered_entry_value)]
+        d_path, _d_module = _tampered_object("wrong-destination", d_mutations)
+        d_projection = _link_control("wrong-destination", d_path, 0x4770)
+        d_entries = tuple(int(value, 16) for value in d_projection["linked_entries"])
+        d_vs_original = validate_table_destination_tamper(original_entries, d_entries, entry_index=3)
+        if d_projection["equal_words"] != FUNCTION_WORDS or d_projection["differences"]:
+            raise ProbeError("FAIL", "control D changed the code; the control must isolate the table")
+        control_records["D"] = {
+            "mutation_stage": "pre_link_object_copy",
+            "relocation_inventory_preserved": True,
+            "mutation": "redirected table entry 3 to a non-case in-function address",
+            "expected_wrong_address": f"0x{wrong_address:x}",
+            "linked_entries": d_projection["linked_entries"],
+            "equal_words": d_projection["equal_words"],
+            "table_differences": d_vs_original,
+            "detected": True,
+            "promoted_to_matched": False,
+        }
+
+        # Control E: mutate one non-relocated instruction word in a copy of the object.
+        text_file_offset = candidate_text.offset + candidate_offset
+        original_word0 = _read_u32(object_bytes, text_file_offset)
+        mutated_word0 = original_word0 ^ 0x1
+        e_mutations = [(text_file_offset, mutated_word0)]
+        e_path, _e_module = _tampered_object("nonrelocated-word", e_mutations)
+        e_projection = _link_control("nonrelocated-word", e_path, 0x4770)
+        original_linked_words = tuple(int(word, 16) for word in variants["A"]["linked_words"])
+        e_linked_words = tuple(int(word, 16) for word in e_projection["linked_words"])
+        e_differences = validate_nonrelocated_tamper(
+            original_linked_words,
+            e_linked_words,
+            word_index=0,
+            relocation_sites=candidate_sites.sites,
         )
-        projection = _linked_projection(
-            original_words, original_entries, linked, label=f"control {label}", table_address=table_address
-        )
-        projection["linked_elf_path"] = _relative(output_path)
-        projection["linked_elf_sha256"] = sha256_file(output_path)
-        projection["link_command"] = command_info
-        return projection
-
-    # Control C: swap the in-place addends of entries 0 and 1.
-    swap_mutations = [
-        (table_file_offset + 0, EXPECTED_OFFSETS[1]),
-        (table_file_offset + 4, EXPECTED_OFFSETS[0]),
-    ]
-    c_path, _c_module = _tampered_object("swap-entries", swap_mutations)
-    c_projection = _link_control("swap-entries", c_path, 0x4770)
-    c_entries = tuple(int(value, 16) for value in c_projection["linked_entries"])
-    c_vs_original = validate_table_swap(original_entries, c_entries)
-    if c_projection["equal_words"] != FUNCTION_WORDS or c_projection["differences"]:
-        raise ProbeError("FAIL", "control C changed the code; the control must isolate the table")
-    control_records["C"] = {
-        "mutation_stage": "pre_link_object_copy",
-        "relocation_inventory_preserved": True,
-        "mutation": "swapped the in-place addends of table entries 0 and 1",
-        "linked_entries": c_projection["linked_entries"],
-        "equal_words": c_projection["equal_words"],
-        "table_differences": c_vs_original,
-        "detected": True,
-        "promoted_to_matched": False,
-    }
-
-    # Control D: point entry 3 at a wrong but in-function address.
-    tampered_entry_value = 0x44
-    wrong_address = FUNCTION_ADDRESS + tampered_entry_value
-    d_mutations = [(table_file_offset + 12, tampered_entry_value)]
-    d_path, _d_module = _tampered_object("wrong-destination", d_mutations)
-    d_projection = _link_control("wrong-destination", d_path, 0x4770)
-    d_entries = tuple(int(value, 16) for value in d_projection["linked_entries"])
-    d_vs_original = validate_table_destination_tamper(original_entries, d_entries, entry_index=3)
-    if d_projection["equal_words"] != FUNCTION_WORDS or d_projection["differences"]:
-        raise ProbeError("FAIL", "control D changed the code; the control must isolate the table")
-    control_records["D"] = {
-        "mutation_stage": "pre_link_object_copy",
-        "relocation_inventory_preserved": True,
-        "mutation": "redirected table entry 3 to a non-case in-function address",
-        "expected_wrong_address": f"0x{wrong_address:x}",
-        "linked_entries": d_projection["linked_entries"],
-        "equal_words": d_projection["equal_words"],
-        "table_differences": d_vs_original,
-        "detected": True,
-        "promoted_to_matched": False,
-    }
-
-    # Control E: mutate one non-relocated instruction word in a copy of the object.
-    text_file_offset = candidate_text.offset + candidate_offset
-    original_word0 = _read_u32(object_bytes, text_file_offset)
-    mutated_word0 = original_word0 ^ 0x1
-    e_mutations = [(text_file_offset, mutated_word0)]
-    e_path, _e_module = _tampered_object("nonrelocated-word", e_mutations)
-    e_projection = _link_control("nonrelocated-word", e_path, 0x4770)
-    original_linked_words = tuple(int(word, 16) for word in variants["A"]["linked_words"])
-    e_linked_words = tuple(int(word, 16) for word in e_projection["linked_words"])
-    e_differences = validate_nonrelocated_tamper(
-        original_linked_words,
-        e_linked_words,
-        word_index=0,
-        relocation_sites=candidate_sites.sites,
-    )
-    if e_projection["table_differences"] or e_projection["equal_entries"] != TABLE_ENTRIES:
-        raise ProbeError("FAIL", "control E changed the table; the control must isolate the code")
-    control_records["E"] = {
-        "mutation_stage": "pre_link_object_copy",
-        "relocation_inventory_preserved": True,
-        "mutation": "flipped one bit in the non-relocated word 0",
-        "original_word0": f"0x{original_word0:08x}",
-        "mutated_word0": f"0x{mutated_word0:08x}",
-        "linked_words": e_projection["linked_words"],
-        "differences": e_differences,
-        "equal_entries": e_projection["equal_entries"],
-        "detected": True,
-        "promoted_to_matched": False,
-    }
+        if e_projection["table_differences"] or e_projection["equal_entries"] != TABLE_ENTRIES:
+            raise ProbeError("FAIL", "control E changed the table; the control must isolate the code")
+        control_records["E"] = {
+            "mutation_stage": "pre_link_object_copy",
+            "relocation_inventory_preserved": True,
+            "mutation": "flipped one bit in the non-relocated word 0",
+            "original_word0": f"0x{original_word0:08x}",
+            "mutated_word0": f"0x{mutated_word0:08x}",
+            "linked_words": e_projection["linked_words"],
+            "differences": e_differences,
+            "equal_entries": e_projection["equal_entries"],
+            "detected": True,
+            "promoted_to_matched": False,
+        }
+    else:
+        control_records = not_run_controls()
 
     validate_recorded_hash("PRX during experiment", sha256_file(prx_path), prx_hash)
     validate_recorded_hash("source during experiment", sha256_file(source_path), source_hash)
@@ -1082,7 +1156,6 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
 
     report = {
         "schema_version": 1,
-        "experiment_status": "PASS",
         "function": FUNCTION_NAME,
         "function_address": f"0x{FUNCTION_ADDRESS:x}",
         "function_size_bytes": FUNCTION_SIZE,
@@ -1092,7 +1165,7 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             "total_words": FUNCTION_WORDS,
             "differences": baseline["differences"],
             "file_byte_comparison": True,
-            "false_positive_controls": ["E"],
+            "false_positive_controls": ["E"] if "E" in control_records else [],
         },
         "jump_table": {
             "original_address": f"0x{TABLE_ORIGINAL_ADDRESS:x}",
@@ -1105,7 +1178,8 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             "candidate_section": TABLE_SECTION,
             "candidate_address": variants["A"]["assigned_table_address"],
             "file_byte_comparison": True,
-            "false_positive_controls": ["B", "C", "D"],
+            # B (layout) is always validated; C/D only when the baseline is equal.
+            "false_positive_controls": ["B"] + [label for label in ("C", "D") if label in control_records],
         },
         "baseline": {
             "status": matching.INCONCLUSIVE,
@@ -1192,11 +1266,11 @@ def run_experiment(arguments: argparse.Namespace) -> tuple[int, dict[str, object
             "object identity between the fresh candidate and the original module is not proven",
         ],
         "independent_identity_proven": False,
-        "equivalence_claim": equivalence_claim(baseline["equal_words"], baseline["equal_entries"]),
         "promoted_to_matched": False,
     }
+    exit_code = finalize_experiment_report(report)
     _write_report(out, report)
-    return 0, report
+    return exit_code, report
 
 
 def main(argv: list[str] | None = None) -> int:

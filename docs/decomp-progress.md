@@ -2333,3 +2333,113 @@ ampliada (`.rodata` ausente/curta, seções executáveis extras, classe ELF erra
 layout `.text` errado e confinamento do `--out`). Test-Auditor: após os
 acréscimos, a matriz requisito→teste não apresenta lacunas materiais; as
 ausências restantes são de baixo risco e o script falha fechado.
+
+## SETO-DECOMP-015-R2 — Divergence Reporting & Control Validation
+
+**Resultado operacional: `PASS` inalterado; nenhuma evidência da 015 foi
+reclassificada ou promovida.** Esta rodada resolve dois apontamentos da auditoria
+final da 015 com correções pequenas e testes sintéticos de regressão, sem tocar
+fontes C, o comparador estrito, os parsers ELF/relocation, as reconstruções C nem
+`scripts/probe_common.py` / `scripts/probe_link_equivalence.py`.
+
+### 1. Divergência real preservada (não substituída por `FAIL` genérico)
+
+Antes, `run_experiment()` lançava `ProbeError("FAIL", …)` assim que o artefato A
+diferia do original; o `main()` capturava a exceção e gravava um `_base_report()`
+genérico, **descartando** os 30 words, as 6 entradas e as diferenças já
+calculados. Agora a comparação é classificada explicitamente:
+
+| Situação | `experiment_status` | `equivalence_claim` | Exit code |
+|---|---|---|---|
+| 30/30 words **e** 6/6 entradas | `PASS` | `ASSUMPTION_DEPENDENT` | `0` |
+| Experimento válido com diferença de código e/ou tabela | `DIVERGENCE` | `DIVERGENCE_UNDER_CONTROLLED_ASSIGNMENTS` | `3` |
+| ELF/relocation/layout inválidos | `FAIL` / `UNSUPPORTED` (via `ProbeError`) | — | `1` |
+| Ferramenta externa ausente | `BLOCKED` | — | `4` |
+
+- `finalize_experiment_report(report)` é uma função pura que deriva a igualdade de
+  `report["code"]`/`report["jump_table"]`, fixa status/alegação e devolve o exit
+  code; o relatório é **gravado antes** de `run_experiment` retornar, então uma
+  divergência nunca vira um relatório vazio.
+- O código de saída de divergência (`DIVERGENCE_EXIT_CODE = 3`) reutiliza a
+  convenção já documentada do repositório para "a verificação rodou e o resultado
+  não é igual" (`seto.cli.EXIT_MISMATCH`), distinto de erro operacional (`1`) e de
+  bloqueio (`4`).
+- As diferenças continuam registradas em `code.differences` /
+  `jump_table.differences`; `promoted_to_matched=false`,
+  `independent_identity_proven=false` e `original_match_status="INCONCLUSIVE"`
+  permanecem, com `PASS` falso impossível (a alegação de igualdade só existe sob o
+  layout imposto).
+- Os controles C/D/E **pressupõem** que A esteja íntegro e igual ao original. Quando
+  o baseline diverge, eles **não são executados** e são registrados como
+  `{status: "NOT_RUN", reason: "baseline comparison diverged", detected: false,
+  promoted_to_matched: false}` (`not_run_controls()`), em vez de afirmar que
+  passaram. Os controles de integridade estrutural (ELF inválido, relocation
+  inconsistente, símbolo não resolvido, layout incompatível, par A→B que não
+  muda só o word LO16) continuam falhando imediatamente como `ProbeError`.
+
+### 2. Validação explícita do endereço do controle B
+
+O controle B só provava que mover a `.rodata` produzia *alguma* diferença em
+relação a A. `validate_layout_destination(baseline_words, moved_words,
+assigned_address=…)` agora recomputa o destino efetivo das instruções linkadas com
+o decodificador compartilhado `paired_effective_address` e **rejeita** um par que
+reconstrua outro endereço: um par A→B que reconstrói `0x4778` (diferença no índice
+esperado `9`, mas destino errado) falha com
+`moved .rodata reconstructs 0x4778, expected 0x4774`. Um par HI16/LO16 inválido
+(HI que não é `LUI`, LO que não consome o registrador) continua rejeitado pelas
+validações já disponíveis. No run real, `variants["B"]
+.hi16_lo16_effective_address == "0x4774"` e a reconstrução é `true`.
+
+### Verificação
+
+O relatório canônico da 015 permaneceu **byte a byte idêntico** (o caminho `PASS`
+não mudou de forma): SHA-256 `6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c`,
+exit code `0`. Os arquivos `probe_common.py` e `probe_link_equivalence.py` não
+foram alterados, então a 014 (relatório `ebffa9dc…7ba098f6`) e o comportamento
+compartilhado seguem intactos.
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_jump_table_equivalence.py` | 54 passaram (39 + 15 casos novos de R2) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram |
+| Windows / `pytest -q` | 651 passaram, 23 ignorados |
+| Windows / `pytest -m integration -q` | 23 passaram, 21 ignorados |
+| WSL2 unit (015 + 014) | 85 passaram |
+| WSL2 015 real (`SETO_JUMP_TABLE_EQUIVALENCE_REAL=1`) | 2 passaram (GNU + compile/link/compare, determinismo e controle B em `0x4774`) |
+| WSL2 014 real (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram |
+| `compileall -q scripts tests` | clean |
+| `git diff --check` | clean |
+
+Os 15 casos novos cobrem: as quatro combinações 30/30×6/6, 29/30×6/6, 30/30×5/6 e
+29/30×5/6 (classificação, exit code, campos preservados e escrita do relatório via
+`finalize_experiment_report` + `_write_report`); o controle B positivo (`0x4774`),
+negativo (diferença no índice `9` mas reconstrói `0x4778`, rejeitado) e par
+HI16/LO16 inválido, inclusive propagado através de `validate_layout_destination`;
+a forma literal de `not_run_controls()` (`NOT_RUN`/`detected=false`); que um layout
+inválido continua falhando como `UNSUPPORTED`/`FAIL` (nunca `DIVERGENCE`); e que
+`DIVERGENCE_EXIT_CODE` é o código de mismatch do repositório, distinto de `0/1/4/5`.
+
+**Limitação de cobertura residual.** O gating dos controles C/D/E dentro de
+`run_experiment` (o ramo `else: control_records = not_run_controls()`) e a
+derivação de `false_positive_controls` são verificados por construção e pelos
+testes de forma/nível unitário, **não** por um teste de pipeline completo: forçar
+uma divergência real exigiria substituir compilador/linker/matcher e o parsing do
+PRX. Os testes sintéticos fixam a forma exata do relatório divergente e o caminho
+de finalização/gravação, mas não exercitam `run_experiment` de ponta a ponta.
+
+**Apontamentos de revisão resolvidos.** Reviewer e Test-Auditor (read-only) não
+encontraram bloqueadores, major, regressões de segurança nem violações de escopo;
+os achados menores aplicados nesta rodada foram: `false_positive_controls` passa a
+ser derivado dos controles efetivamente executados (em divergência, `code=[]` e
+`jump_table=["B"]`, já que B é sempre validado e C/D não rodam) em vez de anunciar
+C/D/E que ficaram `NOT_RUN`; a forma de `not_run_controls()` passou a ser asserida
+literalmente; e o controle B ganhou a verificação explícita do índice de diferença
+e a cobertura do par inválido através do validador. A duplicação do literal `3`
+(com o teste que o ata a `seto.cli.EXIT_MISMATCH`) e as duas noções de igualdade
+(contagens vs listas de diferenças, que não podem divergir com os produtores
+atuais) foram mantidas por serem fail-safe e mínimas.
+
+**Limitações.** Uma divergência continua sendo um resultado do experimento sob o
+layout imposto, não prova de identidade; `INCONCLUSIVE` não vira `MATCHED` e a
+extensão a `0x414` segue fora de escopo. A suíte completa WSL2 mantém apenas as
+falhas ambientais já descritas acima.
