@@ -950,3 +950,124 @@ def test_validate_linked_structure_rejects_executable_mwcats() -> None:
     with pytest.raises(probe.ProbeError, match="executable sections"):
         probe.validate_linked_structure(module, label="exec-mwcats", expected_cases=cases)
 
+
+# ---------------------------------------------------------------------------
+# 14. R3 hardening: output path guard for the per-function object/report wipe
+# ---------------------------------------------------------------------------
+
+
+def _create_file_symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"platform does not permit local symlink creation: {exc}")
+
+
+def test_wipe_stale_build_artifacts_rejects_broken_symlink_without_creating_target(
+    tmp_path: Path,
+) -> None:
+    build_root = tmp_path / "build" / "seto017"
+    build_root.mkdir(parents=True)
+    outside = tmp_path / "outside" / "func_00000000.c.match.json"
+    link = build_root / "func_00000000.c.match.json"
+    _create_file_symlink_or_skip(link, outside)
+
+    # Path.exists() follows the link, so the pre-R3 wipe was blind to it.
+    assert link.is_symlink()
+    assert not link.exists()
+    assert not outside.exists()
+
+    with pytest.raises(probe.ProbeError, match="may not be a symlink"):
+        probe._wipe_stale_build_artifacts((link,), build_root)
+
+    # Fail-closed: the link survives and nothing escaped the build tree.
+    assert link.is_symlink()
+    assert not outside.exists()
+    assert not outside.parent.exists()
+
+
+def test_wipe_stale_build_artifacts_rejects_when_the_report_path_is_a_symlink(
+    tmp_path: Path,
+) -> None:
+    build_root = tmp_path / "build" / "seto017"
+    build_root.mkdir(parents=True)
+    obj = build_root / "func_00000000.o"
+    obj.write_bytes(b"stale")
+    outside = tmp_path / "outside" / "func_00000000.c.match.json"
+    report = build_root / "func_00000000.c.match.json"
+    _create_file_symlink_or_skip(report, outside)
+
+    # The report path is screened too, not just the object path.
+    with pytest.raises(probe.ProbeError, match="may not be a symlink"):
+        probe._wipe_stale_build_artifacts((obj, report), build_root)
+
+    assert not outside.exists()
+    assert report.is_symlink()
+
+
+def test_wipe_stale_build_artifacts_rejects_valid_symlink_and_preserves_target(
+    tmp_path: Path,
+) -> None:
+    build_root = tmp_path / "build" / "seto017"
+    build_root.mkdir(parents=True)
+    target = tmp_path / "outside" / "func_00000000.o"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"keep")
+    link = build_root / "func_00000000.o"
+    _create_file_symlink_or_skip(link, target)
+
+    with pytest.raises(probe.ProbeError, match="may not be a symlink"):
+        probe._wipe_stale_build_artifacts((link,), build_root)
+
+    # A valid symlink is rejected as well; its target is neither read nor removed.
+    assert link.is_symlink()
+    assert target.read_bytes() == b"keep"
+
+
+def test_wipe_stale_build_artifacts_removes_stale_regular_files_for_fresh_compilation(
+    tmp_path: Path,
+) -> None:
+    build_root = tmp_path / "build" / "seto017"
+    build_root.mkdir(parents=True)
+    obj = build_root / "func_00000000.o"
+    report = build_root / "func_00000000.c.match.json"
+    obj.write_bytes(b"stale")
+    report.write_bytes(b"stale")
+
+    probe._wipe_stale_build_artifacts((obj, report), build_root)
+    assert not obj.exists()
+    assert not report.exists()
+
+    # Idempotent when the artifacts are already gone (missing_ok=True).
+    probe._wipe_stale_build_artifacts((obj, report), build_root)
+    assert not obj.exists()
+    assert not report.exists()
+
+
+def test_wipe_stale_build_artifacts_rejects_a_path_outside_the_build_root(
+    tmp_path: Path,
+) -> None:
+    build_root = tmp_path / "build" / "seto017"
+    build_root.mkdir(parents=True)
+    outside = tmp_path / "outside.o"
+    outside.write_bytes(b"keep")
+
+    with pytest.raises(probe.ProbeError, match="escapes its allowed root"):
+        probe._wipe_stale_build_artifacts((outside,), build_root)
+
+    assert outside.read_bytes() == b"keep"
+
+
+def test_wipe_stale_build_artifacts_rejects_a_directory_at_the_output_path(
+    tmp_path: Path,
+) -> None:
+    build_root = tmp_path / "build" / "seto017"
+    build_root.mkdir(parents=True)
+    occupied = build_root / "func_00000000.c.match.json"
+    occupied.mkdir()
+
+    with pytest.raises(probe.ProbeError, match="is not a regular file"):
+        probe._wipe_stale_build_artifacts((occupied,), build_root)
+
+    assert occupied.is_dir()
+
