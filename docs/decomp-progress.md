@@ -2171,3 +2171,165 @@ WSL2; a suíte Windows passou 597 testes (21 skips), a integração Windows pass
 envolvem os caminhos alterados. Reviewer: `APPROVE`;
 Test-Auditor: sem bloqueios, revisão estática. CI Ubuntu/Windows Python 3.11/3.12
 do commit `a895c35` passou 8/8.
+
+## SETO-DECOMP-015 — Jump-Table and Initialized Data Equivalence
+
+**Resultado operacional: `PASS`; comparação A: 30/30 words de código e 6/6
+entradas da jump table iguais sob endereços controlados; alegação:
+`ASSUMPTION_DEPENDENT`.** O experimento estende a linkedição controlada da
+SETO-DECOMP-014 para o código *e* os dados gerados pelo compilador para
+`func_0000039C`. Ele recompila a função neste próprio run, monta a `.rodata`
+gerada pelo Metrowerks e o código em `.text` com GNU MIPSel, e compara ambos
+literalmente com as regiões correspondentes do PRX original. Não altera o
+comparador, o parser ELF/relocation, as reconstruções C nem as classificações; o
+status estrito original permanece `INCONCLUSIVE`.
+
+### Compilação fresca e proveniência
+
+Comando reproduzível nesta configuração WSL2 (`python3` = ambiente
+`/home/vinicius/.seto/venvs/seto008-test/bin/python`):
+
+```bash
+PYTHONPATH=src python3 scripts/probe_jump_table_equivalence.py \
+  --config config/wsl/seto.toml \
+  --prx private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx \
+  --source decomp/src/func_0000039C.c \
+  --build-dir build/seto015/experiment \
+  --out build/seto015/jump-table-equivalence.json
+```
+
+O script remove o objeto de saída antes de invocar `scripts/match_function.py`;
+só compara depois de validar exit code 5 (`INCONCLUSIVE`) do matcher, 28/30
+words, zero diferenças e zero problemas de relocation no baseline estrito.
+
+| Artefato/parâmetro | Valor observado |
+|---|---|
+| PRX SHA-256 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` |
+| Fonte C SHA-256 | `7d00c468822426f875ea366c9bc89714b20740e72a0c6e78eff3645695e69b89` |
+| Objeto fresco SHA-256 | `776f161be72d985a3eef836141d45263ede9a991867a74699c9ac56cffbc09fd` |
+| Linker script A / B SHA-256 | `bb24d72b97a49deb8195383e6fc478781ba3e086fb6e029d3bdbdac13f9e784e` / `5632ead40c9dc3c1efa4d87dd1cef791ec6fe5a74e4c7379ded621cf52e555a5` |
+| GNU linker/emulação | GNU ld 2.42 / `elf32ltsmip` |
+| Compilador/loader/flags | Metrowerks 3.0.1 build 219 / wibo 1.2.0 / `-O4,p -sdatathreshold 0` |
+
+O objeto fresco é ELF32 `ET_REL` little-endian MIPS, `ET_REL`. `.text` tem `0x78`
+bytes (30 words) e `.rodata` tem `0x18` bytes (6 words). As relocations do objeto
+são:
+
+- `.rel.rodata`: seis `R_MIPS_32` para o símbolo definido `func_0000039C`, em
+  offsets de seção `0x0,0x4,…,0x14`, com addends (words in-place)
+  `0x38,0x40,0x48,0x50,0x58,0x60` (offsets relativos ao início da função);
+- `.rel.text`: `R_MIPS_26` no word 2 (`0x3A4`) para o símbolo externo
+  `func_00002364`; `R_MIPS_HI16` no word 7 (`0x3B8`) e `R_MIPS_LO16` no word 9
+  (`0x3C0`) para o símbolo local `@13` (`STT_OBJECT` em `.rodata`, tamanho 24).
+
+Esses seis addends foram re-validados contra o baseline registrado nesta rodada,
+sem construir o resultado a partir deles: o vínculo é conferido no ELF linkado.
+
+### Linkedição controlada e comparação observada
+
+O linker script gerado sob `build/seto015/` fixa `.text 0x39c : SUBALIGN(4)`,
+exige tamanho `0x78`, exige `ADDR/SIZEOF(.rodata)` e o símbolo no endereço; a
+`.rodata` recebe um endereço **atribuído** (`0x4770`, e `0x4774` no controle B).
+`.mwcats` é preservada e só `.text` é executável. A única definição externa
+fornecida ao linker é `func_00002364 = 0x2364`, derivada da stub original
+(`libehsys`, NID `0x31454993`) — uma **atribuição controlada**, não prova de
+identidade.
+
+| Caso | `.rodata` | Resultado literal vs PRX |
+|---|---:|---|
+| A | `0x4770` | **30/30 words e 6/6 entradas iguais**; par HI16/LO16 reconstrói `0x4770`; `R_MIPS_26` aponta `0x2364` |
+| B | `0x4774` | **29/30 words**; só o word `0x3C0` muda (`0x24634770` → `0x24634774`); as entradas da tabela **não** mudam |
+
+As entradas da tabela linkada coincidem com as relocations `R_MIPS_32` do próprio
+objeto aplicadas ao `.text` posicionado (`0x39C + addend`); isso é uma
+consistência necessária, não prova de proveniência por si só. A evidência de que o
+linker consumiu a tabela do compilador é o inventário de relocations validado
+(seis `R_MIPS_32` em ordem contra `func_0000039C`) somado à igualdade literal com
+a tabela original: `0x3D4,0x3DC,0x3E4,0x3EC,0x3F4,0x3FC`.
+
+### Controles negativos
+
+| Controle | Manipulação | Detecção |
+|---|---|---|
+| A (baseline) | tabela `.rodata` em `0x4770` | 6/6 entradas nos corpos de `case` |
+| B (layout) | `.rodata` movida para `0x4774` | só o word LO16 (`0x3C0`) muda |
+| C (troca) | addends in-place das entradas 0 e 1 trocados em cópia do objeto | diferenças exatamente nas entradas 0 e 1; código inalterado (30/30) |
+| D (endereço errado) | entrada 3 redirecionada para `0x3E0` (dentro de `.text`, fora dos `case`) | detectada na entrada 3; endereço não é um corpo de `case` |
+| E (word não relocado) | bit flip no word 0 em cópia do objeto | detectada exatamente no word 0; tabela inalterada (6/6) |
+
+C, D e E são adulterações **pré-link de uma cópia** do objeto; o script preserva e
+reconfere o inventário de relocations (mesmos tipos/offsets/símbolos) antes de
+linkar. Casos negativos adicionais são cobertos por testes unitários sintéticos:
+ELF de arquitetura/tipo/endianness errados, `.rodata` ausente/tamanho errado,
+contagem de relocations ≠ 6, tipo ≠ `R_MIPS_32`, símbolo inesperado, símbolos
+indefinidos/relocations não consumidas no ELF linkado, seções executáveis extras,
+symlink redirecionando a saída e divergência de hash de proveniência.
+
+### Coordenadas do PRX e alcance probatório
+
+As APIs existentes confirmaram o par HI16/LO16 original (`0x3B8`/`0x3C0`,
+pareamento `PROVEN`, addend combinado `0x00004770`) e o destino `.data+0x8`, VA
+`0x4770`, file offset `0x47d0`, com as seis entradas `0x3D4..0x3FC`. As seis
+relocations PSP `R_MIPS_32` da tabela estão no segmento relativo 0; em
+coordenadas module-relative (`psp_reloc.relative_base(..., load_base=0)` +
+`apply_relocation`) os words aplicados coincidem com os bytes file-backed
+(`0x3D4..0x3FC`). Isso registra o modelo de relocation e confirma os bytes, mas
+**não** afirma base de carregamento zero nem aplica as relocations PSP ao ELF
+GNU: `runtime_comparison = NOT_DEMONSTRATED`. A identidade de objeto entre o
+candidato e o módulo original permanece **não comprovada**.
+
+O relatório canônico `build/seto015/jump-table-equivalence.json` tem SHA-256
+`6b38d24de1614ff1b54d518ef5aa49190207925198314038564c07caa84b554c`; duas
+execuções frescas produziram JSON byte a byte idêntico. O status estrito original
+permanece `INCONCLUSIVE`; `promoted_to_matched=false` e
+`independent_identity_proven=false`.
+
+### Reuso e hardening compartilhados
+
+`scripts/probe_common.py` extrai apenas os helpers comprovadamente reutilizáveis:
+execução controlada de processo (argv, timeout, sem `shell=True`), JSON canônico,
+validação de ELF/símbolo indefinido, comparação literal de words, pareamento
+HI16/LO16 efetivo e as proteções de caminho de build. `scripts/probe_link_equivalence.py`
+passou a consumi-los por wrappers que preservam seus nomes/assinaturas públicos; a
+suíte da 014 continuou passando 31/31 e o relatório canônico da 014 foi regenerado
+com o **mesmo** SHA-256 `ebffa9dc…7ba098f6`. O novo experimento reutiliza os mesmos
+controles de filesystem: rejeição de `build`/`build/seto015` como symlink
+(existente, externo ou quebrado) e como arquivo, validação da raiz antes de
+`resolve()`, confinamento da saída e ausência de caminho alternativo de escrita
+após erro. **Não** alega proteção contra TOCTOU.
+
+### Gates de repositório desta rodada
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_probe_jump_table_equivalence.py` | 39 passaram (Windows e WSL2) |
+| `tests/test_probe_link_equivalence.py` | 31 passaram (Windows e WSL2) |
+| Windows / `pytest -q` | 636 passaram, 23 ignorados |
+| WSL2 integração GNU (objeto sintético) | 1 passou (`-k gnu`) |
+| WSL2 015 real (`SETO_JUMP_TABLE_EQUIVALENCE_REAL=1`) | 2 passaram (GNU + compile/link/compare e determinismo) |
+| WSL2 014 real (`SETO_LINK_EQUIVALENCE_REAL=1`) | 2 passaram |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+
+A suíte completa WSL2 mantém apenas as falhas ambientais já descritas na 014
+(`test_match_script`, `test_smoke`/`test_toolchain` de inventário e
+`test_toolchain_bootstrap` POSIX com `.sh` CRLF no checkout montado); nenhum
+teste ou módulo adicional foi alterado para mascarar essas falhas.
+
+**Limitações e próximo passo.** A igualdade de código e tabela vale apenas sob o
+layout imposto; a `.rodata` do candidato em `0x4770` é um posicionamento
+experimental, não uma localização original recuperada. Não há demonstração de
+recarregamento de runtime do PSP (a base de carga do módulo não está no arquivo)
+nem prova de identidade entre o candidato e o original. A extensão a `0x414`
+**não** foi tentada nesta rodada: exigiria novas hipóteses de layout/tabela e
+infraestrutura não comprovadamente reutilizável, o que a própria especificação
+coloca fora do escopo enquanto a identidade independente permanece sem prova.
+
+**Revisão.** Reviewer: findings de severidade baixa resolvidos — a linguagem de
+proveniência do cross-check `linked == .text + addend` foi reescrita como
+consistência necessária (não prova por si só); os diretórios de teste passaram a
+ser criados pelos guards compartilhados de build; e a cobertura unitária foi
+ampliada (`.rodata` ausente/curta, seções executáveis extras, classe ELF errada,
+layout `.text` errado e confinamento do `--out`). Test-Auditor: após os
+acréscimos, a matriz requisito→teste não apresenta lacunas materiais; as
+ausências restantes são de baixo risco e o script falha fechado.
