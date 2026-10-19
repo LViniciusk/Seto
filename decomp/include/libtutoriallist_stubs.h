@@ -32,4 +32,32 @@ extern void *func_00003C70(
 );
 /* libehsys, NID 0x5CBB9E43, stub 0x3C70 */
 
+/* func_000007A4 / func_00000FF0 / func_000014E0: usage-derived renderer calls. */
+extern void *func_00003850(void *arg0, int arg1);
+/* libehsys, NID 0x9EA6989A, stub 0x3850 */
+extern void *func_00003AE8(
+    void *arg0, unsigned int arg1, unsigned int arg2, unsigned int arg3,
+    unsigned int arg4, unsigned int arg5, unsigned int arg6, unsigned int arg7
+);
+/* libehsys, NID 0xFDD168CA, stub 0x3AE8 */
+extern void *func_00003AF0(
+    void *arg0, unsigned int arg1, unsigned int arg2, unsigned int arg3,
+    unsigned int arg4
+);
+/* libehsys, NID 0x8EA6B1E7, stub 0x3AF0 */
+extern void *func_00003B78(void *arg0, unsigned int arg1);
+/* libehsys, NID 0xCABEA834, stub 0x3B78 */
+extern void *func_00003BC0(void *arg0, unsigned int arg1, unsigned int arg2);
+/* libehsys, NID 0xE6E4401F, stub 0x3BC0 */
+extern void *func_000041D8(int arg0, int arg1);
+/* libehsys, NID 0xE58C0FDC, stub 0x41D8 */
+extern void func_00004270(unsigned int arg0, unsigned int arg1);
+/* libehsys, NID 0x942B03D0, stub 0x4270 */
+extern void func_00004280(unsigned int arg0);
+/* libehsys, NID 0x60B55A50, stub 0x4280 */
+extern void func_00004350(void *arg0);
+/* libehsys, NID 0xB8AD96EA, stub 0x4350 */
+extern void *func_00004358(void);
+/* libehsys, NID 0xA4AFF8E6, stub 0x4358 */
+
 #endif /* SETO_DECOMP_LIBTUTORIALLIST_STUBS_H */
