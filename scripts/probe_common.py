@@ -157,7 +157,10 @@ def prepare_build_file(path: Path, build_root: Path) -> None:
 
 def write_build_text(path: Path, text: str, build_root: Path) -> None:
     prepare_build_file(path, build_root)
-    path.write_text(text, encoding="utf-8")
+    # Preserve canonical LF bytes on Windows as well as POSIX.  Path.write_text's
+    # default newline translation otherwise makes hashed JSON reports differ by
+    # host even when their text is identical.
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def write_build_bytes(path: Path, data: bytes, build_root: Path) -> None:
