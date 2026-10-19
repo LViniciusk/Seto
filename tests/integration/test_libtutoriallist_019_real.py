@@ -110,16 +110,12 @@ def test_new_libtutoriallist_candidates_match_freshly_and_report_exact_results()
     assert matched["relocation_issues"] == [] and matched["limitations"] == []
     assert matched["verified_decompilation"] is True
 
-    nonmatching = by_address[0xFF0]
-    assert nonmatching["status"] == "NONMATCHING" and nonmatching["exit_code"] == 3
-    assert nonmatching["matching_words"] == 122 and nonmatching["total_words"] == 153
-    assert nonmatching["difference_count"] == len(nonmatching["differences"]) == 31
-    assert [item["word_index"] for item in nonmatching["differences"]] == [
-        8, 9, 10, 11, 12, 16, 18, 21, 22, 36, 37, 44, 45, 47, 48, 61, 65,
-        74, 82, 87, 89, 96, 97, 106, 111, 113, 121, 130, 131, 135, 136,
-    ]
-    assert nonmatching["relocation_issues"] == [] and nonmatching["limitations"] == []
-    assert nonmatching["verified_decompilation"] is False
+    rectangle = by_address[0xFF0]
+    assert rectangle["status"] == "MATCHED" and rectangle["exit_code"] == 0
+    assert rectangle["matching_words"] == rectangle["total_words"] == 153
+    assert rectangle["difference_count"] == 0 and rectangle["differences"] == []
+    assert rectangle["relocation_issues"] == [] and rectangle["limitations"] == []
+    assert rectangle["verified_decompilation"] is True
 
     build_root_019 = triage.validated_build_root(REPO_ROOT, subdir="seto019")
     triage.ensure_build_dir(build_root_019, build_root_019)
