@@ -18,6 +18,7 @@ from seto import elf, smoke, synthetic
 from seto.toolchain import (
     BLOCKED,
     INCOMPATIBLE,
+    INSTALLED,
     MISSING,
     NOT_APPLICABLE,
     READY,
@@ -48,6 +49,44 @@ def _write_launcher(path: Path, source: str) -> Path:
 def _fake(tmp_path: Path, name: str, source: str) -> Path:
     suffix = ".cmd" if os.name == "nt" else ""
     return _write_launcher(tmp_path / f"{name}{suffix}", source)
+
+
+def _fake_node(tmp_path: Path, *, version: str = "v24.21.0", output: str = "2") -> Path:
+    return _fake(
+        tmp_path,
+        "node",
+        "import sys\n"
+        f"if '--version' in sys.argv: print({version!r})\n"
+        f"else: sys.stdout.write({output!r})\n",
+    )
+
+
+def _fake_rea(tmp_path: Path) -> Path:
+    return _fake(
+        tmp_path,
+        "rea",
+        """
+import json, os, sys
+if '--version' in sys.argv:
+    print('rea-agents 6.5.0')
+elif '--help' in sys.argv:
+    print('rea commands: doctor, inspect, mcp')
+elif sys.argv[1:] == ['doctor', '--provider', 'ghidra', '--json']:
+    if os.environ.get('SETO_TEST_GHIDRA_PROVIDER_JSON') == 'bad':
+        print('bad response at C:/private/sentinel/ghidra')
+    else:
+        configured = os.environ.get('SETO_TEST_GHIDRA_CONFIGURED', '1') == '1'
+        available = configured and os.environ.get('SETO_TEST_GHIDRA_PROVIDER') == '1'
+        print(json.dumps({'providerInspections':[{'id':'ghidra','configured':configured,'available':available,'providerVersion':'12.1.3' if configured else None,'checks':[{'ok':available,'classification':'healthy' if available else 'not_configured' if not configured else 'provider_unavailable','detail':'synthetic provider check'}]}]}))
+elif 'mcp' in sys.argv:
+    for line in sys.stdin:
+        request = json.loads(line)
+        if request.get('method') == 'initialize':
+            print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'rea','version':'6.5.0'}}}), flush=True)
+        elif request.get('method') == 'tools/list':
+            print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'tools':[{'name':'probe'}]}}), flush=True)
+""",
+    )
 
 
 def _settings(**paths: Path) -> Settings:
@@ -119,6 +158,15 @@ def _ghidra_home(
     return home
 
 
+def _ghidra_settings(tmp_path: Path, home: Path) -> Settings:
+    java = _fake(
+        tmp_path,
+        "java",
+        "import sys\nsys.stderr.write('openjdk version \"25.0.3\" 2026-04-21 LTS')\n",
+    )
+    return _settings(ghidra=home, java=java)
+
+
 def _run(tmp_path: Path, settings: Settings, *names: str, **kwargs):
     return smoke.smoke_report(
         settings, tools=list(names), workspace=tmp_path / "work", **kwargs
@@ -141,6 +189,31 @@ def test_a_compiler_that_fails_is_not_ready(tmp_path) -> None:
     assert capabilities["compile"].state == INCOMPATIBLE
     assert "exit code 1" in capabilities["compile"].detail
     assert entry.state == INCOMPATIBLE
+
+
+def test_a_missing_metrowerks_license_is_blocked_without_echoing_its_path(tmp_path) -> None:
+    fake = _fake(
+        tmp_path,
+        "mwccpsp",
+        "import sys\n"
+        "sys.stderr.write('License check failed: Cannot find license file "
+        "C:/redacted/sentinel/license.dat\\n')\n"
+        "sys.exit(1)\n",
+    )
+    entry, capabilities = _capabilities(
+        smoke.smoke_report(
+            _settings(mwccpsp=fake),
+            env={},
+            platform="nt",
+            tools=["mwccpsp"],
+            workspace=tmp_path / "license-workspace",
+        ),
+        "mwccpsp",
+    )
+    assert entry.state == BLOCKED
+    assert capabilities["compile"].state == BLOCKED
+    assert "license is unavailable" in capabilities["compile"].detail
+    assert "sentinel" not in capabilities["compile"].detail
 
 
 def test_a_compiler_that_produces_something_other_than_an_elf_is_not_ready(tmp_path) -> None:
@@ -243,15 +316,70 @@ def test_an_objdump_that_does_not_know_mips_is_not_ready(tmp_path) -> None:
 
 
 def test_node_is_proved_by_running_a_script(tmp_path) -> None:
-    fake = _fake(tmp_path, "node", "import sys\nsys.stdout.write('2')\n")
+    fake = _fake_node(tmp_path)
     _, capabilities = _capabilities(_run(tmp_path, _settings(node=fake), "node"), "node")
     assert capabilities["runtime"].state == READY
 
 
 def test_a_node_that_does_not_run_a_script_is_not_ready(tmp_path) -> None:
-    fake = _fake(tmp_path, "node", "print('not two')\n")
+    fake = _fake_node(tmp_path, output="not two")
     _, capabilities = _capabilities(_run(tmp_path, _settings(node=fake), "node"), "node")
     assert capabilities["runtime"].state == INCOMPATIBLE
+
+
+def test_node_outside_the_pinned_rea_engine_range_is_incompatible(tmp_path) -> None:
+    fake = _fake_node(tmp_path, version="v18.19.1")
+    _, capabilities = _capabilities(_run(tmp_path, _settings(node=fake), "node"), "node")
+    assert capabilities["runtime"].state == INCOMPATIBLE
+    assert "outside REA's supported engine range" in capabilities["runtime"].detail
+
+
+def test_npm_smoke_proves_launchability_without_claiming_installation(tmp_path) -> None:
+    marker = tmp_path / "npm-install-was-run"
+    fake_node = _fake_node(tmp_path)
+    fake_npm = _fake(
+        tmp_path,
+        "npm",
+        "import pathlib, sys\n"
+        "if '--version' in sys.argv: print('11.19.0')\n"
+        f"else: pathlib.Path({str(marker)!r}).write_text('unexpected')\n",
+    )
+    entry, capabilities = _capabilities(
+        smoke.smoke_report(
+            _settings(node=fake_node, npm=fake_npm),
+            tools=["npm"],
+            env={},
+        ),
+        "npm",
+    )
+    assert entry.state == INSTALLED
+    assert capabilities["package-manager"].state == INSTALLED
+    assert "package installation was not exercised" in capabilities["package-manager"].detail
+    assert not marker.exists()
+
+
+def test_rea_is_blocked_when_node_does_not_meet_its_pinned_engine(tmp_path) -> None:
+    marker = tmp_path / "rea-was-run"
+    fake_node = _fake_node(tmp_path, version="v18.19.1")
+    fake_rea = _fake(
+        tmp_path,
+        "rea",
+        "import sys\n"
+        "if '--version' in sys.argv: print('rea-agents 6.5.0')\n"
+        "elif '--help' in sys.argv: print('rea commands: doctor, inspect, mcp')\n"
+        f"else: from pathlib import Path; Path({str(marker)!r}).write_text('unexpected')\n",
+    )
+    settings = _settings(node=fake_node, rea=fake_rea)
+
+    statuses = smoke.smoke_report(settings, tools=["node", "rea"], env={})
+
+    node, node_capabilities = _capabilities(statuses, "node")
+    rea, rea_capabilities = _capabilities(statuses, "rea")
+    assert node_capabilities["runtime"].state == INCOMPATIBLE
+    assert rea.state == BLOCKED
+    assert rea_capabilities["cli"].state == BLOCKED
+    assert "node" in rea.reason
+    assert not marker.exists()
 
 
 def test_a_java_too_old_for_ghidra_is_not_ready(tmp_path) -> None:
@@ -316,7 +444,7 @@ def test_a_loader_without_a_windows_program_is_blocked(tmp_path) -> None:
 def test_headless_is_proved_without_claiming_the_allegrex_processor(tmp_path) -> None:
     home = _ghidra_home(tmp_path, allegrex=False)
     entry, capabilities = _capabilities(
-        _run(tmp_path, _settings(ghidra=home), "ghidra"), "ghidra"
+        _run(tmp_path, _ghidra_settings(tmp_path, home), "ghidra"), "ghidra"
     )
     assert capabilities["headless"].state == READY
     assert capabilities["mips-auto"].state == READY
@@ -330,7 +458,7 @@ def test_headless_is_proved_without_claiming_the_allegrex_processor(tmp_path) ->
 def test_the_allegrex_processor_is_claimed_only_when_ghidra_loads_it(tmp_path) -> None:
     home = _ghidra_home(tmp_path, allegrex=True)
     _, capabilities = _capabilities(
-        _run(tmp_path, _settings(ghidra=home), "ghidra"), "ghidra"
+        _run(tmp_path, _ghidra_settings(tmp_path, home), "ghidra"), "ghidra"
     )
     assert capabilities["headless"].state == READY
     assert capabilities["mips-auto"].state == READY
@@ -342,7 +470,7 @@ def test_a_ghidra_that_refuses_allegrex_does_not_get_the_capability(tmp_path) ->
     # The module is on disk but Ghidra will not load it: the ZIP is not proof.
     home = _ghidra_home(tmp_path, allegrex=True, refuse=True)
     entry, capabilities = _capabilities(
-        _run(tmp_path, _settings(ghidra=home), "ghidra"), "ghidra"
+        _run(tmp_path, _ghidra_settings(tmp_path, home), "ghidra"), "ghidra"
     )
     assert capabilities["headless"].state == READY
     assert capabilities["mips-auto"].state == READY
@@ -359,7 +487,7 @@ def test_a_64_bit_mips_fallback_does_not_prove_automatic_elf32_recognition(tmp_p
         auto_language="MIPS:LE:64:64-32R6addr",
     )
     _, capabilities = _capabilities(
-        _run(tmp_path, _settings(ghidra=home), "ghidra"), "ghidra"
+        _run(tmp_path, _ghidra_settings(tmp_path, home), "ghidra"), "ghidra"
     )
     assert capabilities["headless"].state == READY
     assert capabilities["mips-auto"].state == INCOMPATIBLE
@@ -373,6 +501,7 @@ def test_missing_rea_and_ghidra_still_show_separate_unproven_capabilities() -> N
     _, ghidra = _capabilities(statuses, "ghidra")
     assert rea["cli"].state == MISSING
     assert rea["mcp"].state == BLOCKED
+    assert rea["ghidra-provider"].state == BLOCKED
     assert rea["native-analysis"].state == BLOCKED
     assert rea["prx"].state == BLOCKED
     assert ghidra["headless"].state == MISSING
@@ -389,34 +518,112 @@ def test_smoke_rejects_unknown_tool_names() -> None:
         smoke.smoke_report(Settings(data={}), tools=["objdumpish"])
 
 
-def test_rea_mcp_handshake_is_distinct_from_native_analysis_and_prx_support(tmp_path) -> None:
-    fake_rea = _fake(
-        tmp_path,
-        "rea",
-        """
-import json, sys
-if '--version' in sys.argv:
-    print('rea-agents 6.5.0')
-elif '--help' in sys.argv:
-    print('rea commands: doctor, inspect, mcp')
-elif 'mcp' in sys.argv:
-    for line in sys.stdin:
-        request = json.loads(line)
-        if request.get('method') == 'initialize':
-            print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'rea','version':'6.5.0'}}}), flush=True)
-        elif request.get('method') == 'tools/list':
-            print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'tools':[{'name':'probe'}]}}), flush=True)
-""",
-    )
-    fake_node = _fake(tmp_path, "node", "print('v24.21.0')\n")
+def test_rea_mcp_handshake_is_distinct_from_native_analysis_and_prx_support(
+    tmp_path, monkeypatch
+) -> None:
+    fake_rea = _fake_rea(tmp_path)
+    fake_node = _fake_node(tmp_path)
+    monkeypatch.setenv("SETO_TEST_GHIDRA_PROVIDER", "1")
     _, capabilities = _capabilities(
-        _run(tmp_path, _settings(rea=fake_rea, node=fake_node), "rea"), "rea"
+        smoke.smoke_report(
+            _settings(rea=fake_rea, node=fake_node),
+            tools=["rea"],
+            workspace=tmp_path / "work",
+        ),
+        "rea",
     )
     assert capabilities["cli"].state == READY
     assert capabilities["mcp"].state == READY
     assert "tools/list succeeded (1 tools)" in capabilities["mcp"].detail
+    assert capabilities["ghidra-provider"].state == INSTALLED, capabilities["ghidra-provider"].detail
     assert capabilities["native-analysis"].state == BLOCKED
     assert capabilities["prx"].state == BLOCKED
+
+
+def test_rea_provider_diagnostic_failure_never_promotes_native_analysis(
+    tmp_path, monkeypatch
+) -> None:
+    fake_rea = _fake_rea(tmp_path)
+    fake_node = _fake_node(tmp_path)
+    monkeypatch.setenv("SETO_TEST_GHIDRA_PROVIDER", "0")
+    _, capabilities = _capabilities(
+        smoke.smoke_report(
+            _settings(rea=fake_rea, node=fake_node),
+            tools=["rea"],
+            workspace=tmp_path / "work",
+        ),
+        "rea",
+    )
+    assert capabilities["cli"].state == READY
+    assert capabilities["mcp"].state == READY
+    assert capabilities["ghidra-provider"].state == INCOMPATIBLE
+    assert capabilities["native-analysis"].state == BLOCKED
+    assert capabilities["prx"].state == BLOCKED
+
+
+def test_rea_provider_without_ghidra_is_missing_not_ready(tmp_path, monkeypatch) -> None:
+    fake_rea = _fake_rea(tmp_path)
+    fake_node = _fake_node(tmp_path)
+    monkeypatch.setenv("SETO_TEST_GHIDRA_CONFIGURED", "0")
+    _, capabilities = _capabilities(
+        smoke.smoke_report(
+            _settings(rea=fake_rea, node=fake_node),
+            tools=["rea"],
+            workspace=tmp_path / "work",
+        ),
+        "rea",
+    )
+    assert capabilities["cli"].state == READY
+    assert capabilities["mcp"].state == READY
+    assert capabilities["ghidra-provider"].state == MISSING
+    assert capabilities["native-analysis"].state == BLOCKED
+
+
+def test_rea_provider_invalid_json_does_not_echo_machine_paths(tmp_path, monkeypatch) -> None:
+    fake_rea = _fake_rea(tmp_path)
+    fake_node = _fake_node(tmp_path)
+    monkeypatch.setenv("SETO_TEST_GHIDRA_PROVIDER_JSON", "bad")
+    _, capabilities = _capabilities(
+        smoke.smoke_report(
+            _settings(rea=fake_rea, node=fake_node),
+            tools=["rea"],
+            workspace=tmp_path / "work",
+        ),
+        "rea",
+    )
+    assert capabilities["ghidra-provider"].state == INCOMPATIBLE
+    assert "invalid JSON" in capabilities["ghidra-provider"].detail
+    assert "sentinel" not in capabilities["ghidra-provider"].detail
+
+
+def test_rea_target_is_unsupported_only_after_explicit_provider_rejection() -> None:
+    rejection = {
+        "code": "capability_unavailable",
+        "details": {
+            "selection_reason": "target_unsupported",
+            "rejections": [
+                {"provider_id": "ghidra", "code": "target_format_unsupported"},
+                {"provider_id": "ida", "code": "not_configured"},
+            ],
+        },
+    }
+    unsupported = smoke.classify_rea_target_error(rejection, provider_id="ghidra")
+    assert unsupported.state == UNSUPPORTED
+
+    provider_missing = smoke.classify_rea_target_error(
+        {
+            "code": "capability_unavailable",
+            "details": {
+                "selection_reason": "provider_unavailable",
+                "rejections": [{"provider_id": "ghidra", "code": "not_configured"}],
+            },
+        },
+        provider_id="ghidra",
+    )
+    assert provider_missing.state == BLOCKED
+    assert smoke.classify_rea_target_error(
+        {"code": "unexpected", "details": {"rejections": []}}, provider_id="ghidra"
+    ).state == INCOMPATIBLE
 
 
 # --------------------------------------------------------------- report shape
@@ -472,7 +679,7 @@ def test_failure_details_do_not_leak_the_smoke_workspace(tmp_path) -> None:
     workspace = tmp_path / "work"
     _, capabilities = _capabilities(
         smoke.smoke_report(
-            _settings(ghidra=home), tools=["ghidra"], workspace=workspace
+            _ghidra_settings(tmp_path, home), tools=["ghidra"], workspace=workspace
         ),
         "ghidra",
     )

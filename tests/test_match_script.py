@@ -177,14 +177,28 @@ def test_resolve_includes_falls_back_to_configuration(script) -> None:
     assert script.resolve_includes([], Settings(data={})) == ["decomp/include"]
 
 
-def test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces(script, tmp_path) -> None:
+def test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces(
+    script, tmp_path, monkeypatch
+) -> None:
     loader = tmp_path / "a path" / "wibo"
     loader.parent.mkdir()
     loader.write_text("loader fixture", encoding="utf-8")
     settings = Settings(data={"tools": {"wibo": {"path": str(loader)}}})
+    monkeypatch.setattr(
+        script.shutil,
+        "which",
+        lambda name: "/usr/bin/wibo" if name == "wibo" else None,
+    )
     assert script.resolve_loaders([], settings, platform="posix") == (str(loader),)
     assert script.resolve_loaders(["wibo"], settings, platform="posix") == (str(loader),)
     assert script.resolve_loaders([], settings, platform="nt") == ()
+
+    explicit = tmp_path / "explicit" / "wibo"
+    explicit.parent.mkdir()
+    explicit.write_text("explicit loader", encoding="utf-8")
+    assert script.resolve_loaders([str(explicit)], settings, platform="posix") == (
+        str(explicit),
+    )
 
 
 def test_resolve_loaders_reports_a_missing_explicit_loader(script, monkeypatch) -> None:

@@ -752,6 +752,7 @@ def run_real_match(
     expected_total_words: int,
     config_value: Path = Path("config/wsl/seto.toml"),
     repo_root: Path = REPO_ROOT,
+    build_subdir: str = "seto018",
 ) -> dict[str, object]:
     """Run one fresh, guarded match_function.py attempt and validate its provenance."""
     if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
@@ -762,7 +763,9 @@ def run_real_match(
         or expected_total_words <= 0
     ):
         raise ProbeError("FAIL", "selected function word total must be positive")
-    build_root = validated_build_root(repo_root, subdir="seto018")
+    if not re.fullmatch(r"seto\d{3}", build_subdir):
+        raise ProbeError("FAIL", "match build subdirectory must be a setoNNN name")
+    build_root = validated_build_root(repo_root, subdir=build_subdir)
     prx_input = repo_root / MODULE_RELATIVE
     _reject_repo_symlink_components(prx_input, repo_root, "original PRX")
     prx_path = repo_path(

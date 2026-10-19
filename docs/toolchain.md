@@ -28,7 +28,9 @@ synthetic input/output, and `--json --out PATH` writes the deterministic report.
 | `wine` | loader | Alternative Win32 compatibility layer for `mwccpsp.exe`. | No |
 | `mips*-objdump` | binutils | Relocation-aware disassembly of compiled `.o` files. | No |
 | `ghidra` | analyzer | Headless analysis + `ghidra-allegrex` for Allegrex specifics. | No |
-| `rea` / `node` | analyzer-mcp | MCP analysis server (needs Node.js). | No |
+| `rea` | analyzer-mcp | MCP analysis server (runs on Node.js). | No |
+| `node` | runtime | JavaScript runtime; must satisfy the pinned REA package engine. | No |
+| `npm` | package manager | Installs the pinned open REA package; version output alone does not prove installation. | No |
 | `java` | runtime | Required by Ghidra. | No |
 
 Nothing proprietary is ever downloaded or redistributed. `splat` is the open
@@ -43,8 +45,9 @@ For every tool Seto tries, in order:
 1. the path in `config/seto.toml` (e.g. `[tools.mwccpsp] path = "C:/..."`) — a
    directory is accepted and the executable is looked up inside it;
 2. the tool's environment variable (`SETO_MWCCPSP`, `SETO_SPLAT`, `SETO_M2C`,
-   `SETO_WIBO`, `SETO_WINE`, `SETO_OBJDUMP`, `SETO_NODE`, `SETO_JAVA`,
-   `SETO_REA`; Ghidra uses `SETO_GHIDRA_HOME`, `GHIDRA_HOME`, `GHIDRA_INSTALL_DIR`);
+   `SETO_WIBO`, `SETO_WINE`, `SETO_OBJDUMP`, `SETO_NODE`, `SETO_NPM`,
+   `SETO_JAVA`, `SETO_REA`; Ghidra uses `SETO_GHIDRA_HOME`, `GHIDRA_HOME`,
+   `GHIDRA_INSTALL_DIR`);
 3. `PATH`.
 
 Ghidra is special: it wants the *installation directory*, and Seto verifies that
@@ -93,6 +96,64 @@ version:
 | `node` / `java` | **READY**; Node 24.21.0, Java Corretto 25.0.3. |
 | `wibo` / `wine` | `NOT_APPLICABLE` for native Windows execution; WSL2 `wibo` 1.2.0 is installed and used for the real builds. |
 
+## SETO-DECOMP-019 toolchain and REA audit (2026-10-19)
+
+The machine-local REA installation is the lockfile version 6.5.0, and the
+installed package metadata matches it. Its `package.json` declares Node engines
+`^22.19.0 || ^24.11.0 || >=26.0.0`; Seto now rejects an older/unparseable Node
+as an REA runtime instead of letting a generic JavaScript execution smoke imply
+REA compatibility. `npm` is needed to install the CLI; installed REA itself is
+executed by Node.
+
+The pinned 6.5.0 documentation was checked at
+[`rea-agents-6.5.0`](https://github.com/morluto/rea/tree/rea-agents-6.5.0/docs):
+Ghidra's released PSP profile is Linux x64 and accepts only its specified
+little-endian ELF32 `ET_EXEC` declaration; PRX/`ET_DYN` images are explicitly
+outside that profile. Windows Ghidra P0 is a separate read-only lane for PE and
+selected raw 6502 inputs, not MIPS. This matches the live provider result below.
+
+On the Windows host, Node 24.21.0/npm 11.19.0, Ghidra 12.1.3, Allegrex v21.4,
+JDK 25.0.3, Metrowerks 3.0.1 build 219, m2c, splat, and LLVM objdump were
+present. Seto's real smoke proved Ghidra Allegrex, m2c, splat, and objdump. The
+native Metrowerks version probe works, but compilation is **BLOCKED** because
+the required license is unavailable on this host; Seto now classifies an
+explicit license refusal as `BLOCKED` without echoing its machine path. Real
+compilation remains on WSL2+wibo. REA 6.5.0 CLI help and MCP initialize plus
+`tools/list` passed (207 tools). A scoped `doctor --provider ghidra` passed its
+installation/JDK/native-decompiler checks when given the configured Ghidra/JDK
+paths, but that is not itself an analysis request. The actual local Ghidra P0
+test analyzed a source-owned raw-6502 fixture; a read-only open attempt on the
+original PSP PRX was rejected with `target_format_unsupported` (ELF/MIPS), as
+the pinned PSP profile predicts. Neither MCP catalog presence nor provider
+installation is treated as PRX support.
+
+The Seto npm detector prefers `npm.cmd` on Windows: the extensionless `npm`
+PowerShell shim was discoverable but not directly executable by the bounded
+process runner (`WinError 193`). The `.cmd` entry passed the non-installing npm
+smoke and reported `INSTALLED`; no package was installed or updated by that
+smoke.
+
+On WSL2, the existing Metrowerks+wibo toolchain and GNU MIPSel objdump passed
+functional smoke. The locked splat 0.50.1 and m2c commit were missing; they were
+installed into the existing isolated `~/.seto/venvs` using the POSIX bootstrap.
+The bootstrap now accepts `--config PATH` and writes its ignored overlay beside
+the selected profile; this fixes the previous root-overlay/explicit-WSL-profile
+mismatch. With the WSL profile selected, splat, m2c, wibo and the compiler all
+passed smoke. Ghidra 12.1.3 and Allegrex v21.4 were also installed in WSL from
+the pinned, SHA-verified archives. The bootstrap/extractor now preserve only
+safe archive execute bits and repair the owned headless launchers; the profile
+resolves to the POSIX `analyzeHeadless`, not its Windows `.bat`. Ghidra remains
+`BLOCKED` because WSL has no Java installation. WSL Node 18.19.1 is outside REA
+6.5.0's declared engines, and its visible npm shim is a Windows launcher that
+refused the WSL invocation. REA is therefore not installed there; no JDK was
+installed with administrative privileges, and decompilation continued with the
+verified host Ghidra and WSL Metrowerks.
+
+The `--config` profile option is also safety-checked to remain inside `config/`
+and rejects symlinked config/overlay paths. Bootstrap smoke uses the same
+explicit profile that was installed, so a WSL run no longer reports a tool as
+missing merely because its local path was written beside a different config.
+
 The smoke report deliberately keeps different claims separate: REA installed is
 not the same as an MCP connection; an MCP connection does not prove native binary
 analysis; Ghidra loading an architecture does not prove that it recognizes a PSP
@@ -118,6 +179,9 @@ py -3.12 -m seto toolchain --smoke --json --out build/toolchain-report.json
 ```bash
 bash scripts/bootstrap_toolchain.sh --dry-run
 bash scripts/bootstrap_toolchain.sh --install --tool splat --tool m2c --tool wibo
+# For a local WSL profile, write the ignored overlay beside that profile:
+bash scripts/bootstrap_toolchain.sh --install --tool splat --tool m2c --tool wibo \
+    --config config/wsl/seto.toml
 python3 -m seto toolchain --smoke --json --out build/toolchain-report.json
 ```
 
@@ -125,7 +189,16 @@ On POSIX, the bootstrap prefers the official `decompals/wibo` release where a
 pinned host binary exists; otherwise it leaves Wine/build-from-source as a
 documented operator choice. REA is installed into an isolated npm prefix only when
 selected, from the official npm registry with lifecycle scripts disabled. No REA
-client configuration is written by the bootstrap.
+client configuration is written by the bootstrap. `--config PATH` selects the
+Seto profile used for detection and its adjacent ignored `seto.bootstrap.toml`
+overlay; this matters for explicit WSL profiles, which do not merge the
+root-level Windows overlay.
+
+The pinned REA 6.5.0 package declares Node engines
+`^22.19.0 || ^24.11.0 || >=26.0.0`. Seto's Node smoke now reports runtimes
+outside that range as `INCOMPATIBLE`, and REA remains `BLOCKED` rather than
+promoting MCP/provider readiness from an incompatible engine. npm is needed to
+install REA; after installation, the CLI runs under Node directly.
 
 ## Reproducing on Windows
 

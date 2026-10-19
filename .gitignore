@@ -22,6 +22,7 @@ asm/
 config/seto.local.toml
 config/wsl/seto.toml
 config/wsl/seto.local.toml
+config/wsl/seto.bootstrap.toml
 config/seto.bootstrap.toml
 
 # saída do splat (asm/, assets/ e os arquivos de símbolos são derivados do PRX)

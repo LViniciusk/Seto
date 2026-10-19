@@ -38,6 +38,22 @@ def test_safe_zip_extract_writes_only_inside_destination(tmp_path: Path) -> None
     assert (destination / "release" / "data").is_dir()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are not represented on Windows")
+def test_safe_zip_extract_preserves_only_safe_executable_bits(tmp_path: Path) -> None:
+    archive = tmp_path / "launcher.zip"
+    destination = tmp_path / "tools"
+    info = zipfile.ZipInfo("release/support/analyzeHeadless")
+    info.create_system = 3
+    info.external_attr = (stat.S_IFREG | 0o4757) << 16
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr(info, b"#!/bin/sh\nexit 0\n")
+
+    safe_extract.safe_extract_zip(archive, destination)
+    mode = stat.S_IMODE((destination / "release/support/analyzeHeadless").stat().st_mode)
+
+    assert mode == 0o755
+
+
 @pytest.mark.parametrize(
     "member",
     ["../outside.txt", "/absolute.txt", "C:/outside.txt", r"..\outside.txt"],
@@ -197,6 +213,8 @@ def test_powershell_runs_seto_from_checkout_without_an_editable_install(tmp_path
             "-DryRun",
             "-Tool",
             "m2c",
+            "-Config",
+            "config/wsl/seto.example.toml",
             "-Report",
             str(report),
         ],
@@ -208,7 +226,38 @@ def test_powershell_runs_seto_from_checkout_without_an_editable_install(tmp_path
     )
     assert completed.returncode in (0, 4), completed.stdout + completed.stderr
     assert "No module named seto" not in completed.stdout + completed.stderr
+    assert str(REPO_ROOT / "config" / "wsl" / "seto.example.toml") in completed.stdout
     assert {item["name"] for item in json.loads(report.read_text())["tools"]} == {"m2c"}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell bootstrap is the Windows variant")
+def test_powershell_bootstrap_rejects_config_outside_config_root(tmp_path: Path) -> None:
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        pytest.skip("PowerShell is unavailable")
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(REPO_ROOT / "scripts" / "bootstrap_toolchain.ps1"),
+            "-DryRun",
+            "-Tool",
+            "m2c",
+            "-Config",
+            "../outside.toml",
+            "-Report",
+            str(tmp_path / "outside-config.json"),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert completed.returncode != 0
+    assert "config must be under" in completed.stdout + completed.stderr
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX bootstrap is tested on Linux/macOS")
@@ -267,6 +316,63 @@ def test_posix_dry_run_is_selective_and_does_not_write_tool_config(tmp_path: Pat
     assert report.read_bytes() == first_report
     after = bootstrap_config.read_bytes() if bootstrap_config.exists() else None
     assert after == before
+
+    wsl_config = REPO_ROOT / "config" / "wsl" / "seto.example.toml"
+    wsl_overlay = wsl_config.with_name("seto.bootstrap.toml")
+    overlay_before = wsl_overlay.read_bytes() if wsl_overlay.exists() else None
+    profile_report = tmp_path / "wsl-profile-report.json"
+    profile = subprocess.run(
+        [
+            bash,
+            str(REPO_ROOT / "scripts" / "bootstrap_toolchain.sh"),
+            "--dry-run",
+            "--tool",
+            "m2c",
+            "--config",
+            "config/wsl/seto.example.toml",
+            "--report",
+            str(profile_report),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=300,
+    )
+    assert profile.returncode in (0, 4), profile.stdout + profile.stderr
+    assert str(wsl_config.resolve()) in profile.stdout
+    assert {item["name"] for item in json.loads(profile_report.read_text())["tools"]} == {"m2c"}
+    overlay_after = wsl_overlay.read_bytes() if wsl_overlay.exists() else None
+    assert overlay_after == overlay_before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bootstrap is tested on Linux/macOS")
+def test_posix_bootstrap_rejects_config_outside_config_root(tmp_path: Path) -> None:
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is unavailable")
+    env = dict(os.environ)
+    env["SETO_PYTHON"] = sys.executable
+    completed = subprocess.run(
+        [
+            bash,
+            str(REPO_ROOT / "scripts" / "bootstrap_toolchain.sh"),
+            "--dry-run",
+            "--tool",
+            "m2c",
+            "--config",
+            "../outside.toml",
+            "--report",
+            str(tmp_path / "outside-config.json"),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert completed.returncode != 0
+    assert "config must be a regular file under" in completed.stdout + completed.stderr
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX sudo guard is tested on Linux/macOS")

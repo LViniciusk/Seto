@@ -22,7 +22,7 @@
 # Usage:
 #     scripts/bootstrap_toolchain.sh [--dry-run | --install]
 #                                    [--tool NAME]... [--report PATH]
-#                                    [--workspace DIR]
+#                                    [--workspace DIR] [--config PATH]
 #
 # Examples:
 #     scripts/bootstrap_toolchain.sh --dry-run
@@ -32,7 +32,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCK_FILE="$REPO_ROOT/config/toolchain.lock"
-BOOTSTRAP_CONFIG="$REPO_ROOT/config/seto.bootstrap.toml"
+CONFIG_INPUT="config/seto.toml"
+CONFIG_PATH=""
+BOOTSTRAP_CONFIG=""
 TOOLS_ROOT="${SETO_TOOLS:-$HOME/.seto}"
 
 #: Every tool this script knows how to prepare.  `mwccpsp` is listed so the
@@ -52,7 +54,7 @@ Prepare the open external tools Seto needs, then prove what they can do.
 Usage:
     scripts/bootstrap_toolchain.sh [--dry-run | --install]
                                    [--tool NAME]... [--report PATH]
-                                   [--workspace DIR]
+                                   [--workspace DIR] [--config PATH]
 
 Modes (the safe one is the default):
     (nothing)   detect, verify and report.  Changes nothing.
@@ -75,6 +77,8 @@ while [ $# -gt 0 ]; do
         --lock-file=*) LOCK_FILE="${1#--lock-file=}" ;;
         --workspace) shift; WORKSPACE="$1" ;;
         --workspace=*) WORKSPACE="${1#--workspace=}" ;;
+        --config) shift; CONFIG_INPUT="$1" ;;
+        --config=*) CONFIG_INPUT="${1#--config=}" ;;
         -h | --help) usage; exit 0 ;;
         *) printf 'unknown option: %s\n' "$1" >&2; exit 1 ;;
     esac
@@ -106,7 +110,7 @@ done
 # ------------------------------------------------------------------- helpers
 
 lock_value() {
-    sed -n "s/^$1=//p" "$LOCK_FILE" | head -n 1
+    sed -n "s/^$1=//p" "$LOCK_FILE" | tr -d '\r' | head -n 1
 }
 
 find_python() {
@@ -121,6 +125,33 @@ find_python() {
         fi
     done
     return 1
+}
+
+resolve_config_path() {
+    "$PYTHON" - "$REPO_ROOT" "$CONFIG_INPUT" <<'PY'
+import sys
+import os
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+requested = Path(sys.argv[2])
+candidate = requested if requested.is_absolute() else root / requested
+config_root = root / "config"
+candidate = Path(os.path.abspath(candidate))
+if not candidate.is_relative_to(config_root):
+    raise SystemExit(f"config must be a regular file under {config_root}: {candidate}")
+for component in (candidate, *candidate.parents):
+    if component.is_symlink():
+        raise SystemExit(f"refusing symlinked config path: {component}")
+try:
+    resolved = candidate.resolve(strict=True)
+    config_root = config_root.resolve(strict=True)
+except OSError as exc:
+    raise SystemExit(f"cannot resolve config path: {exc}") from exc
+if not resolved.is_relative_to(config_root) or not resolved.is_file():
+    raise SystemExit(f"config must be a regular file under {config_root}: {candidate}")
+print(resolved)
+PY
 }
 
 #: Print a step, and run it only when --install was asked for.
@@ -299,6 +330,11 @@ install_ghidra() {
         mkdir -p "$TOOLS_ROOT/tools"
         "$PYTHON" "$REPO_ROOT/scripts/safe_extract.py" "$zip" "$TOOLS_ROOT/tools"
     fi
+    # ZIP permissions from Windows-created release archives can lose Unix
+    # executable bits. Restore only the user bit on Ghidra's POSIX launchers.
+    for launcher in "$home/support/analyzeHeadless" "$home/support/launch.sh" "$home/ghidraRun"; do
+        if [ -f "$launcher" ]; then chmod u+x "$launcher"; fi
+    done
     record_path ghidra "$home"
 }
 
@@ -399,11 +435,18 @@ if ! PYTHON="$(find_python)"; then
     printf 'no Python 3.11+ interpreter found; install one or set SETO_PYTHON\n' >&2
     exit 1
 fi
+CONFIG_PATH="$(resolve_config_path)" || exit 1
+BOOTSTRAP_CONFIG="$(dirname "$CONFIG_PATH")/seto.bootstrap.toml"
+if [ -L "$BOOTSTRAP_CONFIG" ] || { [ -e "$BOOTSTRAP_CONFIG" ] && [ ! -f "$BOOTSTRAP_CONFIG" ]; }; then
+    printf 'refusing unsafe bootstrap overlay: %s\n' "$BOOTSTRAP_CONFIG" >&2
+    exit 1
+fi
 load_local_config
 
 printf 'seto toolchain bootstrap\n'
 printf '  repository : %s\n' "$REPO_ROOT"
 printf '  tools root : %s\n' "$TOOLS_ROOT"
+printf '  config     : %s\n' "$CONFIG_PATH"
 printf '  python     : %s\n' "$PYTHON"
 if [ "$INSTALL" -eq 1 ]; then
     printf '  mode       : install\n'
@@ -436,7 +479,7 @@ case "$REPORT" in
 esac
 mkdir -p "$(dirname "$REPORT_PATH")"
 
-SMOKE_ARGUMENTS=(toolchain --smoke --json --out "$REPORT_PATH")
+SMOKE_ARGUMENTS=(--config "$CONFIG_PATH" toolchain --smoke --json --out "$REPORT_PATH")
 for name in "${SELECTED[@]}"; do SMOKE_ARGUMENTS+=(--tool "$name"); done
 if [ -n "$WORKSPACE" ]; then SMOKE_ARGUMENTS+=(--smoke-workspace "$WORKSPACE"); fi
 

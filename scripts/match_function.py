@@ -250,15 +250,23 @@ def resolve_loaders(
     if requested:
         resolved_items: list[str | None] = []
         for item in requested:
-            resolved = _resolve_loader_command(item)
-            if resolved is None:
-                spec = next(
-                    (known for known in (spec_for("wibo"), spec_for("wine"))
-                     if known is not None and item in known.names),
-                    None,
-                )
-                if spec is not None:
-                    resolved = _configured_loader(spec.name, settings)
+            spec = next(
+                (
+                    known
+                    for known in (spec_for("wibo"), spec_for("wine"))
+                    if known is not None and item in known.names
+                ),
+                None,
+            )
+            if spec is not None:
+                # A named loader selects that tool and should honor its normal
+                # config -> environment -> PATH resolution order. A caller-supplied
+                # path remains an exact explicit override.
+                resolved = _configured_loader(spec.name, settings)
+                if resolved is None:
+                    resolved = _resolve_loader_command(item)
+            else:
+                resolved = _resolve_loader_command(item)
             resolved_items.append(resolved)
         resolved = tuple(resolved_items)
         if any(item is None for item in resolved):
