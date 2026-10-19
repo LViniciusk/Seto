@@ -16,27 +16,27 @@ int func_00001E94(
 )
 {
     int stride_halfwords;
+    int high;
     int low;
-    int sum;
     int middle;
     unsigned short value;
 
     stride_halfwords = stride_bytes / 2;
-    count -= 1;
-    if (count < 0)
+    if (count <= 0)
         goto not_found;
+    high = count - 1;
     low = 0;
 
 search:
-    sum = low + count;
-    middle = sum / 2;
+    /* high >= low here; this midpoint avoids signed overflow in low + high. */
+    middle = low + (high - low) / 2;
     value = values[middle * stride_halfwords];
     if (key != value) {
         if (value < key)
             low = middle + 1;
         else
-            count = middle - 1;
-        if (count >= low)
+            high = middle - 1;
+        if (high >= low)
             goto search;
         goto not_found;
     }

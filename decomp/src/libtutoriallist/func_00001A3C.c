@@ -16,14 +16,13 @@ void func_00001A3C(int x, int y, int value)
 {
     short digits[2];
     char *cursor = (char *)digits;
-    int remaining = 4;
 
     if (cursor != (char *)0) {
+        char *end = cursor + sizeof(digits);
+
         do {
-            *cursor = 0;
-            remaining -= 1;
-            cursor += 1;
-        } while (remaining != 0);
+            *cursor++ = 0;
+        } while (cursor != end);
     }
 
     if (value < 10)

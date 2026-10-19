@@ -3000,8 +3000,10 @@ somente lido pelas APIs Seto, GNU objdump e Ghidra.
 `mips.find_functions()`, `imports.build_import_table()` / `call_references()`,
 `datarefs.build_reference_report()` e `split.build_layout()` /
 `validate_layout()`. Não contém parser ELF, matcher ou linker próprios. O baseline
-e a triagem são serializados com `canonical_json()` e escritos sob os guards de
-`probe_common.py` em `build/seto018/`.
+estrutural pode ser gerado **sem Ghidra** com `--baseline-only`. A triagem só é
+produzida quando existe um relatório de limites validado. Os relatórios são
+serializados com `canonical_json()` e escritos sob os guards de `probe_common.py`
+em `build/seto018/`.
 
 | Campo | Observação medida |
 |---|---|
@@ -3031,6 +3033,47 @@ as 237 referências de chamada, os datarefs e o resumo de layout estão em
 `build/seto018/baseline.json` (SHA-256
 `6ef4ee553ce21205ed7ba738db519086c140a1374097a77e59e39a9cbf4fa043`). O arquivo
 não contém timestamps nem caminhos absolutos.
+
+#### Reproduzir os limites Ghidra e gerar `triage.json`
+
+1. Gere/atualize o baseline estrutural usando somente o PRX; o hash é verificado
+   antes da escrita e nenhum arquivo Ghidra é necessário:
+
+   ```powershell
+   python scripts/triage_libtutoriallist.py --baseline-only
+   ```
+
+2. Em um checkout WSL/Windows com Ghidra configurado, use um diretório de projeto
+   **novo e vazio** sob `build/seto018/`. O snippet abaixo chama o script
+   existente uma vez para cada intervalo do baseline e guarda apenas o log bruto
+   em `build/seto018/`:
+
+   ```powershell
+   $env:PYTHONPATH = "src;scripts"
+   py -3.12 -c "from pathlib import Path; from probe_common import validated_build_root,ensure_build_dir,prepare_build_file; r=Path.cwd(); b=validated_build_root(r,subdir='seto018'); ensure_build_dir(b,b); ensure_build_dir(b/'ghidra-run',b); p=b/'ghidra-output.log'; prepare_build_file(p,b); p.unlink(missing_ok=True)"
+   $baseline = Get-Content build/seto018/baseline.json -Raw | ConvertFrom-Json
+   $ghidraArgs = @("build/seto018/ghidra-run", "libtutoriallist", "-import",
+       "private/original/PSP_GAME/USRDIR/gmodule/libtutoriallist.prx",
+       "-scriptPath", "scripts/ghidra")
+   foreach ($f in $baseline.functions) {
+       $ghidraArgs += @("-postScript", "SetoAnalyzeFunction.java", $f.start, $f.end)
+   }
+   $toolchain = py -3.12 -m seto --config config/seto.toml toolchain --json | ConvertFrom-Json
+   $ghidra = ($toolchain.tools | Where-Object name -eq "ghidra").path
+   if (-not $ghidra) { throw "Configure Ghidra before running the boundary scan" }
+   & $ghidra @ghidraArgs 2>&1 | Out-File build/seto018/ghidra-output.log -Encoding utf8
+   if ($LASTEXITCODE -ne 0) { throw "Ghidra boundary scan failed" }
+   py -3.12 scripts/triage_libtutoriallist.py --ghidra-log build/seto018/ghidra-output.log
+   ```
+
+   `--ghidra-log` extracts the `SETO_*` markers printed by
+   `SetoAnalyzeFunction.java` (no second MIPS analyzer). It binds the result to
+   the freshly hash-checked baseline, requires all 25 exact start/end intervals,
+   validates each status and the full body range/count for `EXACT`, then writes
+   `ghidra-boundaries.json` and `triage.json`. The log and Ghidra project are
+   local build outputs; choose a fresh project directory instead of reusing a
+   previous analyzer database. The SHA field is a local consistency binding,
+   not a signature or external authenticity proof.
 
 ### 2. Triagem técnica das 25 faixas
 
@@ -3212,3 +3255,106 @@ primários acima continuam sendo apenas os de `-O4,p -sdatathreshold 0`.
 `.rodata.sceResident`, mas não reconhecida pelo Ghidra e com HI/LO órfãos) seja
 compreendida. `0x0` e `0x1E84` seguem `FRAGMENT` até haver evidência independente
 de entrypoint/função.
+
+## SETO-DECOMP-018-R2 — Validação Semântica e Conclusão das Reconstruções
+
+Esta seção registra a atualização da mesma PR #17. A R2 preserva os critérios
+de `src/seto/matching.py`, o resultado `MATCHED` de 47/47 para `0x6E8`, e os
+resultados/documentação histórica de 017–018 acima. O PRX continuou somente
+leitura e manteve SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+
+### Validação do envelope do matcher
+
+`validate_match_envelope()` não deduz diferenças a partir de palavras sem
+crédito: palavras podem ficar sem crédito ou diferença quando a comparação é
+limitada por evidência de relocation/identidade. A lista detalhada pode ser
+truncada por `max_differences`. A validação exige contagens inteiras não
+negativas, `0 <= matching_words <= total_words`, ausência de sobreposição entre
+contagens de matches e diferenças, detalhes não maiores que `difference_count`,
+e combinações coerentes de status. `MATCHED` continua exigindo evidência externa
+`compiled-object`, igualdade de todas as palavras, zero diferenças/issues/
+limitações e uma das duas equivalências emitidas pelo matcher. `INCONCLUSIVE`
+exige limitações sem divergência comprovada; `NONMATCHING` exige diferença
+comprovada ou problema de relocation. Nenhum veredito é criado pelo validador.
+
+Regressões sintéticas cobrem `INCONCLUSIVE` 18/20 com zero diferenças e
+limitações, `NONMATCHING` com seis diferenças e apenas dois detalhes, o caso
+`MATCHED` 47/47 e relatórios negativos, booleanos, truncados em excesso ou com
+status/evidência inconsistentes.
+
+### Baseline independente do Ghidra
+
+`python scripts/triage_libtutoriallist.py --baseline-only` agora recalcula o
+hash fixado do PRX e grava apenas `baseline.json`; não lê nem exige um relatório
+Ghidra. Para a triagem completa, `--ghidra-log` analisa os marcadores reais
+`SETO_*` do console de `SetoAnalyzeFunction.java`, reutilizando aquele script
+read-only. A validação liga o relatório ao SHA local do baseline, exige cobertura
+única de cada um dos 25 intervalos e verifica status, unidade endereçável,
+intervalo completo, número de endereços e uma faixa para corpos `EXACT`. Não foi
+implementado outro analisador MIPS. O log bruto e o projeto Ghidra permanecem
+apenas em `build/seto018/`; o JSON não contém caminhos absolutos. SHA é
+consistência local, não autenticação da origem.
+
+O procedimento PowerShell reproduzível de geração está na seção “Reproduzir os
+limites Ghidra e gerar `triage.json`” acima. O resultado estrutural permanece 25
+intervalos; a triagem seleciona os mesmos três candidatos.
+
+### Reavaliação das candidatas
+
+| Função | Resultado verificado nesta R2 | Evidência/limite |
+|---|---|---|
+| `func_000006E8` | **MATCHED 47/47**, zero diferenças, issues e limitações | Duas compilações frescas; resultado/promoção estritos preservados. |
+| `func_00001A3C` | **NONMATCHING 46/52**, seis divergências nos words `[8, 9, 10, 12, 13, 14]` | O C inicial compilava 51 words (204 bytes) e falhava antes de qualquer veredito. O disassembly original mostra um loop de quatro bytes em `0x1A68–0x1A74`; o compilador havia desenrolado as quatro stores. Formas pequenas equivalentes com trip count constante continuaram gerando o objeto de 51 words. A forma corrigida calcula o ponteiro final do buffer local e limpa até esse limite, sem inserir instrução artificial: gera 52 words e permite comparação real. Os seis desvios restantes estão exclusivamente na inicialização/controle do loop de limpeza; a checagem de faixa, o ramo de número positivo, o resto e a divisão por dez mantêm seus fluxos observados. Sem promoção a `MATCHED`. |
+| `func_00001E94` | **NONMATCHING 7/31**, 24 divergências | A versão R2 usa `high = count - 1` e midpoint `low + (high - low) / 2`, evitando overflow assinado de `low + high` para entradas válidas; o invariante do loop mantém `high >= low`. Preserva busca binária, limites inclusivos, comparação unsigned de 16 bits e stride em halfwords. A divisão de `stride_bytes` por dois continua arredondando em direção a zero como MIPS/C; não há relocations. Os words divergentes são `[4, 5, 6, 8–20, 22–29]`: sequências de predicados/branches, delay slots, atualização de limites e retorno. Permanece `NONMATCHING`. |
+
+Para `0x1A3C`, os bytes de delay slot da divisão por dez e do call não foram
+preenchidos artificialmente; o compilador continua gerando `div`/`mfhi` para o
+resto, a sequência de multiplicação por constante para `/ 10`, e os updates de
+coordenada nos delay slots. A decisão de buffer explica o erro de tamanho
+anterior; a nova comparação real continua divergente apenas no bloco de limpeza.
+
+### Hashes das reproduções R2
+
+| Artefato local ignorado em `build/seto018/` | SHA-256 |
+|---|---|
+| PRX original | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+| `baseline.json` | `6ef4ee553ce21205ed7ba738db519086c140a1374097a77e59e39a9cbf4fa043` |
+| `triage.json` | `fb1cc157ada5448dfb8e88e2b73bd4d26b6d665d9ff11ef667e2298158aa17a5` |
+| `ghidra-boundaries.json` (inclui unidade endereçável/status validados) | `e86fb8c954421a4f2923e8409adcec8ec2578bef6a0941dfa6f95ef390bb671b` |
+| `match-results.json` (duas execuções frescas por candidata) | `26abe66c5d12f22b60222d0504fc4a4e33685952acac88e609a75a52c30ae1d3` |
+
+| Compilação representativa | SHA-256 da fonte | SHA-256 do objeto |
+|---|---|---|
+| `0x1A3C` original, 51 words/erro de tamanho | `96fb838f1abf255240c0a2508518333250080f16de8cafb80b9d791ae126fc17` | `d420abbe958a282f78d5b6cd9df23fc08b73bcc3fd8d1fd897369a991463d402` |
+| `0x1A3C` limite de buffer R2, 46/52 | `fb218f97da4e37df99408f049d1b5feefa6b149edbf5425ef355512dd6cfe8c9` | `8aedd88b985aa98551fc0edf36d3c80df198702a492f20f999135d0c8903356b` |
+| `0x1E94` fonte anterior à correção de midpoint, 7/31 | `e7a4adeba0a573cf8c3f9f87143ebc5ca549ccc44e1ea484d66c34ff2f335d63` | `2d24f9d26ad4e8375d5f1a781857e1b0d6676f1dd0eefc466dfe35e34909dfef` |
+| `0x1E94` midpoint sem overflow assinado, 7/31 | `90d4e079e616572b40b7349b7d4f8e2a0afdb7d1e02f383eb5dd33f9ef5f314f` | `2ca13c407d52329349857d30ecf813892735882eac7b2f5156d57660a4220f22` |
+
+Os hashes de fonte/objeto são proveniência local de compilação, não prova de
+identidade entre artefatos. O matcher e `src/` não foram modificados; nenhum
+objeto, log, relatório ou projeto Ghidra é parte do commit.
+
+### Testes e gates da R2
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| Testes focados de triagem + estrutura real | Windows / WSL2 | 21 passed; 1 opt-in skipped |
+| `SETO_LIBTUTORIALLIST_REAL=1` em 018 | WSL2 | 2 passed; as três candidatas foram testadas duas vezes |
+| `pytest -m integration -q` | Windows | 24 passed, 26 skipped, 719 deselected |
+| `pytest -m integration -q` | WSL2 | 42 passed, 8 skipped, 719 deselected |
+| Integrações reais opt-in 014–018 | WSL2 | 47 passed, 3 skipped (splat, Ghidra e REA não configurados no WSL) |
+| Suíte completa `pytest -q` | Windows | 741 passed, 28 skipped |
+| Suíte completa `pytest -q` | WSL2 | 747 passed, 13 skipped, 9 falhas preexistentes |
+| `compileall -q src scripts tests` / `git diff --check` | Windows | clean / clean |
+
+As nove falhas WSL são as mesmas já reproduzidas em checkout limpo do baseline
+`8d646e78`: `test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces`,
+cinco casos de smoke/Ghidra (`test_headless_is_proved_without_claiming_the_allegrex_processor`,
+`test_the_allegrex_processor_is_claimed_only_when_ghidra_loads_it`,
+`test_a_ghidra_that_refuses_allegrex_does_not_get_the_capability`,
+`test_a_64_bit_mips_fallback_does_not_prove_automatic_elf32_recognition`,
+`test_failure_details_do_not_leak_the_smoke_workspace`), `test_a_tool_that_is_not_needed_here_is_still_looked_for`, e os dois testes
+POSIX bootstrap (`test_posix_dry_run_is_selective_and_does_not_write_tool_config`,
+`test_posix_bootstrap_never_uses_sudo_without_an_explicit_notice`). Não foram
+introduzidas por esta R2.

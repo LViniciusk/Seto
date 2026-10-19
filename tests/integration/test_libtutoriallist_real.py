@@ -149,20 +149,40 @@ def test_selected_real_matches_run_fresh_twice_and_preserve_reports() -> None:
         for key in comparison_keys:
             assert first[key] == second[key], f"fresh {selected['name']} runs differ in {key}"
         if first["status"] == "ERROR":
-            # The only accepted no-verdict outcome in this revision is the
-            # observed 51-word object for the 52-word 0x1A3C interval. A stable
-            # compile failure or generic error must not make this gate pass.
-            assert address == 0x1A3C
-            assert first["phase"] == "compare"
-            assert first["report_written"] is False
-            assert triage._valid_sha256(first["object_sha256"])
-            assert first["error"] == (
-                "error: candidate section '.text': needs 208 bytes at section offset 0x0 "
-                "but the section is 204 bytes"
-            )
+            pytest.fail(f"unexpected matcher error for {selected['name']}: {first['error']}")
         else:
             assert first["status"] in ("MATCHED", "NONMATCHING", "INCONCLUSIVE")
         results.append(first)
+
+    by_address = {int(str(result["address"]), 16): result for result in results}
+    matched = by_address[0x6E8]
+    assert matched["status"] == "MATCHED" and matched["exit_code"] == 0
+    assert matched["matching_words"] == matched["total_words"] == 47
+    assert matched["difference_count"] == 0
+    assert matched["differences"] == []
+    assert matched["relocation_issues"] == []
+    assert matched["limitations"] == []
+    assert matched["verified_decompilation"] is True
+
+    reconstructed = by_address[0x1A3C]
+    assert reconstructed["status"] == "NONMATCHING" and reconstructed["exit_code"] == 3
+    assert reconstructed["matching_words"] == 46 and reconstructed["total_words"] == 52
+    assert reconstructed["difference_count"] == len(reconstructed["differences"]) == 6
+    assert [item["word_index"] for item in reconstructed["differences"]] == [8, 9, 10, 12, 13, 14]
+    assert reconstructed["relocation_issues"] == []
+    assert reconstructed["limitations"] == []
+    assert reconstructed["verified_decompilation"] is False
+
+    nonmatching = by_address[0x1E94]
+    assert nonmatching["status"] == "NONMATCHING" and nonmatching["exit_code"] == 3
+    assert nonmatching["matching_words"] == 7 and nonmatching["total_words"] == 31
+    assert nonmatching["difference_count"] == len(nonmatching["differences"]) == 24
+    assert [item["word_index"] for item in nonmatching["differences"]] == [
+        4, 5, 6, *range(8, 21), *range(22, 30)
+    ]
+    assert nonmatching["relocation_issues"] == []
+    assert nonmatching["limitations"] == []
+    assert nonmatching["verified_decompilation"] is False
 
     summary = {
         "schema_version": 1,
