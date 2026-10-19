@@ -2985,3 +2985,230 @@ preservada (o arquivo regular obsoleto continua sendo removido).
 | Relatório canônico / ELF integrado | WSL2 | `7a3ddf01…` / `6b447e5e…` (inalterados) |
 | A/B com symlink quebrado para arquivo dentro do repositório | WSL2 | Pré-R3: `rc=0`, arquivo fora de `build/seto017/` criado; R3: `rc=1`, nenhum arquivo fora da árvore de build criado |
 | `compileall -q src scripts tests` / `git diff --check` | Windows | clean / clean |
+
+## SETO-DECOMP-018 — Baseline, Triagem e Primeiras Reconstruções de `libtutoriallist.prx`
+
+**Módulo analisado:** `private/original/PSP_GAME/USRDIR/gmodule/libtutoriallist.prx`.
+**SHA-256 recalculado:**
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` (igual ao
+hash fixado pela TASK). Nenhum arquivo de `private/` foi modificado; o PRX foi
+somente lido pelas APIs Seto, GNU objdump e Ghidra.
+
+### 1. Baseline estrutural real
+
+`scripts/triage_libtutoriallist.py` reutiliza `elf.parse()`,
+`mips.find_functions()`, `imports.build_import_table()` / `call_references()`,
+`datarefs.build_reference_report()` e `split.build_layout()` /
+`validate_layout()`. Não contém parser ELF, matcher ou linker próprios. O baseline
+e a triagem são serializados com `canonical_json()` e escritos sob os guards de
+`probe_common.py` em `build/seto018/`.
+
+| Campo | Observação medida |
+|---|---|
+| ELF/PRX | ELF32 little-endian, MIPS `e_machine=8`, `ET_MIPS_PSP_PRX (0xFFA0)`, `e_entry=0`, `e_flags=0x10A23001` |
+| Arquivo | 30 234 bytes (`0x761A`); SHA-256 acima |
+| Seções / program headers / símbolos | 25 / 1 `PT_LOAD` / 0 (stripped) |
+| `PT_LOAD` | `offset=0x60`, `vaddr=0`, `filesz=0x6190`, `memsz=0x6290` |
+| `.text` | `offset=0x60`, VA `0`, `size=0x25B0` = 9 648 bytes = 2 412 words, executável e alinhado a 16 |
+| `.sceStub.text` | VA `0x25B0`, size `0x26E8` = 9 960 bytes = 1 245 trampolines de 8 bytes |
+| `.data` / `.bss` | `.data` VA `0x610C`, 164 bytes, quatro `R_MIPS_32`; `.bss` `SHT_NOBITS`, tamanho 0 |
+| `.comment` | `MW MIPS C Compiler (2.4.1.01)` |
+| Layout `split` | image delta `0x60`; sem gaps/sobreposições/erros de layout |
+| Relocações PSP | 474 entradas parseadas; inventário `complete=true`, sem entradas inválidas/incompletas, compressed sections ou tipos desconhecidos |
+| `.rel.text` | 451: 237 `R_MIPS_26`, 107 `R_MIPS_HI16`, 107 `R_MIPS_LO16` |
+| Outras relocações | 23 `R_MIPS_32` em `.data`, `.lib.ent`, `.lib.stub`, `.rodata.sceModuleInfo`, `.rodata.sceResident` e `.rodata.sceVstub` |
+| Chamadas `.text` | 237: **205 importadas**, **32 locais**, **0 unknown** |
+| Imports recuperados | uma tabela `libehsys`, 1 245 stubs, sem limitações na tabela; nomes de função continuam address-derived |
+
+`.rodata.sceResident` contém quatro relocations `R_MIPS_32` para `.text` em `0x8`,
+`0x154`, `0x2C8` e `0x2F4` (sites `0x4D48–0x4D54`). São ponteiros do próprio
+módulo; não são nomes nem prova de identidade C cross-artifact.
+
+O parser registra explicitamente que `sh_link`/`sh_info` das tabelas de relocation
+PSP não são significativos e determina as seções-alvo por `.rel.<section>` e faixas
+de endereços. O inventário completo, as 474 linhas de relocation com provenance,
+as 237 referências de chamada, os datarefs e o resumo de layout estão em
+`build/seto018/baseline.json` (SHA-256
+`6ef4ee553ce21205ed7ba738db519086c140a1374097a77e59e39a9cbf4fa043`). O arquivo
+não contém timestamps nem caminhos absolutos.
+
+### 2. Triagem técnica das 25 faixas
+
+Os intervalos abaixo são os 25 resultados contíguos de `mips.find_functions()`;
+“intervalo descoberto” não é uma promoção automática a função C. A análise
+Ghidra 12.1.3 usou `Allegrex:LE:32:default`, compiler spec `default`, e o script
+read-only `SetoAnalyzeFunction.java`. Confirmou 21 corpos exatos em uma faixa,
+três starts sem função reconhecida (`0x0`, `0x2C8`, `0x1E84`) e uma faixa com corpo
+descontíguo (0x2F4: quatro ranges). `build/seto018/ghidra-boundaries.json`
+registra essas observações com o mesmo SHA do módulo; SHA-256
+`b78951ff923321ae7885c06c8b27d6b1e104f425e8672ddaacbe0cb2e07697e5`.
+O relatório é uma captura local do console Ghidra read-only; a associação de SHA
+é consistência local, não assinatura/autenticação criptográfica do processo ou
+dos resultados.
+
+`L/I/U` = chamadas locais/importadas/unknown; `P/I/U` em datarefs = status
+`PROVEN`/`INFERRED`/`UNKNOWN` **dentro do próprio PRX**. Mesmo `PROVEN` aqui não
+prova identidade de objeto entre o PRX e o ELF candidato:
+`object_identity=NOT_APPLICABLE`. Os NIDs são identidades `(libehsys, NID)` da
+tabela recuperada, não nomes SDK. Targets locais são destinos numéricos do PRX;
+quando não são início de intervalo, isso aparece como risco e não como nova
+função presumida.
+
+| Intervalo | Bytes / words | Fluxo (branches / backedges) | Chamadas e identidades importadas | Datarefs P/I/U | Decisão e justificativa |
+|---|---:|---|---|---:|---|
+| `0x0–0x8` | 8 / 2 | linear (0 / 0) | L0/I0/U0; — | 0/0/0 | **FRAGMENT** — `jr $ra; addu $v0,$zero,$zero`; sem função Ghidra, caller direto ou ponteiro relocação `.rodata.sceResident`. Não é promovido a C apenas por começar `.text`. |
+| `0x8–0x154` | 332 / 83 | condicional (7 / 0) | L1→`0x1B0C`; I15: `10F3BB61,1856E536,31454993,33ED567B,4AA58320,74CA1190,AB962AE7,C07BB470,C859D5FE,C9D9E989,D853F15C,D979E9BF,EA748E31` | 1/9/0 | **DEFERRED** — dez referências estáticas; localizações do PRX não provam identidade de dados no candidato. |
+| `0x154–0x280` | 300 / 75 | condicional (16 / 0) | L4→`0x280,0x1B70,0x1F10,0x21F8`; I5: `13A4081A,450CD6C5,BE3756D0,D470D0B2` | 0/5/0 | **DEFERRED** — cinco HI/LO sem identidade externa de dados; vários ramos por estado. |
+| `0x280–0x2C8` | 72 / 18 | condicional (1 / 0) | L1→`0x1C18`; I2: `ED1410E0,F6414A71` | 0/3/0 | **DEFERRED** — três referências inferidas a dados, embora a faixa Ghidra seja exata. |
+| `0x2C8–0x2F4` | 44 / 11 | condicional (2 / 0) | L0/I0/U0; — | 0/1/2 | **DEFERRED** — sem função Ghidra e três datarefs incompletos; há `R_MIPS_32` em `.rodata.sceResident` no sítio `0x4D50` apontando à faixa, portanto não é descartado como fragmento. |
+| `0x2F4–0x6E8` | 1 012 / 253 | loop (15 / 2) | L6→`0x6E8,0x7A4,0x8F0,0xE24,0x1254,0x1764`; I18: `09794DF0,1D98951B,1EC5342B,399AC68A,4175E3DB,42110BF9,5CBB9E43,878EE1D3,C62F9EAC,DFCA450B,E6E4401F,F462EE6E` | 0/13/0 | **DEFERRED** — resident pointer em `0x4D54`; Ghidra body ocupa quatro ranges; 13 referências de dados inferidas e fluxo grande. |
+| `0x6E8–0x7A4` | 188 / 47 | condicional (2 / 0) | L1→`0x1D08`; I8: `09794DF0,10F3BB61,5CBB9E43,7187E0F0,85F89FE8,89812D8A,B2B9FEFA,F462EE6E` | 0/0/0 | **SELECTED #2** — Ghidra exato; imports íntegros por `(library,NID)`, um call local para função descoberta e nenhum dataref estático. |
+| `0x7A4–0x8F0` | 332 / 83 | condicional (2 / 0) | L2→`0x1D08`; I14: `60B55A50,8EA6B1E7,942B03D0,9EA6989A,A4AFF8E6,B89D38DC,B8AD96EA,CABEA834,E58C0FDC,E6E4401F,FDD168CA` | 0/0/0 | **DEFERRED** — tecnicamente elegível sem datarefs, mas ranked após os três menores; 16 call sites e maior custo de protótipos. Próxima candidata recomendada. |
+| `0x8F0–0xE24` | 1 332 / 333 | loop (10 / 1) | L3→`0x1D08`; I40: `20560342,4175E3DB,60B55A50,8EA6B1E7,942B03D0,9EA6989A,A4AFF8E6,B89D38DC,B8AD96EA,CABEA834,E58C0FDC,E6E4401F,F462EE6E,FDD168CA` | 0/3/0 | **DEFERRED** — função longa, 40 imports e três referências inferidas. |
+| `0xE24–0xFF0` | 460 / 115 | condicional (6 / 0) | L4→`0xFF0,0x1A3C,0x1D08`; I17: `31454993,3BB2BAC6,60B55A50,8EA6B1E7,942B03D0,9EA6989A,A4AFF8E6,AB962AE7,B8AD96EA,CABEA834,E58C0FDC,E6E4401F,FDD168CA` | 0/1/0 | **DEFERRED** — uma referência inferida a dados. |
+| `0xFF0–0x1254` | 612 / 153 | condicional (2 / 0) | L1→`0x1D08`; I17: `8EA6B1E7,9EA6989A,CABEA834,E6E4401F,FDD168CA` | 0/0/0 | **DEFERRED** — sem datarefs, mas 153 words/18 calls; acima da janela de menor complexidade. |
+| `0x1254–0x14E0` | 652 / 163 | condicional (3 / 0) | L1→`0x1D08`; I15: `8EA6B1E7,9EA6989A,B2B9FEFA,CABEA834,E6E4401F,FDD168CA` | 0/0/0 | **DEFERRED** — sem datarefs; 163 words e 16 call sites. |
+| `0x14E0–0x1764` | 644 / 161 | condicional (19 / 0) | L0/I8; `8EA6B1E7,9EA6989A,CABEA834,E6E4401F,FDD168CA` | 0/0/0 | **DEFERRED** — sem datarefs, mas conversões FPU e 19 ramos condicionais. |
+| `0x1764–0x1A3C` | 728 / 182 | condicional (4 / 0) | L3→`0x14E0,0x1D08`; I17: `8EA6B1E7,9EA6989A,B2B9FEFA,CABEA834,E6E4401F,FDD168CA` | 0/0/0 | **DEFERRED** — sem datarefs, porém 182 words e 20 call sites. |
+| `0x1A3C–0x1B0C` | 208 / 52 | loop (5 / 2) | L0/I1: `libehsys/0xB89D38DC` (stub `0x42A0`, site `0x1AC0`) | 0/0/0 | **SELECTED #3** — Ghidra exato; 52 words, uma import identity recuperada, sem static data. |
+| `0x1B0C–0x1B70` | 100 / 25 | linear (0 / 0) | L0/I2: `10F3BB61,1B00FB95` | 2/3/0 | **DEFERRED** — cinco referências, inclusive localizações `.data`/`.text`; continuam sem objeto cross-artifact identificado. |
+| `0x1B70–0x1C18` | 168 / 42 | condicional (6 / 0) | L1→`0x1C58`; I0 | 0/4/0 | **DEFERRED** — quatro referências HI/LO inferidas. |
+| `0x1C18–0x1C58` | 64 / 16 | condicional (1 / 0) | L1→`0x1C20` (não é início de intervalo); I1: `20E340D9` | 0/3/0 | **DEFERRED** — local target intra-função não resolvido como função descoberta e três datarefs inferidos. |
+| `0x1C58–0x1D08` | 176 / 44 | condicional (3 / 0) | L0/I3: `41AABF28,8288EEBC,D2A768F4` | 3/5/0 | **DEFERRED** — oito datarefs; os três `PROVEN` indicam localização no módulo, não identidade de objeto. |
+| `0x1D08–0x1DF4` | 236 / 59 | loop (7 / 1) | L2→`0x1C58,0x1E94`; I3: `31454993,7661E728,C6C15111` | 3/0/0 | **DEFERRED** — três destinos de dados localizados no módulo; objeto cross-artifact não comprovado. |
+| `0x1DF4–0x1E84` | 144 / 36 | condicional (2 / 0) | L0/I1: `4B0DABFA` | 0/4/0 | **DEFERRED** — quatro datarefs inferidos. |
+| `0x1E84–0x1E94` | 16 / 4 | linear (0 / 0) | L0/I0/U0; — | 0/0/0 | **FRAGMENT** — quatro instruções parecem comparar dois halfwords, mas Ghidra não achou função, não há caller direto nem ponteiro resident relocado para o start. |
+| `0x1E94–0x1F10` | 124 / 31 | loop (7 / 1) | L0/I0/U0; — | 0/0/0 | **SELECTED #1** — Ghidra exato; binary search sem calls ou datarefs, primeiro no ranking de baixa complexidade. |
+| `0x1F10–0x21F8` | 744 / 186 | loop (16 / 3) | L1→`0x1D08`; I5: `2FD4863E,63E8C033,8B6EA5EC,942B03D0,E58C0FDC` | 0/19/0 | **DEFERRED** — 19 referências inferidas. |
+| `0x21F8–0x25B0` | 952 / 238 | loop (26 / 1) | L0/I13: `2AE3C0AD,5998BFD7,6367AE39,8171F765,F5E3080C` | 0/24/0 | **DEFERRED** — 24 referências inferidas e 238 words. |
+
+Todas as NIDs acima pertencem à biblioteca recuperada `libehsys`; os 1 245
+stubs não chamados também permanecem no inventário completo. Os endereços e
+nomes `func_XXXXXXXX` são provisórios; a classificação local de um call significa
+alvo dentro do `.text`, não prova por si só um entrypoint semântico.
+
+### 3. Reconstruções C efetivamente trabalhadas
+
+Novas fontes, sem mover nem alterar os C de `libhtml_view.prx`:
+
+| Fonte / intervalo | Reconstrução sustentada pela listagem | Resultado primário |
+|---|---|---|
+| `decomp/src/libtutoriallist/func_00001E94.c`, `[0x1E94,0x1F10)` | Busca binária em vetor de `unsigned short`, com passo em bytes/halfwords e retorno de índice ou `-1`; 31 words, zero calls/datarefs. Decompilação Ghidra/MIPS e m2c só auxiliaram a leitura; nomes e tipos permanecem provisórios. | `NONMATCHING`, exit `3`, **7/31** words iguais, 24 diferenças, 0 relocation issues/limitations. A divergência principal é a forma de branch/control-flow e atribuição de registradores na busca; não houve máscara nem alteração do comparador. |
+| `decomp/src/libtutoriallist/func_000006E8.c`, `[0x6E8,0x7A4)` | Helper de setup/render: chama local `func_00001D08(0x1011)`, retorna o argumento se o status é zero; caso contrário limpa 0x60 bytes, lê um word via import 0x37E0 e encadeia oito imports. 47 words, zero datarefs. | **`MATCHED`**, exit `0`, **47/47** words, 0 diferenças, 0 relocation issues/limitations. `verified_decompilation=true` pelo matcher estrito. |
+| `decomp/src/libtutoriallist/func_00001A3C.c`, `[0x1A3C,0x1B0C)` | Rotina decimal: limpa buffer local de quatro bytes, ajusta coordenada em 4/8 e chama o import de rendering por cada dígito positivo. 52 words, um import, zero datarefs. | Compilação Metrowerks produziu objeto de **204 bytes/51 words**; o comparator recusou entrada de tamanho diferente dos 208 bytes/52 esperados, exit `1`, sem report de status. Registrado como **ERROR/sem veredito**, não como `NONMATCHING` ou `INCONCLUSIVE`. |
+
+IDs e sites importados nas candidatas escolhidas:
+
+| Função | Chamadas importadas observadas no PRX |
+|---|---|
+| `0x1E94` | nenhuma |
+| `0x6E8` | local site `0x6FC→0x1D08`; imports: `0x71C→(libehsys,0x10F3BB61,stub 0x2610)`, `0x724→(libehsys,0xB2B9FEFA,0x37E0)`, `0x734→(libehsys,0x85F89FE8,0x3768)`, `0x748→(libehsys,0x7187E0F0,0x3758)`, `0x750→(libehsys,0x89812D8A,0x3770)`, `0x75C→(libehsys,0xF462EE6E,0x3AA8)`, `0x76C→(libehsys,0x09794DF0,0x3BC8)`, `0x788→(libehsys,0x5CBB9E43,0x3C70)` |
+| `0x1A3C` | `0x1AC0→(libehsys,0xB89D38DC,stub 0x42A0)` |
+
+As assinaturas em `libtutoriallist_stubs.h` são exclusivamente as usadas pelas
+três fontes e continuam anotações de ABI provisórias, não protótipos SDK.
+O descompilador/pseudocódigo não estabelece identidade de dados; nenhum desses
+arquivos usa globais, `volatile`, assembly inline, padding ou bytes copiados do
+PRX.
+
+### 4. Hashes de fonte/objeto e cobertura
+
+| Função | Source SHA-256 | Object SHA-256 | Comparação primária |
+|---|---|---|---|
+| `0x6E8` | `f316481d7ba11e1314046f1b13154cb4302686e99127b6c3287a771be7f04e63` | `6c8d2775ef7356c123628f5e69a91d12b6875f399afcdbcf52f6e6539f6ff2e4` | `MATCHED` 47/47 |
+| `0x1E94` | `e7a4adeba0a573cf8c3f9f87143ebc5ca549ccc44e1ea484d66c34ff2f335d63` | `2d24f9d26ad4e8375d5f1a781857e1b0d6676f1dd0eefc466dfe35e34909dfef` | `NONMATCHING` 7/31 |
+| `0x1A3C` | `96fb838f1abf255240c0a2508518333250080f16de8cafb80b9d791ae126fc17` | `d420abbe958a282f78d5b6cd9df23fc08b73bcc3fd8d1fd897369a991463d402` | Comparator input-size error, 51 candidate words vs 52 original |
+
+Cada candidata foi recompilada **duas vezes** em diretórios de tentativa distintos;
+os hashes de source/object, os status e a evidência de comparação foram idênticos
+entre as execuções. `match_function.py` registrou o compiler Metrowerks
+3.0.1 build 219 via WSL2 `wibo` 1.2.0, flags `-O4,p -sdatathreshold 0` e
+`decomp/include`. O warning de `MWCIncludes` não foi escondido.
+
+**Cobertura:** 130 words em três C candidatas. 47 words estão certificados como
+uma função nova `MATCHED`; outras 7 words de `0x1E94` são literalmente iguais,
+mas não promovem a função `NONMATCHING` a reconstrução verificada. As 24 words
+divergentes permanecem pendentes. As 52 words de `0x1A3C` não receberam
+comparação porque o matcher recusou o tamanho do objeto; não são `INCONCLUSIVE`
+nem `NONMATCHING`.
+
+Contagens novas: **1 `MATCHED`, 0 `INCONCLUSIVE`, 1 `NONMATCHING`, 1 erro de
+comparação sem veredito**. O resultado do módulo anterior `libhtml_view.prx`
+permanece inalterado: sete `MATCHED`, oito `INCONCLUSIVE`, zero `NONMATCHING`.
+
+### 5. Determinismo e limites epistemológicos
+
+Hashes dos relatórios ignorados gerados em `build/seto018/`:
+
+| Arquivo | SHA-256 |
+|---|---|
+| `baseline.json` | `6ef4ee553ce21205ed7ba738db519086c140a1374097a77e59e39a9cbf4fa043` |
+| `triage.json` | `51e194b965b68b678217aa1d1207cd2adb9c410d09bb9500fa236c40d71affca` |
+| `ghidra-boundaries.json` | `b78951ff923321ae7885c06c8b27d6b1e104f425e8672ddaacbe0cb2e07697e5` |
+| `match-results.json` | `6e37987dde0eb16613731184a0997e62d65c4fc2cb3c5598a86ab9b855717ccf` |
+
+`baseline.json`/`triage.json` foram regenerados deterministicamente, sem caminhos
+absolutos nem timestamps. Os relatórios individuais, objetos e projeto Ghidra
+permanecem em `build/` e não são commitados. Nomes de função, tipos dos parâmetros
+e semântica dos imports são provisórios. O JSON Ghidra é evidência local não
+autenticada, não autoridade independente; o código verifica apenas SHA/ranges
+declarados. Uma localização `.data` do PRX ou um endereço numérico igual não prova
+identidade independente de objeto. A exceção de
+0x1A3C permanece sem verdict porque o comparator exige o tamanho original inteiro.
+
+### 6. Validação e limitações ambientais
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `tests/test_libtutoriallist_triage.py` + teste estrutural real | Windows / WSL2 | 17 passed, 1 opt-in skipped |
+| Full suite `pytest -q` | Windows | 737 passed, 28 skipped |
+| Full suite `pytest -q` | WSL2 | 743 passed, 13 skipped, 9 falhas ambientais |
+| `pytest -m integration -q` | Windows | 24 passed, 26 skipped |
+| `pytest -m integration -q` | WSL2 | 42 passed, 8 skipped |
+| Integração real opt-in 014–018 | WSL2 | 47 passed, 3 skipped |
+| Integração real nova (`SETO_LIBTUTORIALLIST_REAL=1`) | WSL2 | 2 passed; 3 funções × 2 builds |
+| `compileall -q src scripts tests` / `git diff --check` | Windows & WSL2 | clean / clean |
+
+As nove falhas do full suite WSL2 foram comparadas com um worktree limpo no
+baseline `8d646e78`. O subset dos quatro módulos relevantes teve os mesmos IDs no
+baseline (9 failed, 101 passed, 2 skipped):
+
+- `test_match_script::test_resolve_loaders_uses_wsl_configuration_and_preserves_spaces`
+- `test_smoke::test_headless_is_proved_without_claiming_the_allegrex_processor`
+- `test_smoke::test_the_allegrex_processor_is_claimed_only_when_ghidra_loads_it`
+- `test_smoke::test_a_ghidra_that_refuses_allegrex_does_not_get_the_capability`
+- `test_smoke::test_a_64_bit_mips_fallback_does_not_prove_automatic_elf32_recognition`
+- `test_smoke::test_failure_details_do_not_leak_the_smoke_workspace`
+- `test_toolchain::test_a_tool_that_is_not_needed_here_is_still_looked_for`
+- `test_toolchain_bootstrap::test_posix_dry_run_is_selective_and_does_not_write_tool_config`
+- `test_toolchain_bootstrap::test_posix_bootstrap_never_uses_sudo_without_an_explicit_notice`
+
+As causas observadas são expectativa de loader/inventário, ausência de Ghidra
+Allegrex funcional no WSL e CRLF nos scripts POSIX do checkout Windows-mounted.
+Esses arquivos não foram alterados; as falhas não foram classificadas como
+preexistentes sem a execução comparativa.
+
+Disponibilidade observada: Metrowerks 3.0.1 build 219 e `wibo` 1.2.0 em WSL2;
+GNU MIPSel objdump/binutils 2.42 em WSL2; Ghidra 12.1.3 e m2c 0.1.0 no host
+Windows (Ghidra importou o PRX como Allegrex). `splat` não está instalado em WSL2;
+`seto.split` ainda validou o layout sem erros. Nenhuma integração PSP foi
+executada pelo CI público.
+
+Um teste exploratório separado com `-O4,s -sdatathreshold 0` para `0x1A3C`
+produziu 48 candidate words e também recebeu erro de tamanho; os resultados
+primários acima continuam sendo apenas os de `-O4,p -sdatathreshold 0`.
+
+### 7. Próximas candidatas
+
+1. `0x7A4–0x8F0` — Ghidra exato, zero datarefs, imports resolvidos, 83 words e
+   16 calls (14 imports, dois locais); próxima candidata de baixa ambiguidade,
+   após tipar os imports pelos registradores.
+2. `0xFF0–0x1254` — 153 words, 17 imports + um local, sem datarefs; mais custosa
+   pelo número de chamadas.
+3. `0x14E0–0x1764` — oito imports, sem datarefs, mas 161 words, 19 branches e
+   conversões FPU; requer cuidado extra com roundings/ABI.
+
+`0x2C8` deve permanecer adiada até que sua função (apontada por
+`.rodata.sceResident`, mas não reconhecida pelo Ghidra e com HI/LO órfãos) seja
+compreendida. `0x0` e `0x1E84` seguem `FRAGMENT` até haver evidência independente
+de entrypoint/função.
