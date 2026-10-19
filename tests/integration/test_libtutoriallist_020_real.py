@@ -28,7 +28,9 @@ OPT_IN = "SETO_LIBTUTORIALLIST_020_REAL"
 CASES = {
     0x1A3C: (52, "MATCHED", 52),
     0xFF0: (153, "MATCHED", 153),
-    0x1E94: (31, "NONMATCHING", 7),
+    # SETO-DECOMP-021 recovered the original do/while plus wrapper-guard form;
+    # the 020 historical 7/31 result stays recorded in docs/decomp-progress.md.
+    0x1E94: (31, "MATCHED", 31),
 }
 
 pytestmark = pytest.mark.integration
@@ -139,14 +141,16 @@ def test_020_reconstructions_match_freshly_and_preserve_the_search_baseline() ->
         assert result["relocation_issues"] == [] and result["limitations"] == []
         assert result["verified_decompilation"] is True
 
+    # SETO-DECOMP-020 recorded 7/31 with 24 differences here; SETO-DECOMP-021
+    # recovered the original do/while plus wrapper-guard form, and the fresh
+    # evidence below is the proven result. The historical numbers stay in
+    # docs/decomp-progress.md.
     search = by_address[0x1E94]
-    assert search["status"] == "NONMATCHING" and search["exit_code"] == 3
-    assert search["difference_count"] == len(search["differences"]) == 24
-    assert [item["word_index"] for item in search["differences"]] == [
-        4, 5, 6, *range(8, 21), *range(22, 30)
-    ]
+    assert search["status"] == "MATCHED" and search["exit_code"] == 0
+    assert search["matching_words"] == search["total_words"] == 31
+    assert search["difference_count"] == 0 and search["differences"] == []
     assert search["relocation_issues"] == [] and search["limitations"] == []
-    assert search["verified_decompilation"] is False
+    assert search["verified_decompilation"] is True
 
     build_root_020 = triage.validated_build_root(REPO_ROOT, subdir="seto020")
     triage.ensure_build_dir(build_root_020, build_root_020)

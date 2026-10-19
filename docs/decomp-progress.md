@@ -3586,3 +3586,158 @@ Os skips restantes são requisitos de plataforma, ISO ausente, opt-ins intencion
 Java/REA indisponíveis no WSL2 e três testes YAML opcionais sem PyYAML; nenhum
 skip foi promovido a aprovação de matching. `build/seto020/REPORT.md` contém a
 lista detalhada dos skips, hashes, medições e diff exato contra `main`.
+
+## SETO-DECOMP-021 — Renderer, FPU e controle de fluxo
+
+A rodada começou de uma branch nova `feat/seto-decomp-021` em `main` após o
+merge da PR #19 (020). HEAD-base `175a3dcf64516edbafa122f91df9a4d1fedcfa89`; o
+SHA do PRX continua
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`. As seções
+018-R2, 019 e 020 acima não foram reescritas; nenhuma mudança foi feita em
+`matching.py`, nas flags do compilador ou nos critérios de equivalência. Todo
+artefato novo (objetos, listagens, experimentos, medições e logs) fica em
+`build/seto021/`.
+
+### Baseline antes da primeira alteração
+
+| Função | Status reproduzido na base 020 |
+|---|---|
+| `0x6E8` | `MATCHED` 47/47 |
+| `0x7A4` | `MATCHED` 83/83 |
+| `0xFF0` | `MATCHED` 153/153 |
+| `0x1A3C` | `MATCHED` 52/52 |
+| `0x1E94` | `NONMATCHING` 7/31; diferenças `[4,5,6,8–20,22–29]` |
+| `0x1254` | não reconstruída (163 words) |
+| `0x14E0` | experimento 020 descartado: `NONMATCHING` 30/161, 131 diferenças, 11 issues de relocation |
+| `0x1764` | não reconstruída (182 words) |
+| `libhtml_view.prx` | 15 integrações reais: 7 `MATCHED`, 8 `INCONCLUSIVE`, 0 `NONMATCHING` |
+
+O hash do PRX, o `baseline.json`, o `triage.json` e o `ghidra-boundaries.json`
+de 018 foram revalidados nas integrações reais: as suítes recompõem
+baseline/triage a partir do PRX e dos arquivos preservados antes de comparar.
+
+### `func_00001254` — MATCHED 163/163
+
+A função inicializa o renderer com `func_00001D08(0x1003)` e retorna cedo
+quando o resultado é zero; deriva uma margem de dois pixels do bit 3 do
+contexto devolvido por `func_000037E0` (`extra = ((*ctx >> 3) & 1) * 2`) e
+emite o quadro externo mais as guias internas. São 15 sites de import e uma
+chamada local (`0x1D08`), zero datarefs estáticos; os imports usam os
+trampolines `libehsys` já declarados em `libtutoriallist_stubs.h`, validados
+call site a call site.
+
+A reconstrução versionada reproduz as 163 words — prólogo/epílogo, geometria
+(`half = extra / 2`, `left/top/right/bottom`), os quatro guias de canto
+(`0x19`/`0x28` × `0x14`/`0x29`), a barra `func_00003AF0(6, 1, 6,
+height + extra - 4)`, as guias internas e a barra horizontal final. Resultado
+real: **MATCHED 163/163**, zero diferenças/issues/limitações,
+`verified_decompilation=true`, com duas compilações frescas independentes
+(`build/seto021/matches/f1254/attempt-{1,2}`). Source SHA-256
+`d9082eb8cd22c4550d369d2a6ddcd767cb5b5b021b4874b1a62a31c65f4a7db7`; object
+SHA-256 `78ab23a040226e1217487d08d6cfb5ccc5b6812e4ea8c4bdac368e3dcbcb2c06`.
+
+### `func_00001E94` — MATCHED 31/31
+
+As 24 diferenças históricas eram de forma, não de algoritmo. A leitura das
+words originais (`addu v1,a3,a2` em `0x1EB4`, `bltz a2` no retorno
+compartilhado em `0x1F04`, `bnel a0,v1` na igualdade e o backedge `slt
+at,a2,a3` em `0x1EF8`) mostra que: o midpoint é a soma direta `(low + high) /
+2` e não a forma segura contra overflow; o laço é um `do/while` com guarda
+positiva `if (high >= 0) { ... }` e um único `return -1` depois do bloco; e
+`low` é declarado e inicializado antes de `high`, o que mapeia `high` para o
+`a2` do chamador (contagem decrementada) e `low` para `a3`. A variante E7
+(`build/seto021/experiments/1e94/e7-wrapper-low-first.c`) é exatamente essa
+forma e fecha as 31 words; nenhuma variante fracassada da 020 foi repetida.
+
+Resultado: **MATCHED 31/31**, zero diferenças/issues/limitações,
+`verified_decompilation=true`, em duas compilações frescas. Source versionada
+SHA-256
+`6dc89326fde1e8aa0f12cb4edd80bb6ab0e8c3b6e86675b71275ad700392f565`; object
+SHA-256 `24df0bdbcc2926ef4c5e8bf0c18231dcf9047068447ed978e68916f834c8fcc4`. As
+expectativas correntes das suítes 018/020 foram atualizadas para o resultado
+comprovado; o histórico 7/31 permanece nas seções 020 acima.
+
+### `func_000014E0` — MATCHED 161/161
+
+O diagnóstico completo de FPU, argumentos e relocations está em
+`build/seto021/diagnostics/func_000014E0-analysis.md` e resumido no relatório
+da rodada. O que faltava à 020: (1) os quatro blocos de conversão
+`unsigned int → float` com o padrão guardado por `bltzl` + `srl/or` + `add.s`,
+que provam que `total`, `current` e `half` são unsigned; (2) o mapa de
+argumentos O32 completo, incluindo o nono argumento `context` em `48(sp)`
+encaminhado a `func_00003850`; (3) o guard exato `if (progress == 0) return
+renderer;`, que o Metrowerks baixa como `bnel s2,zero,corpo` com o `divu` no
+delay slot tomado — a forma wrapper produz `beql s2,zero,epílogo` e um word a
+menos, que é precisamente o erro estrutural do candidato c1; (4) o clamp
+[0,1] por `c.lt.s`/`c.ngt.s` e a volta `float → unsigned` pelo caminho
+2^31/`trunc.w.s`; (5) a origem dos 11 relocation issues da 020: os 8 sites
+`jal` (cinco trampolines `libehsys`: `0x3850`, `0x3BC0`, `0x3B78` ×2, `0x3AF0`
+×2, `0x3AE8` ×2) só pareiam quando o corpo tem o layout exato, e o candidato
+020 estava deslocado desde o guard.
+
+Dois experimentos fecharam a função: c1 (wrapper, 160 words — o comparador
+recusou o tamanho 644 vs 640 bytes) e c2 (early return, 161 words,
+**MATCHED 161/161**, zero diferenças/issues/limitações). Source versionada
+SHA-256
+`009dcba008c5ded30eecfb5ed32a149bcd4801a7a076da5f3e65897f195a6248`; object
+SHA-256 `301afd4c338e0ac606c065e05150e6c336a030be61bc01f9fcd64d7905e9bd69`;
+evidência canônica em `build/seto021/matches/f14e0/attempt-{1,2}`.
+
+### `func_00001764` — NONMATCHING 42/182
+
+A reconstrução está completa e versionada, mas permanece `NONMATCHING 42/182`
+com 140 diferenças e 32 problemas de pairing de relocation. As três words de
+clamp (`max`/`min` em `0x17F4`, `0x1818`, `0x181C`) são as únicas `max`/`min`
+do PRX e só são emitidas pelos intrínsecos Allegrex
+(`__builtin_allegrex_max`/`min`), confirmados por experimento; nenhuma forma
+`if`/ternário produziu essas words em nenhum nível de otimização.
+
+O bloqueio restante é uma permutação global de registradores: o original usa
+`renderer s7`, `x s5`, `y s4`, `width s3`, `height` spillado em `76(sp)`,
+`full s8`, `ready s6`, `filled s0`, enquanto a família de fontes que reproduz
+o schedule original (`full` calculado no delay slot da chamada `0x1D08`)
+seleciona a rotação alternativa (`renderer s6`, `x s5`, `y s4`, `width s7`,
+`height s8`, `full s7`, `ready s0`), e as formas em dois passos que mantêm os
+parâmetros nos registradores originais afundam o cálculo para depois do
+branch de `ready`. Foram testadas 31 variantes de estrutura (`v1`–`v31`), 24
+permutações de declaração, 4 ordenações de parâmetros, 6 micro-formas `q1`–`q6`
+e os níveis `-O0`–`-O4,p`: nenhum reproduz o mapa de registradores original.
+O corpus está em `build/seto021/experiments/1764/` e `build/seto021/matches/f1764/`
+com as tabelas de mapeamento. A fonte versionada documenta o bloqueio no
+cabeçalho e é o melhor resultado real da rodada (sem inflar a contagem de
+`MATCHED`). Source SHA-256
+`e8e9a4a5834a9b84d6ccb38c21125361641e491114c9ddc4efaf526aa0718cdd`; object
+SHA-256 `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`.
+
+### Total verificado após 021
+
+| Módulo / estado | Contagem |
+|---|---:|
+| `MATCHED` acumulados (7 `libhtml_view` + 7 `libtutoriallist`) | **14 funções** |
+| `INCONCLUSIVE` em `libhtml_view` | **8 funções**, 231/291 words certificados |
+| `NONMATCHING` atual | **1 função**: `0x1764`, 42/182 |
+| Novos words certificados em 021 | **355**: 163 (`0x1254`) + 31 (`0x1E94`) + 161 (`0x14E0`) |
+| Words MATCHED acumulados nestes conjuntos | **906**: 216 `libhtml_view` + 690 `libtutoriallist` |
+
+O status histórico de 020 para `0x1E94` (7/31) e do experimento descartado de
+`0x14E0` (30/161) permanece nas seções anteriores. A atualização 021 substitui
+as expectativas correntes dos testes pelos matches estritos e adiciona a
+suíte real 021, sem apagar histórico.
+
+### Gates e regressões 021
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 36 skipped |
+| `pytest -q -rs` | WSL2 | 779 passed, 18 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 31 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 42 passed, 12 skipped, 743 deselected |
+| Opt-ins reais 018 + 019 + 020 + 021 | WSL2 | 5 passed (2+1+1+1); `0x6E8`, `0x7A4`, `0x1A3C`, `0xFF0`, `0x1E94`, `0x1254`, `0x14E0`, `0x1764` reproduzidos |
+| Baselines reais `test_toolchain_runtime.py` | WSL2 | 17 passed, 2 skipped; 7 `MATCHED` + 8 `INCONCLUSIVE` de `libhtml_view` preservados |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean (WSL Git não resolve o common-dir deste worktree linkado ao Windows) |
+
+Os skips restantes são requisitos de plataforma, ISO ausente, opt-ins
+intencionais e provedores REA/Ghidra não instalados no WSL2; nenhum skip foi
+promovido a aprovação de matching. `build/seto021/REPORT.md` contém a lista
+detalhada dos skips, hashes, medições e o diff exato contra a base.
