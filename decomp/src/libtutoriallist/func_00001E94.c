@@ -21,9 +21,33 @@
  *  - The loop is bottom-tested (do/while) with the comparison slt a2,a3
  *    (high < low) at 0x1EF8 and the likely backedge at 0x1EFC.
  *
+ * Input-domain requirements for this C reconstruction (the binary-equivalent
+ * instructions are preserved; the direct midpoint and the unguarded index
+ * are kept because they are what the original executes):
+ *
+ *  - count must be nonnegative, and small enough that count - 1 and the
+ *    midpoint sum low + high stay representable in int. Under the loop
+ *    invariant 0 <= low <= high < count, low + high <= 2 * (count - 1);
+ *    count <= 1073741824 (2^30) is therefore a sufficient bound for the sum.
+ *  - The index product middle * stride_halfwords must fit in signed int for
+ *    every accessed middle, which bounds |stride_bytes / 2| accordingly.
+ *  - stride_halfwords = stride_bytes / 2 keeps the original signed
+ *    truncating division: negative strides stay negative, and an odd stride
+ *    drops its remainder.
+ *  - values must point to valid, halfword-aligned storage that provides
+ *    every accessed element, i.e. all indices middle * stride_halfwords for
+ *    0 <= middle < count. The original loads with lhu (zero-extended 16-bit
+ *    load) and every compared operand stays within [0, 0xFFFF], so the
+ *    signed compare in the binary agrees with the unsigned 16-bit values.
+ *  - count == 0 is safe: high == -1 fails the wrapper guard and the function
+ *    returns -1 without touching values.
+ *
+ * The known local caller (func_00001D08) uses count = 4 and stride_bytes =
+ * 0xC; that is usage evidence, not a universal contract for other callers.
+ *
  * Status: MATCHED 31/31, zero differences and zero relocation issues.
- * Source SHA-256 fc0e0b93f7ac4f2ef9cd7f8b72191093ed7c2f35336244ce172c98864365b155;
- * object SHA-256 24df0bdbcc2926ef4c5e8bf0c18231dcf9047068447ed978e68916f834c8fcc4.
+ * Final source/object hashes and fresh-attempt evidence are recorded outside
+ * the source, in docs/decomp-progress.md and build/seto021/REPORT.md.
  */
 
 int func_00001E94(

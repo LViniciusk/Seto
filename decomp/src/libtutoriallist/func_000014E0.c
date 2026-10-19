@@ -29,19 +29,39 @@
  *    unsigned int rather than int.
  *  - the clamp is c.lt.s/c.ngt.s against 0.0f and 1.0f (0x1670-0x16A4), the
  *    scale is 255.0f, and the back conversion uses the c.le.s 2^31 / sub.s /
- *    trunc.w.s / or path (0x16B0-0x16E0), i.e. an unsigned int result. The
- *    division by total == 0 and the fraction domain are inherited from the
- *    caller: 0x1764 guards both counters before calling (see its header).
+ *    trunc.w.s / or path (0x16B0-0x16E0), i.e. an unsigned int result.
  *  - the alpha byte is built as (intensity << 24) | 0xFFFFFF and passed to
  *    func_00003B78, followed by the 8x8 marker draw and the progress-bar draw
  *    (0, 46, indent, 0, 0).
  *
+ * Defined-behavior preconditions for this C reconstruction (the original
+ * instruction sequence is preserved; no defensive branch is added here,
+ * because the binary has none):
+ *
+ *  - progress == 0 returns before the modulo and before any floating-point
+ *    division, independently of total.
+ *  - When progress != 0, total >= 2 is required so that total and
+ *    half = total / 2 are nonzero denominators:
+ *      * total == 0 reaches `current % total`, integer division by zero,
+ *        which is undefined behavior in C; the original executes divu with
+ *        a zero divisor, a case the instruction set does not define either.
+ *      * total == 1 leaves half == 0 and always takes the else arm, whose
+ *        `(float)(total - rem) / (float)half` is a floating-point division
+ *        by zero rather than a normal quotient.
+ *      * total >= 2 makes half >= 1, so both arms divide by a nonzero
+ *        denominator for every value of current.
+ *  - half = total / 2 itself is safe for total == 0 (unsigned division is
+ *    defined and yields 0); the hazard begins at the modulo below.
+ *
+ * The only known caller (0x1764, call sites 0x19C4 and 0x1A04) obtains total
+ * from context[1] of the func_000037E0 result and derives progress from
+ * height comparisons; it does not check total >= 2, so this file documents
+ * the precondition instead of claiming a runtime guarantee the binary does
+ * not have.
+ *
  * Status: MATCHED 161/161, zero differences and zero relocation issues.
- * Winning experiment source SHA-256
- * 61917f9d5bda564baa3ed45dd6fecefba3d2c1e86810c1d93cb856f02b611b3;
- * object SHA-256
- * 301afd4c338e0ac606c065e05150e6c336a030be61bc01f9fcd64d7905e9bd69.
- * Canonical tracked-file evidence: build/seto021/matches/f14e0/.
+ * Final source/object hashes and fresh-attempt evidence are recorded outside
+ * the source, in docs/decomp-progress.md and build/seto021/REPORT.md.
  */
 
 #include "libtutoriallist_stubs.h"
