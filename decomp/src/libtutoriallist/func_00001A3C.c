@@ -15,14 +15,14 @@
 void func_00001A3C(int x, int y, int value)
 {
     short digits[2];
-    char *cursor = (char *)digits;
+    unsigned char *cursor = (unsigned char *)digits;
+    unsigned int remaining = sizeof(digits);
 
-    if (cursor != (char *)0) {
-        char *end = cursor + sizeof(digits);
-
+    /* The unsigned byte counter keeps the four stores in the observed loop. */
+    if (cursor != (unsigned char *)0) {
         do {
             *cursor++ = 0;
-        } while (cursor != end);
+        } while (--remaining != 0);
     }
 
     if (value < 10)

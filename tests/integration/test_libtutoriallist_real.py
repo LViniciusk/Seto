@@ -164,14 +164,14 @@ def test_selected_real_matches_run_fresh_twice_and_preserve_reports() -> None:
     assert matched["limitations"] == []
     assert matched["verified_decompilation"] is True
 
-    reconstructed = by_address[0x1A3C]
-    assert reconstructed["status"] == "NONMATCHING" and reconstructed["exit_code"] == 3
-    assert reconstructed["matching_words"] == 46 and reconstructed["total_words"] == 52
-    assert reconstructed["difference_count"] == len(reconstructed["differences"]) == 6
-    assert [item["word_index"] for item in reconstructed["differences"]] == [8, 9, 10, 12, 13, 14]
-    assert reconstructed["relocation_issues"] == []
-    assert reconstructed["limitations"] == []
-    assert reconstructed["verified_decompilation"] is False
+    buffer_clear = by_address[0x1A3C]
+    assert buffer_clear["status"] == "MATCHED" and buffer_clear["exit_code"] == 0
+    assert buffer_clear["matching_words"] == buffer_clear["total_words"] == 52
+    assert buffer_clear["difference_count"] == 0
+    assert buffer_clear["differences"] == []
+    assert buffer_clear["relocation_issues"] == []
+    assert buffer_clear["limitations"] == []
+    assert buffer_clear["verified_decompilation"] is True
 
     nonmatching = by_address[0x1E94]
     assert nonmatching["status"] == "NONMATCHING" and nonmatching["exit_code"] == 3
