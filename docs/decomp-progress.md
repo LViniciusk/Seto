@@ -3358,3 +3358,86 @@ cinco casos de smoke/Ghidra (`test_headless_is_proved_without_claiming_the_alleg
 POSIX bootstrap (`test_posix_dry_run_is_selective_and_does_not_write_tool_config`,
 `test_posix_bootstrap_never_uses_sudo_without_an_explicit_notice`). Não foram
 introduzidas por esta R2.
+
+## SETO-DECOMP-019 — R.E.A., toolchain e novas reconstruções
+
+Esta rodada partiu de `main` após o merge da 018-R2 (merge commit `eaf6cd3`, com
+`5dee4eb` como HEAD da branch 018). O PRX foi novamente copiado apenas para a
+worktree isolada, lido sem alteração e conferido pelo SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`. Os
+artefatos gerados, objetos, projetos Ghidra, logs e `REPORT.md` permanecem em
+`build/seto019/`.
+
+### Auditoria das ferramentas e do R.E.A.
+
+Windows e WSL2 foram medidos separadamente. No Windows, Node 24.21.0 e npm
+11.19.0 atendem ao engine declarado pelo pacote `rea-agents` 6.5.0
+(`^22.19.0 || ^24.11.0 || >=26.0.0`). Ghidra 12.1.3, Allegrex v21.4, JDK
+Corretto 25.0.3, m2c, splat e LLVM objdump passaram os respectivos smoke tests.
+O Metrowerks 3.0.1 build 219 foi detectado, mas a compilação nativa é
+`BLOCKED`: o próprio driver recusou a licença. A recusa é reportada sem incluir
+o caminho local do arquivo de licença. Os builds reais foram feitos em WSL2.
+
+No WSL2, Metrowerks + wibo 1.2.0, GNU MIPSel binutils/objdump 2.42, splat
+0.50.1 e m2c no commit fixado passaram os smoke tests. Splat/m2c ausentes foram
+instalados pelos bootstrap existentes em ambientes isolados; o bootstrap
+selecionado por `--config config/wsl/seto.toml` grava seu overlay ignorado ao
+lado desse profile. Ghidra 12.1.3 + Allegrex v21.4 também foram instalados dos
+arquivos SHA-256 fixados; a detecção agora escolhe o launcher POSIX e preserva
+permissões executáveis seguras. Ghidra continua `BLOCKED` no WSL por ausência de
+Java. Node 18.19.1 não satisfaz o engine do REA e o npm visível é um shim Windows
+que não inicia no WSL; npm foi detectado, mas fica `BLOCKED` pela incompatibilidade
+do Node, e o pacote REA não foi instalado nesse ambiente.
+
+REA 6.5.0 no Windows passou CLI help, MCP initialize + `tools/list` (207
+ferramentas) e `doctor --provider ghidra` com Ghidra/JDK configurados. O setup
+Codex foi primeiro inspecionado com `--dry-run`, depois registrado preservando
+os outros servidores; `doctor --client codex` confirmou o registro. Uma análise
+real do fixture sintético autorizado (raw 6502, SHA-256
+`17615cd64f58233cc395245337bc74a8af40b9741bdb212f294b51e4cb05edb5`) recuperou
+as funções `0x8000` e `0x8008`, ranges, instruções e o call entre elas. O PRX
+original foi recusado pelo provider Ghidra com `target_format_unsupported`,
+classificado `UNSUPPORTED`; nenhum byte/cabeçalho/relocation foi alterado para
+contornar a limitação. CLI/MCP/provider instalado não promovem por si sós
+`native-analysis` ou suporte PRX.
+
+### Reconstruções efetivamente trabalhadas
+
+| Função | Candidata/evidência | Resultado fresco (duas execuções idênticas) |
+|---|---|---|
+| `func_000007A4`, `[0x7A4,0x8F0)` | 83 words, um range Ghidra exato, 16 chamadas (14 imports, 2 locais), sem datarefs. C representa o early-return e a cadeia de configuração/renderização; protótipos/semântica continuam provisórios. | **MATCHED 83/83**, zero diferenças, issues de relocation ou limitações; exit `0`, `verified_decompilation=true`. Source SHA-256 `e5db3876fd470297a058d86535b9adce7e8bf354023fc91d75c596a5cf66351c`; object SHA-256 `41d3d8e253c45f41fa383a94447c12aaf0e590a7638b9081d8f73e5034067238`. |
+| `func_00000FF0`, `[0xFF0,0x1254)` | 153 words, um range Ghidra exato, 18 chamadas (17 imports, 1 local), sem datarefs. C registra a hipótese de desenho/renderização; dimensões e assinaturas são provisórias. Variantes de tipo/vida de variáveis não eliminaram a diferença de alocação de registradores. | **NONMATCHING 122/153**, 31 diferenças, zero issues/limitações; exit `3`, sem promoção. Source SHA-256 `82b444011d5e304e29d28ad01a3545fcac64045a6dbd37afb03ff9224489a5f2`; object SHA-256 `41ad805e28b3598486cd8d550f79df191bd772a3494c69d90ff29c53e8d8baa7`. |
+
+Foram efetivamente trabalhadas duas novas funções, ambas com compilação real pelo
+Metrowerks em WSL2 e comparação estrita. A cobertura combinada é 205/236 words
+iguais; apenas as 83 words de `0x7A4` estão certificadas como função reconstruída.
+As 31 divergências de `0xFF0` permanecem abertas. Não houve tentativa de relaxar
+matcher, canonicalização de relocation ou identidade de dados. Uma terceira
+candidata (`0x14E0`) foi analisada como alternativa, mas não foi promovida a
+fonte/tentativas de build após os resultados de 0x7A4 e 0xFF0 satisfazerem o
+lote 2–4.
+
+### Revalidação da R2, tempos e gates
+
+O baseline estrutural e a triagem Ghidra da R2 foram regenerados sem modificar
+as fontes da 018: baseline SHA-256 `6ef4ee553ce21205ed7ba738db519086c140a1374097a77e59e39a9cbf4fa043`,
+triage `fb1cc157ada5448dfb8e88e2b73bd4d26b6d665d9ff11ef667e2298158aa17a5` e
+boundaries `e86fb8c954421a4f2923e8409adcec8ec2578bef6a0941dfa6f95ef390bb671b`.
+As integrações reais confirmaram novamente `0x6E8 MATCHED 47/47`, `0x1A3C
+NONMATCHING 46/52` e `0x1E94 NONMATCHING 7/31`. O caso histórico de `0x1A3C`
+continua distinto: a fonte original produziu 51/52 words e erro de tamanho sem
+veredito; a fonte R2 atual compila 52 words e recebe comparação NONMATCHING.
+Resultados anteriores de `libhtml_view.prx` foram preservados.
+
+Tempos medidos no mesmo checkout: headless Ghidra + decompilação, 20.100 s para
+`0x7A4` e 16.307 s para `0xFF0`; cada build + matching levou 2.760–2.894 s para
+`0x7A4` e 3.167–3.708 s para `0xFF0` nas duas execuções. A integração REA
+Windows mediu 21.490 s para a função sintética `0x8000`, 20.010 s para `0x8008`
+e 1.750 s para a recusa do PRX. Esses valores incluem inicialização do provider
+e não são benchmarks isolados do decompilador.
+
+Gates finais, motivos exatos e a matriz de skips estão registrados no relatório
+operacional ignorado `build/seto019/REPORT.md`; ele também contém o diff unificado
+Git exato contra a base da PR. Nenhuma regressão de mídia foi observada. Os
+opt-ins REA/Metrowerks dependem dos recursos locais e não são exigidos pelo CI
+público.
