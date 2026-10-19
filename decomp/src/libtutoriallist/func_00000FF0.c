@@ -20,8 +20,9 @@ void *func_00000FF0(
 )
 {
     int status = func_00001D08(0x1003);
-    unsigned int inner_right;
+    /* Keep this declaration order: it reproduces the original saved registers. */
     unsigned int inner_bottom;
+    unsigned int inner_right;
 
     if (status == 0)
         return arg0;
