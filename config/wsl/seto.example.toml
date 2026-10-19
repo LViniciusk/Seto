@@ -1,5 +1,7 @@
 # Copy to config/wsl/seto.toml and replace both paths with your local installs.
 # The copied file is git-ignored and selected explicitly with --config.
+# Use that same --config path with bootstrap_toolchain.sh so its overlay lands
+# beside this WSL profile instead of beside the default Windows profile.
 
 [tools.mwccpsp]
 path = "/path/to/mwccpsp.exe"

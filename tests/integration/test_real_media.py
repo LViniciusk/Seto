@@ -30,6 +30,13 @@ MODULE = REPO_ROOT / "private" / "original" / "PSP_GAME" / "USRDIR" / "gmodule" 
 GAME_ROOT = REPO_ROOT / "private" / "original" / "PSP_GAME"
 ISO = REPO_ROOT / "TF1.iso"
 
+
+def _toolchain_config() -> Path:
+    wsl_profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
+    if os.name == "posix" and wsl_profile.is_file():
+        return wsl_profile
+    return REPO_ROOT / "config" / "seto.toml"
+
 pytestmark = pytest.mark.integration
 
 if not MODULE.is_file():
@@ -170,12 +177,19 @@ def test_split_run_splat_verifies_the_real_listing(tmp_path, capsys) -> None:
     two code listings and every word of them must have been verified against the
     original bytes (509 words in ``.text``, 2536 in ``.sceStub.text``).
     """
-    splat = find_tool(next(spec for spec in TOOL_SPECS if spec.name == "splat"))
+    config = _toolchain_config()
+    settings = load_settings(config)
+    splat = find_tool(
+        next(spec for spec in TOOL_SPECS if spec.name == "splat"),
+        settings.tool_path("splat"),
+    )
     if not splat.found:
-        pytest.skip("splat is not installed")
+        pytest.skip(f"splat is not configured/installed for this profile: {splat.reason}")
     out = tmp_path / "split"
     code = cli.main(
         [
+            "--config",
+            str(config),
             "split", "--prx", str(MODULE), "--out", str(out),
             "--base-path", "..", "--target-path", str(MODULE), "--run-splat",
         ]

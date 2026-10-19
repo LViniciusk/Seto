@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from seto import smoke
 from seto.hashing import sha256_file
 from seto.toolchain import NOT_APPLICABLE, detect_all, load_settings
+from scripts.probe_common import ensure_build_dir, validated_build_root, write_build_text
 from scripts.match_baselines import REAL_MATCH_CASES, match_tag
 
 pytestmark = pytest.mark.integration
@@ -25,6 +27,15 @@ MODULE = (
     / "USRDIR"
     / "gmodule"
     / "libhtml_view.prx"
+)
+PSP_MODULE = (
+    REPO_ROOT
+    / "private"
+    / "original"
+    / "PSP_GAME"
+    / "USRDIR"
+    / "gmodule"
+    / "libtutoriallist.prx"
 )
 
 def _real_match_report(tmp_path, function: int, source: str):
@@ -143,6 +154,169 @@ def test_installed_rea_completes_the_stdio_mcp_handshake(tmp_path) -> None:
     # support for PSP PRX is inferred from an MCP tools/list response.
     assert capabilities["native-analysis"].state == "BLOCKED"
     assert capabilities["prx"].state == "BLOCKED"
+
+
+@pytest.mark.skipif(
+    os.environ.get("SETO_REA_GHIDRA_REAL") != "1",
+    reason="set SETO_REA_GHIDRA_REAL=1 for the local REA/Ghidra provider integration",
+)
+def test_rea_ghidra_provider_analyzes_synthetic_input_and_rejects_psp_prx(tmp_path) -> None:
+    if os.name != "nt":
+        pytest.fail("BLOCKED: this opt-in exercises the Windows Ghidra P0 provider")
+    if not PSP_MODULE.is_file():
+        pytest.fail("BLOCKED: the original PRX is absent while the REA provider opt-in is active")
+
+    settings = load_settings(REPO_ROOT / "config" / "seto.toml")
+    detected = {status.name: status for status in detect_all(settings)}
+    rea, node, ghidra, java = (detected[name] for name in ("rea", "node", "ghidra", "java"))
+    assert rea.version == "6.5.0", f"expected locked REA 6.5.0, found {rea.version!r}"
+    for status in (rea, node, ghidra, java):
+        if not status.found or not status.path:
+            pytest.fail(f"BLOCKED: {status.name} is not available for the opt-in provider test")
+    from seto.toolchain import rea_node_engine_compatible
+
+    if not rea_node_engine_compatible(node.version):
+        pytest.fail(f"BLOCKED: Node {node.version} is incompatible with REA 6.5.0")
+
+    ghidra_home = Path(ghidra.path).parent.parent
+    java_home = Path(java.path).parent.parent
+    env = dict(os.environ)
+    env["GHIDRA_INSTALL_DIR"] = str(ghidra_home)
+    env["JAVA_HOME"] = str(java_home)
+    smoke_report = smoke.smoke_report(settings, env=env, tools=["rea"], workspace=tmp_path / "smoke")
+    rea_capabilities = {item.name: item for item in smoke_report[0].capabilities}
+    assert rea_capabilities["cli"].state == "READY"
+    assert rea_capabilities["mcp"].state == "READY"
+    assert rea_capabilities["ghidra-provider"].state == "INSTALLED"
+    assert rea_capabilities["native-analysis"].state == "BLOCKED"
+
+    synthetic = tmp_path / "seto_rea_6502.bin"
+    # 0x8000: JSR $8008; RTS. 0x8008: LDA #$2a; RTS. Never execute this file.
+    expected_bytes = bytes.fromhex("20 08 80 60 ea ea ea ea a9 2a 60")
+    synthetic.write_bytes(expected_bytes)
+    rea_timings: list[dict[str, object]] = []
+    function_started = time.perf_counter()
+    function = subprocess.run(
+        [
+            rea.path,
+            "function",
+            str(synthetic),
+            "0x8000",
+            "--target-format",
+            "raw-binary",
+            "--architecture",
+            "6502",
+            "--entry-point",
+            "0x8000",
+            "--provider",
+            "ghidra",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=600,
+        check=False,
+    )
+    rea_timings.append(
+        {"procedure": "0x8000", "seconds": round(time.perf_counter() - function_started, 3)}
+    )
+    assert function.returncode == 0, function.stderr
+    dossier = json.loads(function.stdout)["normalized_result"]
+    assert dossier["procedure"]["address"] == "0x8000"
+    assert dossier["procedure"]["body"]["ranges"] == [
+        {"start": "0x8000", "end": "0x8003"}
+    ]
+    assert dossier["assembly"] == ["0x8000: JSR 0x8008", "0x8003: RTS"]
+    assert dossier["callees"][0]["address"] == "0x8008"
+    assert dossier["outgoing_references"][0]["kind"]["call"] is True
+    assert sha256_file(synthetic) == json.loads(function.stdout)["subject"]["digest"]["sha256"]
+
+    callee_started = time.perf_counter()
+    callee = subprocess.run(
+        [
+            rea.path,
+            "function",
+            str(synthetic),
+            "0x8008",
+            "--target-format",
+            "raw-binary",
+            "--architecture",
+            "6502",
+            "--entry-point",
+            "0x8000",
+            "--provider",
+            "ghidra",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=600,
+        check=False,
+    )
+    rea_timings.append(
+        {"procedure": "0x8008", "seconds": round(time.perf_counter() - callee_started, 3)}
+    )
+    assert callee.returncode == 0, callee.stderr
+    callee_dossier = json.loads(callee.stdout)["normalized_result"]
+    assert callee_dossier["procedure"]["address"] == "0x8008"
+    assert callee_dossier["procedure"]["body"]["ranges"] == [
+        {"start": "0x8008", "end": "0x800a"}
+    ]
+    assert callee_dossier["assembly"] == ["0x8008: LDA #0x2a", "0x800a: RTS"]
+
+    prx_started = time.perf_counter()
+    prx = subprocess.run(
+        [rea.path, "analyze", str(PSP_MODULE), "--provider", "ghidra", "--json"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+    rea_timings.append(
+        {
+            "procedure": "open_binary",
+            "target": "libtutoriallist.prx",
+            "seconds": round(time.perf_counter() - prx_started, 3),
+        }
+    )
+    assert prx.returncode != 0
+    rejection = json.loads(prx.stdout)
+    assert rejection["error"] == "Analysis failed"
+    assert rejection["code"] == "capability_unavailable"
+    assert rejection["details"]["selection_reason"] == "target_unsupported"
+    assert any(
+        item["provider_id"] == "ghidra" and item["code"] == "target_format_unsupported"
+        for item in rejection["details"]["rejections"]
+    )
+    prx_capability = smoke.classify_rea_target_error(rejection, provider_id="ghidra")
+    assert prx_capability.state == "UNSUPPORTED"
+
+    build_root = validated_build_root(REPO_ROOT, subdir="seto019")
+    rea_root = build_root / "rea"
+    ensure_build_dir(rea_root, build_root)
+    timing_report = {
+        "package_version": rea.version,
+        "provider_id": "ghidra",
+        "supported_synthetic": {
+            "format": "raw-binary",
+            "architecture": "6502",
+            "sha256": sha256_file(synthetic),
+            "procedures": ["0x8000", "0x8008"],
+        },
+        "psp_prx": {
+            "classification": prx_capability.state,
+            "reason": prx_capability.detail,
+        },
+        "measurements": rea_timings,
+    }
+    write_build_text(
+        rea_root / "provider-timings.json",
+        json.dumps(timing_report, indent=2, sort_keys=True) + "\n",
+        build_root,
+    )
 
 
 @pytest.mark.parametrize("function,source,expected_status,matching_words,total_words", REAL_MATCH_CASES)

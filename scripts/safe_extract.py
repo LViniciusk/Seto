@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import stat
 import zipfile
@@ -79,6 +80,12 @@ def safe_extract_zip(archive: str | Path, destination: str | Path) -> None:
                 raise UnsafeArchiveError(f"archive path escapes destination: {info.filename!r}")
             with zipped.open(info, "r") as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
+            if os.name != "nt":
+                # Preserve release launcher bits lost by Windows-created ZIPs,
+                # while never restoring setuid/setgid or group/world write.
+                permissions = stat.S_IMODE(info.external_attr >> 16) & 0o755
+                if permissions:
+                    target.chmod(permissions)
 
 
 def main() -> int:

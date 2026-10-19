@@ -32,8 +32,9 @@ ghidra_allegrex_sha256=62e829fa9e6ed6f2bd343763fb339a3f8812b02a4e0ed5a9409b14007
 ghidra_allegrex_url=https://github.com/kotcrab/ghidra-allegrex/releases/download/v21.4/ghidra_12.1.3_PUBLIC_20260825_ghidra-allegrex.zip
 
 # --------------------------------------------------------------------- REA/npm
-# REA needs Node 24.11+; it is installed into an isolated npm prefix only when
-# selected and lifecycle scripts are disabled.
+# REA 6.5.0 declares Node engines ^22.19.0 || ^24.11.0 || >=26.0.0; the
+# installed package is checked before its CLI/MCP readiness is trusted. REA is
+# installed into an isolated npm prefix only when selected, with scripts disabled.
 rea=6.5.0
 npm_registry=https://registry.npmjs.org/
 

@@ -39,8 +39,10 @@ from seto.toolchain import (
     BLOCKED,
     GHIDRA_MIN_JAVA,
     INCOMPATIBLE,
+    INSTALLED,
     MISSING,
     NOT_APPLICABLE,
+    REA_NODE_ENGINE_REQUIREMENT,
     READY,
     UNSUPPORTED,
     Capability,
@@ -52,6 +54,7 @@ from seto.toolchain import (
     m2c_argv,
     mwcc_argv,
     objdump_argv,
+    rea_node_engine_compatible,
     run,
     splat_argv,
     platform_family,
@@ -231,6 +234,21 @@ def _smoke_compiler(status: ToolStatus, context: _Context) -> tuple[Capability, 
         timeout=SMOKE_TIMEOUT,
     )
     if not result.ok:
+        diagnostic = result.combined().lower()
+        if any(
+            marker in diagnostic
+            for marker in ("license check failed", "cannot find license file", "flexlm error")
+        ):
+            # A licensed compiler with no usable license is blocked by its
+            # prerequisite; do not label it an incompatible compiler or echo
+            # machine-specific license paths into the report.
+            return (
+                Capability(
+                    "compile",
+                    BLOCKED,
+                    "Metrowerks reported that its required license is unavailable",
+                ),
+            )
         return (Capability("compile", INCOMPATIBLE, _failure(result, SMOKE_TIMEOUT)),)
     if not output.is_file():
         return (Capability("compile", INCOMPATIBLE, "the compiler produced no object"),)
@@ -257,7 +275,7 @@ def _smoke_compiler(status: ToolStatus, context: _Context) -> tuple[Capability, 
 
 
 def _smoke_node(status: ToolStatus, context: _Context) -> tuple[Capability, ...]:
-    """Run a line of JavaScript and require its output."""
+    """Run JavaScript and verify the minimum Node engine required by REA."""
     result = run(
         [status.path or "", "-e", "process.stdout.write(String(1 + 1))"],
         timeout=SMOKE_TIMEOUT,
@@ -266,7 +284,34 @@ def _smoke_node(status: ToolStatus, context: _Context) -> tuple[Capability, ...]
         return (Capability("runtime", INCOMPATIBLE, _failure(result, SMOKE_TIMEOUT)),)
     if result.stdout.strip() != "2":
         return (Capability("runtime", INCOMPATIBLE, "the script did not run to completion"),)
+    if not rea_node_engine_compatible(status.version):
+        detected = status.version or "unknown version"
+        return (
+            Capability(
+                "runtime",
+                INCOMPATIBLE,
+                f"Node {detected} executed JavaScript but is outside REA's supported engine range "
+                f"({REA_NODE_ENGINE_REQUIREMENT})",
+            ),
+        )
     return (Capability("runtime", READY, "executed a script and returned its output"),)
+
+
+def _smoke_npm(status: ToolStatus, context: _Context) -> tuple[Capability, ...]:
+    """Show that npm is launchable without installing or updating a package."""
+    result = run([status.path or "", "--version"], timeout=SMOKE_TIMEOUT)
+    if not result.ok:
+        return (Capability("package-manager", INCOMPATIBLE, _failure(result, SMOKE_TIMEOUT)),)
+    version = result.stdout.strip()
+    if not version or (status.version and version != status.version):
+        return (Capability("package-manager", INCOMPATIBLE, "npm version probe disagreed with launch"),)
+    return (
+        Capability(
+            "package-manager",
+            INSTALLED,
+            f"npm {version} is launchable; package installation was not exercised",
+        ),
+    )
 
 
 def _smoke_java(status: ToolStatus, context: _Context) -> tuple[Capability, ...]:
@@ -618,13 +663,125 @@ def _mcp_handshake(command: str, timeout: float = 30.0) -> tuple[bool, str]:
         stderr_thread.join(timeout=1)
 
 
+def _smoke_rea_ghidra_provider(status: ToolStatus, context: _Context) -> Capability:
+    """Check REA's Ghidra provider prerequisites without claiming analysis.
+
+    A successful ``doctor`` only proves that the installed provider is ready to
+    be exercised; native analysis remains blocked until a supported target is
+    actually opened and queried.
+    """
+    environment: dict[str, str] = {}
+    ghidra = context.detected.get("ghidra")
+    if ghidra is not None and ghidra.found and ghidra.path:
+        environment["GHIDRA_INSTALL_DIR"] = str(Path(ghidra.path).parent.parent)
+    java = context.detected.get("java")
+    if java is not None and java.found and java.path:
+        environment["JAVA_HOME"] = str(Path(java.path).parent.parent)
+
+    result = run(
+        [status.path or "", "doctor", "--provider", "ghidra", "--json"],
+        timeout=SMOKE_TIMEOUT,
+        env=environment,
+    )
+    try:
+        report = json.loads(result.stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        # Provider diagnostics can echo machine-local installation/license
+        # paths. Keep the capability report bounded and path-free.
+        detail = (
+            f"REA provider doctor returned invalid JSON (exit {result.returncode})"
+            if not result.timed_out
+            else f"REA provider doctor timed out after {SMOKE_TIMEOUT:g}s"
+        )
+        return Capability("ghidra-provider", INCOMPATIBLE, detail)
+    if not isinstance(report, dict):
+        return Capability("ghidra-provider", INCOMPATIBLE, "REA provider doctor returned no report")
+
+    inspections = report.get("providerInspections")
+    inspection = None
+    if isinstance(inspections, list):
+        inspection = next(
+            (
+                item
+                for item in inspections
+                if isinstance(item, dict) and item.get("id") == "ghidra"
+            ),
+            None,
+        )
+    if inspection is None:
+        return Capability("ghidra-provider", INCOMPATIBLE, "REA doctor omitted Ghidra provider inspection")
+    checks = inspection.get("checks")
+    checks = [item for item in checks if isinstance(item, dict)] if isinstance(checks, list) else []
+    if (
+        result.ok
+        and inspection.get("configured") is True
+        and inspection.get("available") is True
+        and checks
+        and all(item.get("ok") is True for item in checks)
+    ):
+        version = inspection.get("providerVersion") or "version unknown"
+        return Capability(
+            "ghidra-provider",
+            INSTALLED,
+            f"REA doctor verified Ghidra {version}; no artifact analysis was run",
+        )
+    if inspection.get("configured") is not True:
+        ghidra = context.detected.get("ghidra")
+        state = MISSING if ghidra is None or not ghidra.found else BLOCKED
+        return Capability("ghidra-provider", state, "REA Ghidra provider is not configured")
+    classifications = {item.get("classification") for item in checks}
+    if "unsupported_host" in classifications:
+        state = UNSUPPORTED
+    elif "missing_analysis_engine" in classifications:
+        state = BLOCKED
+    else:
+        state = INCOMPATIBLE
+    detail = "; ".join(
+        f"{item.get('name', 'provider check')} ({item.get('code') or item.get('classification') or 'failed'})"
+        for item in checks
+        if item.get("ok") is not True
+    ) or "REA Ghidra provider did not pass its prerequisite checks"
+    return Capability("ghidra-provider", state, detail)
+
+
+def classify_rea_target_error(error: object, *, provider_id: str) -> Capability:
+    """Classify only provider-issued target refusals, never transport failures.
+
+    An explicit format/architecture rejection is ``UNSUPPORTED``. A provider
+    that is unavailable or unconfigured is ``BLOCKED``; malformed input or an
+    unclassified failure cannot be upgraded to unsupported support evidence.
+    """
+    if not isinstance(error, dict):
+        return Capability("target", BLOCKED, "REA did not return a structured target error")
+    details = error.get("details")
+    if not isinstance(details, dict):
+        return Capability("target", BLOCKED, "REA target error contains no provider-selection details")
+    rejections = details.get("rejections")
+    selected = [
+        item
+        for item in rejections
+        if isinstance(item, dict) and item.get("provider_id") == provider_id
+    ] if isinstance(rejections, list) else []
+    target_codes = {"target_format_unsupported", "architecture_unsupported"}
+    unsupported = next((item for item in selected if item.get("code") in target_codes), None)
+    if details.get("selection_reason") == "target_unsupported" and unsupported is not None:
+        code = str(unsupported["code"])
+        return Capability("target", UNSUPPORTED, f"{provider_id} rejected the target: {code}")
+    if any(item.get("code") in {"not_configured", "provider_unavailable", "unsupported_host"} for item in selected):
+        return Capability("target", BLOCKED, f"{provider_id} cannot be exercised in this environment")
+    if error.get("code") == "capability_unavailable":
+        return Capability("target", BLOCKED, "REA could not select a usable analysis provider")
+    return Capability("target", INCOMPATIBLE, "REA returned an unclassified target/provider failure")
+
+
 def _smoke_rea(status: ToolStatus, context: _Context) -> tuple[Capability, ...]:
-    """Prove REA CLI and MCP connectivity separately from analysis support."""
+    """Prove REA CLI/MCP/provider prerequisites separately from native analysis."""
     result = run([status.path or "", "--help"], timeout=SMOKE_TIMEOUT)
     if not result.ok or "mcp" not in result.combined().lower():
         return (
             Capability("cli", INCOMPATIBLE, _failure(result, SMOKE_TIMEOUT)),
             Capability("mcp", BLOCKED, "the REA CLI could not be started"),
+            Capability("ghidra-provider", BLOCKED, "the REA CLI could not run provider diagnostics"),
             Capability("native-analysis", BLOCKED, "not demonstrated"),
             Capability("prx", BLOCKED, "PSP PRX analysis has not been demonstrated"),
         )
@@ -632,10 +789,11 @@ def _smoke_rea(status: ToolStatus, context: _Context) -> tuple[Capability, ...]:
     return (
         Capability("cli", READY, "REA CLI help command completed"),
         Capability("mcp", READY if connected else INCOMPATIBLE, detail),
+        _smoke_rea_ghidra_provider(status, context),
         Capability(
             "native-analysis",
             BLOCKED,
-            "MCP connectivity does not prove a native analysis provider is configured",
+            "CLI/MCP and provider checks do not prove that a supported target was analyzed",
         ),
         Capability("prx", BLOCKED, "PSP PRX analysis has not been demonstrated"),
     )
@@ -653,6 +811,7 @@ _SMOKE = {
     "wibo": _smoke_loader,
     "wine": _smoke_loader,
     "node": _smoke_node,
+    "npm": _smoke_npm,
     "java": _smoke_java,
 }
 
@@ -688,6 +847,7 @@ def _with_smoke(status: ToolStatus, context: _Context) -> ToolStatus:
             capabilities = (
                 Capability("cli", BLOCKED, status.reason or "REA runtime is unavailable"),
                 Capability("mcp", BLOCKED, "REA server could not be started"),
+                Capability("ghidra-provider", BLOCKED, "REA provider diagnostics were not run"),
                 Capability("native-analysis", BLOCKED, "no native provider was exercised"),
                 Capability("prx", BLOCKED, "PSP PRX analysis has not been demonstrated"),
             )
@@ -713,6 +873,7 @@ def _with_smoke(status: ToolStatus, context: _Context) -> ToolStatus:
             capabilities = (
                 Capability("cli", state, status.reason or "not found"),
                 Capability("mcp", BLOCKED, "REA is not installed"),
+                Capability("ghidra-provider", BLOCKED, "REA is not installed"),
                 Capability("native-analysis", BLOCKED, "no native provider was exercised"),
                 Capability("prx", BLOCKED, "PSP PRX analysis has not been demonstrated"),
             )

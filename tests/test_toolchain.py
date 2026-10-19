@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -22,6 +23,8 @@ from seto.toolchain import (
     detect_all,
     find_ghidra,
     find_tool,
+    _apply_dependencies,
+    rea_node_engine_compatible,
     ghidra_headless_argv,
     ghidra_version,
     load_settings,
@@ -36,6 +39,11 @@ PYTHON = sys.executable
 
 def _node_spec():
     return next(spec for spec in TOOL_SPECS if spec.name == "node")
+
+
+def test_npm_discovery_prefers_the_windows_command_shim() -> None:
+    spec = next(spec for spec in TOOL_SPECS if spec.name == "npm")
+    assert spec.names == ("npm.cmd", "npm")
 
 
 # ------------------------------------------------------------------------- run
@@ -189,9 +197,11 @@ def test_a_configured_binary_that_cannot_be_executed_is_incompatible(tmp_path) -
     assert status.reason
 
 
-def test_a_tool_that_is_not_needed_here_is_still_looked_for(tmp_path) -> None:
+def test_a_tool_that_is_not_needed_here_is_still_looked_for(tmp_path, monkeypatch) -> None:
     # wibo only exists to run a Windows compiler on Linux/WSL2.
     spec = next(spec for spec in TOOL_SPECS if spec.name == "wibo")
+    # Do not let an operator-installed WSL wibo leak into this empty-PATH case.
+    monkeypatch.setattr("seto.toolchain.shutil.which", lambda _name: None)
     absent = find_tool(spec, None, env={}, platform="nt")
     assert absent.state == NOT_APPLICABLE
     assert not absent.found
@@ -221,6 +231,45 @@ def test_a_tool_whose_runtime_is_absent_is_blocked(monkeypatch) -> None:
     assert rea.found  # it is installed...
     assert rea.state == BLOCKED  # ...but it cannot run
     assert "node" in (rea.reason or "")
+
+
+@pytest.mark.parametrize(
+    "version,expected",
+    [
+        ("v22.19.0", True),
+        ("v22.18.9", False),
+        ("v24.10.9", False),
+        ("v24.11.0", True),
+        ("v25.0.0", False),
+        ("v26.0.0", True),
+        ("unknown", False),
+    ],
+)
+def test_rea_node_engine_range_matches_the_pinned_package(version: str, expected: bool) -> None:
+    assert rea_node_engine_compatible(version) is expected
+
+
+def test_rea_dependency_is_blocked_when_installed_node_is_outside_its_engine_range() -> None:
+    node = ToolStatus(
+        "node", "runtime", True, path="/usr/bin/node", version="v18.19.1", state=INSTALLED
+    )
+    rea = ToolStatus(
+        "rea", "analyzer-mcp", True, path="/opt/rea", version="6.5.0", state=INSTALLED
+    )
+
+    statuses = {status.name: status for status in _apply_dependencies((node, rea), platform="posix")}
+
+    assert statuses["node"].state == INCOMPATIBLE
+    assert "v18.19.1" in (statuses["node"].reason or "")
+    assert statuses["rea"].state == BLOCKED
+    assert "node" in (statuses["rea"].reason or "")
+
+    npm = ToolStatus(
+        "npm", "package-manager", True, path="/usr/bin/npm", version="11.19.0", state=INSTALLED
+    )
+    statuses = {status.name: status for status in _apply_dependencies((node, npm), platform="posix")}
+    assert statuses["npm"].state == BLOCKED
+    assert "node" in (statuses["npm"].reason or "")
 
 
 def test_ghidra_without_a_jdk_is_blocked(monkeypatch, tmp_path) -> None:
@@ -373,16 +422,53 @@ def test_find_ghidra_requires_configuration() -> None:
 def test_find_ghidra_uses_an_environment_variable(tmp_path) -> None:
     home = tmp_path / "ghidra"
     (home / "support").mkdir(parents=True)
-    (home / "support" / "analyzeHeadless").write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher_name = "analyzeHeadless.bat" if os.name == "nt" else "analyzeHeadless"
+    launcher = home / "support" / launcher_name
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    if os.name != "nt":
+        launcher.chmod(0o755)
     properties = home / "Ghidra" / "application.properties"
     properties.parent.mkdir()
     properties.write_text("application.version=11.0.1\n", encoding="utf-8")
 
-    status = find_ghidra(None, env={"GHIDRA_HOME": str(home)})
+    status = find_ghidra(
+        None,
+        env={"GHIDRA_HOME": str(home)},
+        platform="nt" if os.name == "nt" else "posix",
+    )
     assert status.found
     assert status.version == "11.0.1"
-    assert status.path is not None and status.path.endswith("analyzeHeadless")
+    assert status.path is not None and status.path.endswith(launcher_name)
     assert ghidra_version(home) == "11.0.1"
+
+
+def test_find_ghidra_prefers_the_native_launcher_for_each_platform(tmp_path) -> None:
+    home = tmp_path / "ghidra"
+    support = home / "support"
+    support.mkdir(parents=True)
+    posix = support / "analyzeHeadless"
+    windows = support / "analyzeHeadless.bat"
+    posix.write_text("#!/bin/sh\n", encoding="utf-8")
+    posix.chmod(0o755)
+    windows.write_text("@echo off\r\n", encoding="ascii")
+
+    assert find_ghidra(str(home), env={}, platform="posix").path == str(posix)
+    assert find_ghidra(str(home), env={}, platform="nt").path == str(windows)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits are not available on Windows")
+def test_find_ghidra_rejects_a_non_executable_posix_launcher(tmp_path) -> None:
+    home = tmp_path / "ghidra"
+    support = home / "support"
+    support.mkdir(parents=True)
+    launcher = support / "analyzeHeadless"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    status = find_ghidra(str(home), env={}, platform="posix")
+
+    assert status.found
+    assert status.state == INCOMPATIBLE
+    assert "not executable" in (status.reason or "")
 
 
 def test_find_ghidra_reports_a_missing_home(tmp_path) -> None:
