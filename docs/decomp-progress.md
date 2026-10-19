@@ -3441,3 +3441,148 @@ operacional ignorado `build/seto019/REPORT.md`; ele também contém o diff unifi
 Git exato contra a base da PR. Nenhuma regressão de mídia foi observada. Os
 opt-ins REA/Metrowerks dependem dos recursos locais e não são exigidos pelo CI
 público.
+
+## SETO-DECOMP-020 — Matching completion e reconstrução avançada
+
+Esta rodada começou de uma branch nova `feat/seto-decomp-020` em `main` após o
+merge da PR #18/019. HEAD-base `e11f8c0d2ccced2477cdc1460463d53ff55ba63e`; o
+SHA do PRX continua `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+Os resultados históricos 018-R2 e 019 acima foram copiados/verificados antes
+dos novos experimentos e preservados em `build/seto020/history/`; nenhuma
+mudança foi feita em `matching.py`, em flags ou em critérios de equivalência.
+
+### Baseline antes da primeira alteração
+
+| Função | Status reproduzido na base 019 |
+|---|---|
+| `0x6E8` | `MATCHED` 47/47 |
+| `0x7A4` | `MATCHED` 83/83 |
+| `0x1A3C` | `NONMATCHING` 46/52; palavras `[8,9,10,12,13,14]` |
+| `0xFF0` | `NONMATCHING` 122/153; 31 diferenças concentradas na alocação de saved registers |
+| `0x1E94` | `NONMATCHING` 7/31; 24 diferenças de midpoint/CFG/branches |
+| `libhtml_view.prx` | 15 integrações reais: 7 `MATCHED`, 8 `INCONCLUSIVE`, 0 `NONMATCHING` |
+
+`baseline-only` confirmou 25 intervalos e `triage.json` continuou selecionando
+os mesmos três candidatos. Os hashes de baseline, triage e Ghidra são os mesmos
+reproduzidos em 019 (tabela da seção anterior). As integrações do baseline usam
+objetos/logs de `build/seto020` ou a cópia preservada; a fonte original em
+`private/` permaneceu intacta.
+
+### `func_00001A3C` — cleanup por contador
+
+O diagnóstico estruturado está em `build/seto020/diagnostics/function-divergences.md`
+e `.json`. Para cada divergência, registra word index/endereço, instruções e
+words, basic block, predecessors/successors originais e candidatos, delay-slot
+relation, registradores e hipótese. A faixa divergente `[0x1A5C,0x1A78)` é um
+único problema de controle/agendamento do loop: o original inicializa o contador
+de quatro bytes no delay slot do teste de ponteiro, decrementa o contador no
+corpo, e executa o incremento do ponteiro no delay slot do `bne`. O C R2 usava
+ponteiro de término e branch-likely; os seis words divergiam na comparação,
+incremento/decremento e store atrasado.
+
+Foram compiladas as três formas direcionadas pedidas:
+
+| Variante | Hipótese | Resultado real |
+|---|---|---|
+| A — ponteiro de término sem guarda | `cursor`/`end` e `do { *cursor++=0; } while (cursor != end)` | Objeto de 204 bytes/51 words; o matcher recusou tamanho versus 208 bytes/52 words (exit 1, sem veredito). Source `26030c1c…6001ae`; object `7099285d…562d3182`. |
+| B — índice crescente com guarda | `bytes[index++]`, condição `index < sizeof(digits)` | 204 bytes/51 words; mesmo erro de tamanho, sem veredito. Source `3b943dac…488a3a`; object `d420abbe…463d402`. |
+| C — contador decrescente unsigned | `unsigned int remaining=sizeof(digits)`; zero store por byte; `while (--remaining != 0)` | **MATCHED 52/52**, zero diferenças/issues/limitações, `verified_decompilation=true`. O código C manteve `short digits[2]`, guarda e acesso legal por `unsigned char`; sem padding/asm/UB. |
+
+A variante C reproduz exatamente o schedule observado, inclusive `li v1,4` no
+delay slot do `beq` e o incremento de `cursor` no delay slot do `bne`. Source C
+versionada SHA-256 `f7c851816953ab26c60e91cc71c9c07ddeecae467feb1b6b65a4dbb1c7e45e11`,
+object `c2932f8ca2a37486833c44796e45fba0725062eb53ee12ac1749a7d40e7e2407`.
+Duas compilações/matches frescos produziram os mesmos hashes e resultado.
+
+### `func_00000FF0` — vida útil e alocação de registradores
+
+O diagnóstico word-a-word e CFG também está no relatório estruturado acima.
+As 31 diferenças R19 eram todas substitutions no conjunto de `s0–s4` em
+operações com os mesmos opcodes; prologue/stack, aritmética e calls permaneciam
+iguais. O mapeamento observado target→candidato era `s0→s4`, `s1→s0`, `s2→s1`,
+`s3→s2`, `s4→s3`. Isso relaciona as divergências a uma única decisão de
+alocação/liveness, não a 31 falhas semânticas independentes.
+
+Os hints `register` nos parâmetros não mudaram o objeto. Uma versão com um
+handle local separado ficou quatro bytes menor (608 versus 612) e foi recusada
+antes de veredito. Reordenar apenas as declarações dos dois temporários reais,
+mantendo todas as expressões/efeitos e a assinatura O32, fez o Metrowerks mapear
+os mesmos valores para os mesmos saved registers do PRX. Não foi introduzida
+operação dummy nem mudada a otimização.
+
+Resultado atual: **MATCHED 153/153**, zero divergências/issues/limitações,
+`verified_decompilation=true`; duas compilações e matches frescos idênticos.
+Source SHA-256 `da4715fedcf351efc48b3f3e850e63f52920e744198d95efef38fb11c53717fd`,
+object SHA-256 `5c7a2f176d71b89cd3921aa43ca0e05bfe692cf485d1f4782dc6f4fc70b39496`.
+
+### `func_00001E94` — busca binária permanece não equivalente
+
+O diagnóstico CFG está em `function-divergences.md`: a região inicial difere
+na validação/ordem de `count`, a região central no midpoint/endereço/igualdade,
+e o final na polaridade dos branches e atualização dos limites/backedge. A
+busca usa `lhu`, comparação unsigned e stride; não há calls/datarefs. O único
+caller local recuperado (`func_00001D08`, site `0x1D24`) passa `count=4` e
+`stride_bytes=0xC`, mas o C mantém midpoint sem overflow assinado para todos os
+inputs representáveis; não foi enfraquecida a semântica por causa desse caller.
+
+Experimentos temporários, compilados com o profile oficial, pioraram a cobertura
+e foram descartados: midpoint via soma unsigned `5/31` (26 diferenças), comparar
+primeiro e materializar a condição `4/31` (27), estrutura com `goto` de igualdade
+`6/31` (25), e laço `while` estruturado `4/31` (27). A fonte R2 original permanece
+o melhor resultado: `NONMATCHING 7/31`, 24 diferenças `[4,5,6,8–20,22–29]`, sem
+issues/limitações. Source final SHA-256
+`90d69616d10e982da6169d9c5df4beade008e1cb734c8d471d3b088fb3b82889`; object
+`2ca13c407d52329349857d30ecf813892735882eac7b2f5156d57660a4220f22`.
+
+### `func_000014E0` — triagem independente
+
+Como candidatas anteriores já atingiram `MATCHED`, foi iniciada a prioridade 4.
+Ghidra/Allegrex confirma body exato de 161 words, frame de 48 bytes, oito
+chamadas importadas e lógica de preenchimento com conversões unsigned→float,
+clamps e FPU. A listagem associa argumentos O32 a renderer/x/y/mode/total/flags/
+current/context; o único caller local `0x1764` fornece total/current via
+`func_000037E0`, mas a identidade/garantia de não-zero desses dados não está
+provada. m2c alerta para argumentos de registers sem contexto e não deve ser
+tratado como protótipo.
+
+Um C experimental não versionado em `build/seto020/experiments/14e0/` compilou,
+mas obteve apenas `NONMATCHING 30/161`, 131 diferenças e 11 relocation issues.
+Como a conversão FPU/unsigned e o domínio dos valores ainda não estão
+comprovados, nenhuma fonte `func_000014E0.c` especulativa foi versionada. A
+triagem word-a-word, CFG e delay slots está em
+`build/seto020/diagnostics/func_000014E0-experiment.md`; os 131 detalhes foram
+obtidos com maior limite de serialização no `compare` existente apenas para
+diagnóstico (sem alterar o veredito/critério oficial). As limitações são
+preservadas para uma rodada futura.
+
+### Total verificado após 020
+
+| Módulo / estado | Contagem |
+|---|---:|
+| `MATCHED` acumulados (7 `libhtml_view` + 4 `libtutoriallist`) | **11 funções** |
+| `INCONCLUSIVE` em `libhtml_view` | **8 funções**, 231/291 words certificados; 60 continuam limitados por identidade de dados |
+| `NONMATCHING` atual | **1 função**: `0x1E94`, 7/31 |
+| Novos words certificados em 020 | **205**: 52 (`0x1A3C`) + 153 (`0xFF0`) |
+| Words MATCHED acumulados nestes conjuntos | **551**: 216 `libhtml_view` + 335 `libtutoriallist` |
+
+O status histórico de R19 para `0x1A3C` (46/52) e `0xFF0` (122/153) permanece nas
+seções anteriores. A atualização 020 substitui as expectativas correntes dos
+testes por matches estritos, não apaga o histórico e mantém `0x1E94` como
+`NONMATCHING`.
+
+### Gates e regressões 020
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 35 skipped |
+| `pytest -q -rs` | WSL2 | 779 passed, 17 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 30 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 42 passed, 11 skipped, 743 deselected |
+| Opt-ins reais 018 + 019 + 020 | WSL2 | 4 passed; `0x6E8`, `0x7A4`, `0x1A3C`, `0xFF0`, `0x1E94` reproduzidos |
+| `compileall -q src scripts tests` | Windows / WSL2 | clean |
+| `git diff --check` | Windows Git | clean (WSL Git cannot resolve this Windows-linked worktree's common-dir path) |
+
+Os skips restantes são requisitos de plataforma, ISO ausente, opt-ins intencionais,
+Java/REA indisponíveis no WSL2 e três testes YAML opcionais sem PyYAML; nenhum
+skip foi promovido a aprovação de matching. `build/seto020/REPORT.md` contém a
+lista detalhada dos skips, hashes, medições e diff exato contra `main`.
