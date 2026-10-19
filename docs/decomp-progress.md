@@ -3741,3 +3741,114 @@ Os skips restantes são requisitos de plataforma, ISO ausente, opt-ins
 intencionais e provedores REA/Ghidra não instalados no WSL2; nenhum skip foi
 promovido a aprovação de matching. `build/seto021/REPORT.md` contém a lista
 detalhada dos skips, hashes, medições e o diff exato contra a base.
+
+### SETO-DECOMP-021-R2 — Input Contracts & Provenance Correction
+
+Correção documental posterior à auditoria da 021, aplicada sobre a mesma
+branch/PR #20: apenas comentários em `decomp/src/libtutoriallist/
+func_000014E0.c` e `decomp/src/libtutoriallist/func_00001E94.c`
+(54 inserções / 10 remoções), sem qualquer statement, assinatura, constante,
+import ou header alterado. A verificação mecânica (fonte de `HEAD` × working
+tree, com comentários removidos) resulta em texto idêntico, e a recompilação
+produz objetos byte a byte idênticos aos certificados na 021 — `301afd4c…`
+para `0x14E0` e `24df0bdb…` para `0x1E94`.
+
+**Afirmações corrigidas**
+
+1. O cabeçalho de `func_000014E0.c` afirmava que o chamador `0x1764`
+   "protege os contadores" antes da chamada. Isso não está demonstrado: o
+   único chamador é `0x1764` (call sites `0x19C4` e `0x1A04`), que obtém
+   `total` de `context[1]` do resultado de `func_000037E0` e deriva
+   `progress` de comparações de altura, sem verificar explicitamente
+   `total >= 2`.
+2. O cabeçalho de `func_00001E94.c` não documentava os limites aritméticos e
+   de memória do midpoint direto (`(low + high) / 2`) e do índice sem guarda
+   (`values[middle * stride_halfwords]`).
+3. Os SHA-256 embutidos nos cabeçalhos tinham proveniência ambígua/circular:
+   o de `0x14E0` era o hash da variante experimental vencedora
+   (`c2-early-return`), não o da fonte versionada, e o "Source SHA-256" de
+   `0x1E94` era o hash da variante E7 do experimento
+   (`e7-wrapper-low-first`). Nenhuma fonte C carrega mais hashes; a
+   proveniência fica neste documento, em `build/seto021/REPORT.md` e na
+   descrição da PR #20.
+
+**Pré-condições de comportamento definido de `0x14E0`** (documentadas, não
+impostas em runtime; nenhum guard, clamp, cast ou branch foi adicionado):
+
+| Entrada | Comportamento |
+|---|---|
+| `progress == 0` | retorna antes do módulo e antes de qualquer divisão de ponto flutuante, independentemente de `total` |
+| `progress != 0`, `total == 0` | atinge `current % total` — divisão inteira por zero, indefinida em C; o original executa `divu` com divisor zero, caso que a arquitetura também não define |
+| `progress != 0`, `total == 1` | `half == 0` e o braço `else` executa `(float)(total - rem) / (float)half`, uma divisão de ponto flutuante por zero, não um quociente normal |
+| `progress != 0`, `total >= 2` | `half >= 1`; ambos os braços dividem por um denominador não nulo |
+
+`half = total / 2` é seguro para `total == 0` (divisão unsigned definida,
+resulta 0); o risco começa no módulo. O comentário versionado não afirma que
+entradas fora do domínio sejam impossíveis — apenas registra o domínio no
+qual a reconstrução C tem comportamento definido.
+
+**Limites de `0x1E94`**: `count` não negativo e pequeno o suficiente para
+`count - 1` e `low + high` caberem em `int` — sob o invariante
+`0 <= low <= high < count`, `count <= 2^30` (1073741824) é limite suficiente
+para a soma; `middle * stride_halfwords` precisa caber em `int`;
+`stride_bytes / 2` preserva a divisão assinada com truncamento do original
+(stride negativo e ímpar inclusos); `values` precisa apontar para
+armazenamento válido, alinhado a halfword e suficientemente extenso para
+todos os índices acessados (`lhu`, operandos em `[0, 0xFFFF]`); `count == 0`
+retorna `-1` sem acessar memória. O caller local conhecido (`func_00001D08`)
+usa `count = 4` e `stride_bytes = 0xC` — evidência de uso, não contrato
+universal. O midpoint direto foi mantido por corresponder à sequência MIPS
+original; a forma segura `low + (high - low) / 2` da 020 não corresponde ao
+binário.
+
+**Matching binário × comportamento C definido**: a equivalência certificada
+é a das instruções originais; o código C tem comportamento definido apenas
+no domínio documentado acima, para entradas arbitrárias. Nenhum critério de
+matching, flag, relocação, toolchain, assinatura de import ou política de
+comparação foi alterado, e os 14 `MATCHED` / 906 words permanecem os da 021.
+
+**Hashes finais** (recalculados após todas as alterações; objetos inalterados
+em relação à certificação da 021):
+
+| Distinção | Artefato | SHA-256 |
+|---|---|---|
+| 1. variante experimental | `c2-early-return` de `0x14E0` | `61917f9d5bda564baa3ed45dd6fece1fba3d2c1e86810c1d93cb856f02b611b3` |
+| 1. variante experimental | `e7-wrapper-low-first` de `0x1E94` | `fc0e0b93f7ac4f2ef9cd7f8b72191093ed7c2f35336244ce172c98864365b155` |
+| 2. fonte final versionada (R2) | `func_000014E0.c` | `464b158ef133b8f589cf875236bc47a0f4657f4f24a2be2fb6322936152a8b97` |
+| 2. fonte final versionada (R2) | `func_00001E94.c` | `34722bc5e04dc6e6f8da79d4768a122879a04fd4bc48ce4ce941ac0f1f18563a` |
+| 2b. fonte versionada da R1 (histórico) | `func_000014E0.c` R1 | `009dcba008c5ded30eecfb5ed32a149bcd4801a7a076da5f3e65897f195a6248` |
+| 2b. fonte versionada da R1 (histórico) | `func_00001E94.c` R1 | `6dc89326fde1e8aa0f12cb4edd80bb6ab0e8c3b6e86675b71275ad700392f565` |
+| 3. objeto compilado (inalterado) | `0x14E0` | `301afd4c338e0ac606c065e05150e6c336a030be61bc01f9fcd64d7905e9bd69` |
+| 3. objeto compilado (inalterado) | `0x1E94` | `24df0bdbcc2926ef4c5e8bf0c18231dcf9047068447ed978e68916f834c8fcc4` |
+| 4. PRX original | `libtutoriallist.prx` | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+
+Fontes inalteradas nesta correção: `0x1254` `d9082eb8…` (objeto `78ab23a0…`)
+e `0x1764` `e8e9a4a5…` (objeto `0a8d3235…`).
+
+**Matching após a correção**: duas compilações/matches frescas por função,
+nos mesmos moldes da 021 — `0x14E0` `MATCHED` 161/161 e `0x1E94` `MATCHED`
+31/31, com `differences == []`, `relocation_issues == []`,
+`limitations == []` e `verified_decompilation is True` (`0x1254` 163/163 e
+`0x1764` `NONMATCHING` 42/182 inalterados). Os objetos recém-compilados são
+idênticos aos da certificação original, o que demonstra materialmente que a
+correção foi apenas documental.
+
+**Testes após a correção**:
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 36 skipped |
+| `pytest -q -rs` | WSL2 | 779 passed, 18 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 31 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 42 passed, 12 skipped, 743 deselected |
+| Opt-ins reais 018 + 019 + 020 + 021 | WSL2 | 5 passed (2+1+1+1) |
+| Baselines reais `test_toolchain_runtime.py` | WSL2 | 17 passed, 2 skipped |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean |
+| fonte sem comentários × `HEAD` | Windows | idêntica (`r2-code-only-check.log`) |
+
+Nenhum teste novo foi necessário: a R2 não introduz comportamento novo e as
+suítes 018–021 já recompilam e comparam as quatro funções a cada execução com
+as fontes corrigidas. Os logs WSL2 frescos ficam em `build/seto021/gates/`
+(`wsl-full.log`, `wsl-integration.log`, `018`–`021`, `baselines`); os números
+históricos das rodadas 018–021 permanecem como registrados acima.
