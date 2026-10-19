@@ -12,6 +12,7 @@ configurable timeout and bounded output capture.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -165,6 +166,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         ("--version",),
     ),
     ToolSpec(
+        "npm",
+        "package-manager",
+        "npm CLI used to install the pinned REA package",
+        "SETO_NPM",
+        ("npm.cmd", "npm"),
+        ("--version",),
+        requires=("node",),
+    ),
+    ToolSpec(
         "java",
         "runtime",
         "Java runtime (required by Ghidra)",
@@ -187,6 +197,26 @@ GHIDRA_ENV_VARS = ("SETO_GHIDRA_HOME", "GHIDRA_HOME", "GHIDRA_INSTALL_DIR")
 GHIDRA_HEADLESS_NAMES = ("analyzeHeadless.bat", "analyzeHeadless")
 #: Ghidra needs a JDK, and recent releases need a recent one.
 GHIDRA_MIN_JAVA = 21
+
+# Verified against the engine range in the pinned rea-agents 6.5.0 package.
+# Keep this separate from the general Node script smoke: Node can execute JS
+# while still being outside the version range REA declares.
+REA_NODE_ENGINE_REQUIREMENT = "^22.19.0 || ^24.11.0 || >=26.0.0"
+_NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:\+[-0-9A-Za-z.]+)?$")
+
+
+def rea_node_engine_compatible(version: str | None) -> bool:
+    """Return whether a Node version satisfies the pinned REA engine range."""
+    match = _NODE_VERSION_RE.fullmatch((version or "").strip())
+    if match is None:
+        return False
+    parsed = tuple(int(part) for part in match.groups())
+    major, minor, _patch = parsed
+    return (
+        (major == 22 and parsed >= (22, 19, 0))
+        or (major == 24 and parsed >= (24, 11, 0))
+        or major >= 26
+    )
 
 
 @dataclass(frozen=True)
@@ -621,10 +651,14 @@ def _status_with_version(
 
 
 def find_ghidra(
-    configured_home: str | None = None, *, env: Mapping[str, str] | None = None
+    configured_home: str | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+    platform: str | None = None,
 ) -> ToolStatus:
     """Locate a Ghidra installation and its headless launcher."""
     source = dict(os.environ if env is None else env)
+    current_platform = platform or platform_family()
     home: str | None = configured_home
     if not home:
         home = next((source[var] for var in GHIDRA_ENV_VARS if source.get(var)), None)
@@ -645,12 +679,13 @@ def find_ghidra(
             reason=f"GHIDRA home {home!r} does not exist",
             state=MISSING,
         )
+    names = (
+        GHIDRA_HEADLESS_NAMES
+        if current_platform == "nt"
+        else tuple(reversed(GHIDRA_HEADLESS_NAMES))
+    )
     launcher = next(
-        (
-            root / "support" / name
-            for name in GHIDRA_HEADLESS_NAMES
-            if (root / "support" / name).is_file()
-        ),
+        (root / "support" / name for name in names if (root / "support" / name).is_file()),
         None,
     )
     if launcher is None:
@@ -660,6 +695,26 @@ def find_ghidra(
             False,
             reason=f"no analyzeHeadless launcher under {root / 'support'}",
             state=MISSING,
+        )
+    if current_platform == "posix" and launcher.name != "analyzeHeadless":
+        return ToolStatus(
+            "ghidra",
+            "analyzer",
+            True,
+            path=str(launcher),
+            version=ghidra_version(root),
+            reason="only the Windows headless launcher is present on a POSIX host",
+            state=INCOMPATIBLE,
+        )
+    if current_platform == "posix" and os.name == "posix" and not os.access(launcher, os.X_OK):
+        return ToolStatus(
+            "ghidra",
+            "analyzer",
+            True,
+            path=str(launcher),
+            version=ghidra_version(root),
+            reason="the POSIX Ghidra headless launcher is not executable",
+            state=INCOMPATIBLE,
         )
     return ToolStatus(
         "ghidra",
@@ -714,7 +769,13 @@ def detect_all(
             )
         )
     ghidra_home = active.get("tools", "ghidra", "path")
-    statuses.append(find_ghidra(str(ghidra_home) if ghidra_home else None, env=env))
+    statuses.append(
+        find_ghidra(
+            str(ghidra_home) if ghidra_home else None,
+            env=env,
+            platform=current_platform,
+        )
+    )
     return tuple(_apply_dependencies(statuses, platform=platform))
 
 
@@ -740,9 +801,24 @@ def _compiler_version_loader(
 def _apply_dependencies(
     statuses: Sequence[ToolStatus], *, platform: str | None = None
 ) -> list[ToolStatus]:
-    by_name = {status.name: status for status in statuses}
-    resolved: list[ToolStatus] = []
+    by_name: dict[str, ToolStatus] = {}
     for status in statuses:
+        if status.name == "node" and status.state == INSTALLED:
+            if not rea_node_engine_compatible(status.version):
+                state = INCOMPATIBLE if status.version else BLOCKED
+                version = status.version or "version could not be determined"
+                status = replace(
+                    status,
+                    state=state,
+                    reason=(
+                        f"REA 6.5.0 requires Node {REA_NODE_ENGINE_REQUIREMENT}; "
+                        f"detected {version}"
+                    ),
+                )
+        by_name[status.name] = status
+    resolved: list[ToolStatus] = []
+    for original in statuses:
+        status = by_name[original.name]
         spec = spec_for(status.name)
         required = list(spec.requires) if spec is not None else []
         if status.name == "ghidra":

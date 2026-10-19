@@ -31,16 +31,23 @@ MODULE = (
     / "libhtml_view.prx"
 )
 
+
+def _toolchain_config() -> Path:
+    wsl_profile = REPO_ROOT / "config" / "wsl" / "seto.toml"
+    if os.name == "posix" and wsl_profile.is_file():
+        return wsl_profile
+    return REPO_ROOT / "config" / "seto.toml"
+
 if not MODULE.is_file():
     pytest.skip("original PRX is absent; this check only reads private/", allow_module_level=True)
 
 
 def test_ghidra_inspects_the_real_prx_and_selected_functions(tmp_path) -> None:
     """Automatic PSP import and the selected function boundaries are real."""
-    settings = load_settings(REPO_ROOT / "config" / "seto.toml")
+    settings = load_settings(_toolchain_config())
     ghidra = next(status for status in detect_all(settings) if status.name == "ghidra")
     if not ghidra.found:
-        pytest.skip("Ghidra is not configured")
+        pytest.skip(ghidra.reason or "Ghidra is not configured for this profile")
     if ghidra.state == BLOCKED:
         pytest.skip(ghidra.reason or "Ghidra runtime is blocked")
 
