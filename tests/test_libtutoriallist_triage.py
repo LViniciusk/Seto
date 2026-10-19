@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Mapping
@@ -90,6 +91,7 @@ def _ghidra_report(baseline: Mapping[str, object], *, not_found: tuple[int, ...]
                 "body_end": function["end"] if boundary == "EXACT" else None,
                 "body_addresses": function["size_bytes"] if boundary == "EXACT" else None,
                 "body_ranges": 1 if boundary == "EXACT" else 0,
+                "addressable_unit_size": 1 if boundary == "EXACT" else None,
             }
         )
     return {"schema_version": 1, "module_sha256": baseline["module"]["sha256"], "functions": functions}
@@ -215,7 +217,123 @@ def test_foreign_or_incomplete_ghidra_evidence_is_rejected() -> None:
         triage.build_triage(baseline, split_body)
 
 
-def _match_envelope(*, status: str = "INCONCLUSIVE", module_sha: str = "a" * 64):
+def test_ghidra_log_is_parsed_and_checked_against_module_intervals() -> None:
+    module, module_sha = _synthetic_module()
+    baseline = triage.build_baseline(module, module_sha, module_path="synthetic.prx")
+    lines = [
+        "INFO> SETO_LANGUAGE=Allegrex:LE:32:default (GhidraScript)",
+        "INFO> SETO_COMPILER_SPEC=default (GhidraScript)",
+        "INFO> SETO_IMAGE_BASE=00000000 (GhidraScript)",
+        # Irrelevant analyzer logs, including paths, are ignored by the marker parser.
+        "INFO> imported C:\\agent-machine\\private\\not-serialized.prx",
+    ]
+    for index, function in enumerate(baseline["functions"]):
+        start = int(str(function["start"]), 16)
+        end = int(str(function["end"]), 16)
+        lines.extend(
+            (
+                f"INFO> SETO_FUNCTION_START=0x{start:x} (GhidraScript)",
+                f"INFO> SETO_FUNCTION_END=0x{end:x} (GhidraScript)",
+            )
+        )
+        if index == 0:
+            lines.extend(
+                (
+                    "INFO> SETO_BOUNDARY_STATUS=NOT_FOUND (GhidraScript)",
+                    "INFO> SETO_DECOMP_STATUS=NOT_RUN (GhidraScript)",
+                )
+            )
+        else:
+            lines.extend(
+                (
+                    f"INFO> SETO_GHIDRA_FUNCTION=FUN_{start:08x} (GhidraScript)",
+                    f"INFO> SETO_FUNCTION_BODY_START={start:08x} (GhidraScript)",
+                    f"INFO> SETO_FUNCTION_BODY_END={end:08x} (GhidraScript)",
+                    f"INFO> SETO_FUNCTION_BODY_ADDRESSES={end - start} (GhidraScript)",
+                    "INFO> SETO_FUNCTION_BODY_RANGES=1 (GhidraScript)",
+                    "INFO> SETO_ADDRESSABLE_UNIT_SIZE=1 (GhidraScript)",
+                    "INFO> SETO_BOUNDARY_STATUS=EXACT (GhidraScript)",
+                    "INFO> SETO_DECOMP_STATUS=OK (GhidraScript)",
+                )
+            )
+
+    report = triage.parse_ghidra_output("\n".join(lines), baseline)
+    triage.validate_ghidra_evidence(report, baseline)
+    serialized = triage.canonical_json(report)
+    assert report["module_sha256"] == module_sha
+    assert report["analyzer"]["language"] == "Allegrex:LE:32:default"
+    assert "C:\\agent-machine" not in serialized
+
+    with pytest.raises(triage.ProbeError, match="contains no SetoAnalyzeFunction records"):
+        triage.parse_ghidra_output("INFO> unrelated log\n", baseline)
+
+    missing_unit_size = json.loads(serialized)
+    exact = next(row for row in missing_unit_size["functions"] if row["boundary_status"] == "EXACT")
+    del exact["addressable_unit_size"]
+    with pytest.raises(triage.ProbeError, match="incomplete"):
+        triage.validate_ghidra_evidence(missing_unit_size, baseline)
+
+    inconsistent_status = json.loads(serialized)
+    exact = next(row for row in inconsistent_status["functions"] if row["boundary_status"] == "EXACT")
+    exact["decomp_status"] = "NOT_RUN"
+    with pytest.raises(triage.ProbeError, match="inconsistent Ghidra boundary/decompilation status"):
+        triage.validate_ghidra_evidence(inconsistent_status, baseline)
+
+    wrong_unit_size = json.loads(serialized)
+    exact = next(row for row in wrong_unit_size["functions"] if row["boundary_status"] == "EXACT")
+    exact["addressable_unit_size"] = 2
+    with pytest.raises(triage.ProbeError, match="body evidence disagrees"):
+        triage.validate_ghidra_evidence(wrong_unit_size, baseline)
+
+    duplicate_interval = json.loads(serialized)
+    duplicate_interval["functions"][1]["start"] = duplicate_interval["functions"][0]["start"]
+    duplicate_interval["functions"][1]["end"] = duplicate_interval["functions"][0]["end"]
+    with pytest.raises(triage.ProbeError, match="unknown or duplicate function interval"):
+        triage.validate_ghidra_evidence(duplicate_interval, baseline)
+
+
+def test_baseline_only_cli_never_requires_ghidra_evidence(tmp_path: Path, monkeypatch) -> None:
+    module, module_sha = _synthetic_module()
+    repo = tmp_path / "repo"
+    prx = repo / triage.MODULE_RELATIVE
+    prx.parent.mkdir(parents=True)
+    prx.write_bytes(module.reader.bytes_at(0, module.reader.size))
+    monkeypatch.setattr(triage, "REPO_ROOT", repo)
+    monkeypatch.setattr(triage, "EXPECTED_MODULE_SHA256", module_sha)
+
+    assert triage.main(["--baseline-only"]) == 0
+    build_root = repo / "build" / "seto018"
+    baseline = json.loads((build_root / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["module"]["sha256"] == module_sha
+    assert len(baseline["functions"]) == 5
+    assert not (build_root / "ghidra-boundaries.json").exists()
+    assert not (build_root / "triage.json").exists()
+
+
+def _match_envelope(
+    *,
+    status: str = "INCONCLUSIVE",
+    module_sha: str = "a" * 64,
+    total_words: int | None = None,
+    matching_words: int | None = None,
+    difference_count: int = 0,
+    differences: list[dict[str, object]] | None = None,
+    relocation_issues: list[str] | None = None,
+    limitations: list[str] | None = None,
+):
+    if total_words is None:
+        total_words = 47 if status == "MATCHED" else 20
+    if matching_words is None:
+        matching_words = total_words if status == "MATCHED" else 18
+    if differences is None:
+        differences = []
+    if relocation_issues is None:
+        relocation_issues = []
+    if limitations is None:
+        limitations = [] if status == "MATCHED" else ["data object identity is unknown"]
+    equivalence = (
+        "function equivalence with canonically resolved relocations" if status == "MATCHED" else ""
+    )
     record = {
         "function": "func_00000000",
         "address": "0x0",
@@ -223,9 +341,7 @@ def _match_envelope(*, status: str = "INCONCLUSIVE", module_sha: str = "a" * 64)
         "symbol": "func_00000000",
         "status": status,
         "evidence": "compiled-object",
-        "equivalence": "function equivalence with canonically resolved relocations"
-        if status == "MATCHED"
-        else None,
+        "equivalence": equivalence,
         "verified_decompilation": status == "MATCHED",
         "exit_code": {"MATCHED": 0, "NONMATCHING": 3, "INCONCLUSIVE": 5}[status],
         "provenance": {
@@ -238,12 +354,13 @@ def _match_envelope(*, status: str = "INCONCLUSIVE", module_sha: str = "a" * 64)
             "name": "func_00000000",
             "address": 0,
             "status": status,
-            "matching_words": 2,
-            "total_words": 2,
-            "difference_count": 0,
-            "differences": [],
-            "relocation_issues": [],
-            "limitations": [] if status == "MATCHED" else ["data object identity is unknown"],
+            "equivalence": equivalence,
+            "matching_words": matching_words,
+            "total_words": total_words,
+            "difference_count": difference_count,
+            "differences": differences,
+            "relocation_issues": relocation_issues,
+            "limitations": limitations,
             "resolved_calls": [],
             "resolved_data": [],
             # Numeric address/word equality is not an identity proof and does not alter status.
@@ -264,9 +381,16 @@ def _match_envelope(*, status: str = "INCONCLUSIVE", module_sha: str = "a" * 64)
 
 def test_match_report_sha_and_inconclusive_status_are_fail_closed() -> None:
     summary = triage.validate_match_envelope(
-        _match_envelope(), expected_module_sha256="a" * 64, expected_function=0
+        _match_envelope(),
+        expected_module_sha256="a" * 64,
+        expected_function=0,
+        expected_total_words=20,
     )
     assert summary["status"] == "INCONCLUSIVE"
+    assert summary["matching_words"] == 18
+    assert summary["total_words"] == 20
+    assert summary["difference_count"] == 0
+    assert summary["limitations"] == ["data object identity is unknown"]
     assert summary["verified_decompilation"] is False
 
     with pytest.raises(triage.ProbeError, match="another module SHA-256"):
@@ -302,32 +426,143 @@ def test_matched_report_requires_zero_differences_and_no_limitations() -> None:
         _match_envelope(status="MATCHED"),
         expected_module_sha256="a" * 64,
         expected_function=0,
-        expected_total_words=2,
+        expected_total_words=47,
     )
     assert valid["status"] == "MATCHED"
+    assert valid["matching_words"] == 47
+    assert valid["total_words"] == 47
 
     bad_diff = _match_envelope(status="MATCHED")
     bad_diff["record"]["match"].update(
-        {"matching_words": 1, "difference_count": 1, "differences": [{"word_index": 0}]}
+        {"matching_words": 46, "difference_count": 1, "differences": [{"word_index": 0}]}
     )
-    with pytest.raises(triage.ProbeError, match="MATCHED report contains differences"):
+    with pytest.raises(triage.ProbeError, match="MATCHED report lacks"):
         triage.validate_match_envelope(
             bad_diff, expected_module_sha256="a" * 64, expected_function=0
         )
 
     bad_limit = _match_envelope(status="MATCHED")
     bad_limit["record"]["match"]["limitations"] = ["identity unresolved"]
-    with pytest.raises(triage.ProbeError, match="MATCHED report contains differences"):
+    with pytest.raises(triage.ProbeError, match="MATCHED report lacks"):
         triage.validate_match_envelope(
             bad_limit, expected_module_sha256="a" * 64, expected_function=0
         )
 
     bad_relocation = _match_envelope(status="MATCHED")
     bad_relocation["record"]["match"]["relocation_issues"] = ["unresolved relocation"]
-    with pytest.raises(triage.ProbeError, match="MATCHED report contains differences"):
+    with pytest.raises(triage.ProbeError, match="MATCHED report lacks"):
         triage.validate_match_envelope(
             bad_relocation, expected_module_sha256="a" * 64, expected_function=0
         )
+
+    bad_equivalence = _match_envelope(status="MATCHED")
+    bad_equivalence["record"]["equivalence"] = ""
+    bad_equivalence["record"]["match"]["equivalence"] = ""
+    bad_equivalence["saved_record"]["equivalence"] = ""
+    with pytest.raises(triage.ProbeError, match="MATCHED report lacks"):
+        triage.validate_match_envelope(
+            bad_equivalence, expected_module_sha256="a" * 64, expected_function=0
+        )
+
+
+def test_nonmatching_accepts_truncated_difference_details_and_unaccounted_words() -> None:
+    envelope = _match_envelope(
+        status="NONMATCHING",
+        total_words=20,
+        matching_words=10,
+        difference_count=6,
+        differences=[{"word_index": 1}, {"word_index": 4}],
+        limitations=[],
+    )
+    summary = triage.validate_match_envelope(
+        envelope,
+        expected_module_sha256="a" * 64,
+        expected_function=0,
+        expected_total_words=20,
+    )
+    assert summary["status"] == "NONMATCHING"
+    assert summary["difference_count"] == 6
+    assert len(summary["differences"]) == 2
+    assert summary["matching_words"] + summary["difference_count"] < summary["total_words"]
+
+
+def test_invalid_match_counts_and_status_combinations_are_rejected() -> None:
+    invalid_envelopes = []
+    negative_matching = _match_envelope()
+    negative_matching["record"]["match"]["matching_words"] = -1
+    invalid_envelopes.append(negative_matching)
+
+    boolean_total = _match_envelope()
+    boolean_total["record"]["match"]["total_words"] = True
+    invalid_envelopes.append(boolean_total)
+
+    negative_differences = _match_envelope(status="NONMATCHING", limitations=[])
+    negative_differences["record"]["match"]["difference_count"] = -1
+    invalid_envelopes.append(negative_differences)
+
+    too_many_details = _match_envelope(status="NONMATCHING", limitations=[])
+    too_many_details["record"]["match"]["difference_count"] = 1
+    too_many_details["record"]["match"]["differences"] = [{}, {}]
+    invalid_envelopes.append(too_many_details)
+
+    inconclusive_with_difference = _match_envelope(status="INCONCLUSIVE")
+    inconclusive_with_difference["record"]["match"]["difference_count"] = 1
+    inconclusive_with_difference["record"]["match"]["differences"] = [{}]
+    invalid_envelopes.append(inconclusive_with_difference)
+
+    nonmatching_without_evidence = _match_envelope(
+        status="NONMATCHING", difference_count=0, differences=[], limitations=[]
+    )
+    invalid_envelopes.append(nonmatching_without_evidence)
+
+    overlapping_counts = _match_envelope(
+        status="NONMATCHING",
+        total_words=20,
+        matching_words=20,
+        difference_count=1,
+        differences=[{}],
+        limitations=[],
+    )
+    invalid_envelopes.append(overlapping_counts)
+
+    wrong_inconclusive = _match_envelope(status="INCONCLUSIVE", difference_count=1, differences=[{}])
+    invalid_envelopes.append(wrong_inconclusive)
+
+    malformed_issue = _match_envelope(status="NONMATCHING", difference_count=0, limitations=[])
+    malformed_issue["record"]["match"]["relocation_issues"] = [None]
+    invalid_envelopes.append(malformed_issue)
+
+    invalid_difference_count = _match_envelope()
+    invalid_difference_count["record"]["match"]["difference_count"] = "zero"
+    invalid_envelopes.append(invalid_difference_count)
+
+    boolean_matching_count = _match_envelope()
+    boolean_matching_count["record"]["match"]["matching_words"] = True
+    invalid_envelopes.append(boolean_matching_count)
+
+    boolean_difference_count = _match_envelope()
+    boolean_difference_count["record"]["match"]["difference_count"] = True
+    invalid_envelopes.append(boolean_difference_count)
+
+    inconclusive_without_limitations = _match_envelope(status="INCONCLUSIVE", limitations=[])
+    invalid_envelopes.append(inconclusive_without_limitations)
+
+    invalid_status = _match_envelope()
+    invalid_status["record"]["status"] = "UNKNOWN"
+    invalid_status["record"]["match"]["status"] = "UNKNOWN"
+    invalid_status["saved_record"]["status"] = "UNKNOWN"
+    invalid_envelopes.append(invalid_status)
+
+    invalid_matched_evidence = _match_envelope(status="MATCHED")
+    invalid_matched_evidence["record"]["evidence"] = "binary-range"
+    invalid_matched_evidence["saved_record"]["evidence"] = "binary-range"
+    invalid_envelopes.append(invalid_matched_evidence)
+
+    for envelope in invalid_envelopes:
+        with pytest.raises(triage.ProbeError):
+            triage.validate_match_envelope(
+                envelope, expected_module_sha256="a" * 64, expected_function=0
+            )
 
 
 def test_build_reports_are_deterministic_and_reject_symlinked_outputs(tmp_path: Path) -> None:

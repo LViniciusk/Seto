@@ -32,7 +32,7 @@ from probe_common import (  # noqa: E402
     validated_build_root,
     write_build_text,
 )
-from seto import datarefs, elf, imports, mips, split  # noqa: E402
+from seto import datarefs, elf, imports, matching, mips, split  # noqa: E402
 from seto.hashing import sha256_file  # noqa: E402
 from seto.psp_reloc import psp_inventory  # noqa: E402
 from seto.toolchain import run as run_tool  # noqa: E402
@@ -42,6 +42,7 @@ EXPECTED_MODULE_SHA256 = "2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecd
 GHIDRA_EVIDENCE_NAME = "ghidra-boundaries.json"
 MAX_SELECTED_FUNCTIONS = 3
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GHIDRA_MARKER_RE = re.compile(r"\bSETO_([A-Z_]+)=(.*?)(?:\s+\(GhidraScript\))?\s*$")
 
 CONDITIONAL_BRANCH_OPCODES = {0x01, 0x04, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16, 0x17}
 
@@ -67,8 +68,10 @@ def _reject_repo_symlink_components(path: Path, repo_root: Path, label: str) -> 
             raise ProbeError("FAIL", f"{label} path contains a symlink component")
 
 
-def verify_module_sha256(actual: str, expected: str = EXPECTED_MODULE_SHA256) -> None:
+def verify_module_sha256(actual: str, expected: str | None = None) -> None:
     """Fail closed if the real input is not the pinned module version."""
+    if expected is None:
+        expected = EXPECTED_MODULE_SHA256
     if not _valid_sha256(actual) or actual != expected:
         raise ProbeError("FAIL", "libtutoriallist.prx SHA-256 differs from the pinned baseline")
 
@@ -383,6 +386,8 @@ def validate_ghidra_evidence(
             raise ProbeError("FAIL", f"invalid Ghidra boundary status for {start}")
         if row.get("decomp_status") not in allowed_decomp:
             raise ProbeError("FAIL", f"invalid Ghidra decompilation status for {start}")
+        if (row.get("boundary_status") == "EXACT") != (row.get("decomp_status") in ("OK", "FAILED")):
+            raise ProbeError("FAIL", f"inconsistent Ghidra boundary/decompilation status for {start}")
         try:
             address = int(str(start), 16)
         except ValueError as exc:
@@ -390,11 +395,13 @@ def validate_ghidra_evidence(
         if row.get("boundary_status") == "EXACT":
             body_start, body_end = row.get("body_start"), row.get("body_end")
             body_addresses, body_ranges = row.get("body_addresses"), row.get("body_ranges")
+            addressable_unit_size = row.get("addressable_unit_size")
             try:
                 measured_start = int(str(body_start), 16)
                 measured_end = int(str(body_end), 16)
                 measured_addresses = int(str(body_addresses), 10)
                 measured_ranges = int(str(body_ranges), 10)
+                measured_unit_size = int(str(addressable_unit_size), 10)
                 expected_start = int(str(start), 16)
                 expected_end = int(str(end), 16)
             except (TypeError, ValueError) as exc:
@@ -402,10 +409,12 @@ def validate_ghidra_evidence(
             if (
                 isinstance(body_addresses, bool)
                 or isinstance(body_ranges, bool)
+                or isinstance(addressable_unit_size, bool)
                 or measured_start != expected_start
                 or measured_end != expected_end
                 or measured_ranges != 1
                 or measured_addresses != expected_end - expected_start
+                or measured_unit_size != 1
             ):
                 raise ProbeError("FAIL", f"exact Ghidra body evidence disagrees with interval {start}-{end}")
         indexed[address] = row
@@ -620,6 +629,8 @@ def validate_match_envelope(
     expected_name = mips.function_name(expected_function)
     if record.get("section") != ".text" or record.get("symbol") != expected_name:
         raise ProbeError("FAIL", "match record has the wrong section or candidate symbol")
+    if record.get("evidence") != "compiled-object":
+        raise ProbeError("FAIL", "match record lacks compiled-object evidence")
     provenance = record.get("provenance")
     if not isinstance(provenance, dict):
         raise ProbeError("FAIL", "match record lacks provenance")
@@ -637,13 +648,18 @@ def validate_match_envelope(
     match_payload = record.get("match")
     if not isinstance(match_payload, dict) or match_payload.get("status") != record.get("status"):
         raise ProbeError("FAIL", "match record status disagrees with comparator evidence")
-    if match_payload.get("name") != expected_name or match_payload.get("address") != expected_function:
+    if (
+        match_payload.get("name") != expected_name
+        or match_payload.get("address") != expected_function
+        or match_payload.get("equivalence") != record.get("equivalence")
+    ):
         raise ProbeError("FAIL", "comparator evidence has the wrong function identity")
     status = record.get("status")
     exit_code = record.get("exit_code")
     expected_exit = {"MATCHED": 0, "NONMATCHING": 3, "INCONCLUSIVE": 5}
     if (
-        status not in expected_exit
+        not isinstance(status, str)
+        or status not in expected_exit
         or isinstance(exit_code, bool)
         or not isinstance(exit_code, int)
         or exit_code != expected_exit[status]
@@ -663,20 +679,40 @@ def validate_match_envelope(
     if (
         total_words <= 0
         or not 0 <= matching_words <= total_words
-        or difference_count != len(differences)
-        or matching_words + difference_count != total_words
+        or difference_count < 0
+        or matching_words + difference_count > total_words
+        or len(differences) > difference_count
     ):
-        raise ProbeError("FAIL", "match record word counts disagree with its difference list")
+        raise ProbeError("FAIL", "match record has invalid counts or too many difference details")
+    if any(not isinstance(item, dict) for item in differences):
+        raise ProbeError("FAIL", "match record has malformed difference details")
+    if any(not isinstance(item, str) or not item for item in (*relocation_issues, *limitations)):
+        raise ProbeError("FAIL", "match record has malformed relocation issues or limitations")
     if expected_total_words is not None and total_words != expected_total_words:
         raise ProbeError("FAIL", "match record word total disagrees with the selected interval")
+    equivalence = record.get("equivalence")
+    if match_payload.get("equivalence") != equivalence:
+        raise ProbeError("FAIL", "match record equivalence disagrees with comparator evidence")
     if status == "MATCHED" and (
         matching_words != total_words
         or difference_count != 0
         or differences
         or relocation_issues
         or limitations
+        or equivalence
+        not in (matching.EQUIVALENCE_BINARY, matching.EQUIVALENCE_RESOLVED_RELOCATIONS)
     ):
-        raise ProbeError("FAIL", "MATCHED report contains differences, relocation issues or limitations")
+        raise ProbeError(
+            "FAIL", "MATCHED report lacks full-word equality, a valid equivalence claim, or clean evidence"
+        )
+    if status != "MATCHED" and equivalence != "":
+        raise ProbeError("FAIL", "non-MATCHED report must not carry an equivalence claim")
+    if status == "INCONCLUSIVE" and (
+        difference_count != 0 or differences or relocation_issues or not limitations
+    ):
+        raise ProbeError("FAIL", "INCONCLUSIVE report is inconsistent with matcher limitations")
+    if status == "NONMATCHING" and difference_count == 0 and not relocation_issues:
+        raise ProbeError("FAIL", "NONMATCHING report lacks a proven difference or comparison issue")
     if record.get("verified_decompilation") is not (status == "MATCHED"):
         raise ProbeError("FAIL", "match record promotion flag disagrees with strict matcher status")
     return {
@@ -868,6 +904,119 @@ def write_reports(
     return baseline_path, triage_path
 
 
+def write_baseline_report(
+    baseline: Mapping[str, object], *, repo_root: Path = REPO_ROOT
+) -> Path:
+    """Write the structural baseline without needing any Ghidra evidence."""
+    build_root = validated_build_root(repo_root, subdir="seto018")
+    ensure_build_dir(build_root, build_root)
+    output = build_root / "baseline.json"
+    write_build_text(output, canonical_json(baseline), build_root)
+    return output
+
+
+def parse_ghidra_output(log_text: str, baseline: Mapping[str, object]) -> dict[str, object]:
+    """Extract SetoAnalyzeFunction markers into a hash-bound, path-free report.
+
+    This parses the output protocol of the existing read-only Ghidra script; it
+    does not parse MIPS instructions or infer function boundaries itself.
+    """
+    module = baseline.get("module")
+    if not isinstance(module, dict) or not _valid_sha256(module.get("sha256")):
+        raise ProbeError("FAIL", "baseline lacks a valid module hash for Ghidra evidence")
+    records: list[dict[str, object]] = []
+    metadata: dict[str, str] = {}
+    current: dict[str, object] | None = None
+    fields = {
+        "GHIDRA_FUNCTION": "ghidra_function",
+        "FUNCTION_BODY_START": "body_start",
+        "FUNCTION_BODY_END": "body_end",
+        "FUNCTION_BODY_ADDRESSES": "body_addresses",
+        "FUNCTION_BODY_RANGES": "body_ranges",
+        "ADDRESSABLE_UNIT_SIZE": "addressable_unit_size",
+        "BOUNDARY_STATUS": "boundary_status",
+        "DECOMP_STATUS": "decomp_status",
+    }
+    for line in log_text.splitlines():
+        marker = GHIDRA_MARKER_RE.search(line)
+        if marker is None:
+            continue
+        key, value = marker.group(1), marker.group(2).strip()
+        if key == "ERROR":
+            raise ProbeError("FAIL", f"Ghidra reported an error: {value}")
+        if key in ("LANGUAGE", "COMPILER_SPEC", "IMAGE_BASE"):
+            previous = metadata.setdefault(key.lower(), value)
+            if previous != value:
+                raise ProbeError("FAIL", f"Ghidra {key.lower()} changed within one scan")
+            continue
+        if key == "FUNCTION_START":
+            if current is not None:
+                records.append(current)
+            current = {"start": value}
+            continue
+        if key == "FUNCTION_END":
+            if current is None or "end" in current:
+                raise ProbeError("FAIL", "Ghidra emitted an end marker before a function start")
+            current["end"] = value
+            continue
+        field = fields.get(key)
+        if field is not None:
+            if current is None or field in current:
+                raise ProbeError("FAIL", f"Ghidra emitted {key} before a function start")
+            current[field] = value
+    if current is not None:
+        records.append(current)
+    if not records:
+        raise ProbeError("FAIL", "Ghidra output contains no SetoAnalyzeFunction records")
+    if not all(key in metadata for key in ("language", "compiler_spec", "image_base")):
+        raise ProbeError("FAIL", "Ghidra output is missing language/compiler/image-base metadata")
+
+    normalized: list[dict[str, object]] = []
+    for record in records:
+        try:
+            start = int(str(record["start"]), 0)
+            end = int(str(record["end"]), 0)
+        except (KeyError, ValueError) as exc:
+            raise ProbeError("FAIL", "Ghidra output contains an invalid function interval") from exc
+        row: dict[str, object] = {
+            "start": f"0x{start:x}",
+            "end": f"0x{end:x}",
+            "boundary_status": record.get("boundary_status"),
+            "decomp_status": record.get("decomp_status"),
+        }
+        if "ghidra_function" in record:
+            row["ghidra_function"] = record["ghidra_function"]
+        try:
+            if "body_start" in record:
+                row["body_start"] = f"0x{int(str(record['body_start']), 16):x}"
+            if "body_end" in record:
+                row["body_end"] = f"0x{int(str(record['body_end']), 16):x}"
+            if "body_addresses" in record:
+                row["body_addresses"] = int(str(record["body_addresses"]), 10)
+            if "body_ranges" in record:
+                row["body_ranges"] = int(str(record["body_ranges"]), 10)
+            if "addressable_unit_size" in record:
+                row["addressable_unit_size"] = int(str(record["addressable_unit_size"]), 10)
+        except ValueError as exc:
+            raise ProbeError("FAIL", f"invalid Ghidra body measurement for 0x{start:x}") from exc
+        normalized.append(row)
+
+    normalized.sort(key=lambda row: int(str(row["start"]), 16))
+    return {
+        "schema_version": 1,
+        "module_name": module.get("name"),
+        "module_path": module.get("path"),
+        "module_sha256": module["sha256"],
+        "analyzer": {
+            "name": "Ghidra",
+            "language": metadata["language"],
+            "compiler_spec": metadata["compiler_spec"],
+            "image_base": metadata["image_base"],
+        },
+        "functions": normalized,
+    }
+
+
 def _load_ghidra_report(path: Path, build_root: Path) -> dict[str, object]:
     prepare_build_file(path, build_root)
     try:
@@ -882,6 +1031,17 @@ def _load_ghidra_report(path: Path, build_root: Path) -> dict[str, object]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage_libtutoriallist")
     parser.add_argument("--prx", type=Path, default=MODULE_RELATIVE)
+    parser.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="write baseline.json from the pinned PRX without requiring Ghidra output",
+    )
+    parser.add_argument(
+        "--ghidra-log",
+        type=Path,
+        default=None,
+        help="parse SetoAnalyzeFunction.java markers from a log under build/seto018/",
+    )
     return parser
 
 
@@ -900,9 +1060,35 @@ def main(argv: list[str] | None = None) -> int:
         verify_module_sha256(actual_sha256)
         module = elf.parse(prx_path)
         baseline = build_baseline(module, actual_sha256)
-        ghidra_report = _load_ghidra_report(build_root / GHIDRA_EVIDENCE_NAME, build_root)
+        baseline_path = write_baseline_report(baseline, repo_root=REPO_ROOT)
+        if arguments.baseline_only:
+            print(f"{baseline_path.relative_to(REPO_ROOT).as_posix()}: {len(baseline['functions'])} intervals")
+            return 0
+
+        if arguments.ghidra_log is not None:
+            log_input = (
+                arguments.ghidra_log
+                if arguments.ghidra_log.is_absolute()
+                else REPO_ROOT / arguments.ghidra_log
+            )
+            _reject_repo_symlink_components(log_input, REPO_ROOT, "Ghidra output log")
+            log_path = repo_path(log_input, repo_root=REPO_ROOT, allowed_root=build_root)
+            prepare_build_file(log_path, build_root)
+            try:
+                log_text = log_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ProbeError("FAIL", f"cannot read Ghidra output log: {exc}") from exc
+            ghidra_report = parse_ghidra_output(log_text, baseline)
+            validate_ghidra_evidence(ghidra_report, baseline)
+            write_build_text(
+                build_root / GHIDRA_EVIDENCE_NAME,
+                canonical_json(ghidra_report),
+                build_root,
+            )
+        else:
+            ghidra_report = _load_ghidra_report(build_root / GHIDRA_EVIDENCE_NAME, build_root)
         triage = build_triage(baseline, ghidra_report)
-        baseline_path, triage_path = write_reports(baseline, triage)
+        baseline_path, triage_path = write_reports(baseline, triage, repo_root=REPO_ROOT)
     except (ProbeError, elf.ParseError, OSError, ValueError) as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
