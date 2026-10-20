@@ -3852,3 +3852,366 @@ suítes 018–021 já recompilam e comparam as quatro funções a cada execuçã
 as fontes corrigidas. Os logs WSL2 frescos ficam em `build/seto021/gates/`
 (`wsl-full.log`, `wsl-integration.log`, `018`–`021`, `baselines`); os números
 históricos das rodadas 018–021 permanecem como registrados acima.
+
+## SETO-DECOMP-022 — Register Allocation & Data Identity Recovery
+
+A rodada começou de uma branch nova `feat/seto-decomp-022` em `main`, após o
+merge da PR #20 (021-R2). HEAD-base
+`12eed4e2998fb403a63cd04ce20a976955ec9acd`; o SHA do PRX continua
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`. As seções
+018–021 acima não foram reescritas; nenhuma mudança foi feita em `matching.py`,
+nas flags do compilador, nos critérios de equivalência ou no tratamento de
+relocations. Todo artefato novo (baseline, listagens, experimentos, matches e
+logs) fica em `build/seto022/`.
+
+### Baseline antes da primeira alteração
+
+| Função | Status reproduzido na base 021-R2 |
+|---|---|
+| `0x1254` | `MATCHED` 163/163 |
+| `0x14E0` | `MATCHED` 161/161 |
+| `0x1E94` | `MATCHED` 31/31 |
+| `0x1764` | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues |
+| `libhtml_view.prx` | 15 integrações reais: 7 `MATCHED`, 8 `INCONCLUSIVE`, 0 `NONMATCHING` |
+
+O total de partida era **14 `MATCHED` / 906 words**. O hash do PRX, o
+`baseline.json`, o `triage.json` e o `ghidra-boundaries.json` de 018 foram
+revalidados nas integrações reais. Os logs de baseline (018–021, baselines e
+opt-ins) estão em `build/seto022/baseline/`.
+
+### `func_00000E24` — INCONCLUSIVE 113/115
+
+Rotina de renderer que inicializa o painel de tutorial, desenha o quadro e um
+segmento de progresso, formata o número da página atual e restaura o estado de
+display. São 115 words, 21 call sites (17 imports + 4 locais: `0x1D08` duas
+vezes com `0x1003` e `0x1020`, `0xFF0` e `0x1A3C`), 6 instruções de branch
+(3 condicionais + 3 saltos incondicionais) e 1 dataref estático.
+
+Três correções de forma foram necessárias para fechar as 115 words:
+
+1. O quinto argumento de `0x42A8` é o **retorno** de
+   `func_000041D8(func_00001D08(0x1020), index + 4)`, não o resultado direto
+   de `0x1D08`. A forma anterior copiava o handle e gastava uma word.
+2. O ramo de display precisa ser
+   `if (func_00004120() == 0) func_00004340(0x280); else
+   func_00004340(0x180);` para preservar o fall-through e o alvo originais.
+3. O bloco `value` precisa da forma else-first
+   `if (index >= 8) value = index - 8; else value = index;`. A forma
+   then-first equivalente compila com os dois caminhos trocados; a forma
+   else-first reproduz `bne v0,zero,0x0F64` com `v0 = index - 8` no delay do
+   salto incondicional do caminho then.
+
+Resultado real: **INCONCLUSIVE 113/115**, `difference_count = 0`,
+`differences = []`, `relocation_issues = []`, 21 calls resolvidas e uma única
+limitação: o par HI16/LO16 em `0x0ECC`/`0x0ED4` combina para o offset de
+módulo `0x00006204`, que está no segmento de load zerado, fora de uma seção
+nomeada. O símbolo candidato não tem identidade cross-artifact; o comparador
+exclui as duas words do par, então 113/115 é o máximo sem inventar identidade.
+Source SHA-256
+`46dd819022ff312a75af47f783b5c6866428489790c51f226901f1f12f5f1a10`; object
+SHA-256 `3a237eb0a42d20429506963862c5f6a08ed22d59443d92b802f89fd6be312d63`.
+Duas compilações frescas (`attempt-1`/`attempt-2`) produziram o mesmo objeto e
+o mesmo resultado.
+
+### `func_00001D08` — INCONCLUSIVE 53/59
+
+A função consulta uma tabela de quatro entradas de 12 bytes por meio de
+`func_00001E94` (count 4, stride 12), devolve o valor cacheado em `+4` e, na
+ausência de cache, obtém um handle de `func_00001C58`, copia seis bytes de
+`.data+0x80` para `name[6]`, formata um caractere escolhido por
+`func_00004120` em um buffer de 256 bytes via `func_000025D0`, converte por
+`func_00003790` e grava o resultado no campo `+4`. São 59 words, 7 instruções
+de branch (incluindo o backedge `bgtz a0,0x1D80` do loop de cópia), 5 calls
+(3 imports + 2 locais: `0x1E94` e `0x1C58`) e 3 datarefs.
+
+Duas descobertas de alocação de registradores fecharam a função:
+
+1. A **ordem dos grupos de declaração** é load-bearing. Com buffers primeiro,
+   depois os ponteiros do loop e por fim os escalares, o compilador atribui
+   `entry = s0` e `handle = s1`, como no original. Colocando os escalares
+   primeiro, a atribuição espelha (`entry = s1`, `handle = s0`) e sete words
+   divergem; 24 permutações de declaração e 6 hints `register` foram testados,
+   e somente a ordem dos grupos corrige o mapa.
+2. O guard `if (index < 0) return 0;` é necessário. A forma wrapper positiva
+   escolhe outro layout de branch e economiza uma word (58 vs 59), mesmo com
+   semântica equivalente.
+
+Resultado real: **INCONCLUSIVE 53/59**, `difference_count = 0`,
+`differences = []`, `relocation_issues = []`, 5 calls resolvidas e três
+limitações: `.data+0x34` nas words 2 e 15 e `.data+0x80` na word 25. As
+localizações são `PROVEN` dentro da seção `.data` original, mas não existe
+símbolo candidato ligado a elas; o comparador exclui as duas words de cada
+par, então 53/59 é o máximo sem identidade cross-artifact. Source SHA-256
+`75cd5d01b8448f8f8a8dc85c92f4d7858dff4fdd5b3655a6f5657b9503c83012`; object
+SHA-256 `49bd56ade7ea183703b7e02655ec5f072d563312a62fef0b67dbf10ea3d9ef16`.
+Duas compilações frescas produziram o mesmo objeto e o mesmo resultado.
+
+### `func_00001764` — NONMATCHING 42/182 (diagnóstico)
+
+A reconstrução continua completa e versionada, com os três intrínsecos
+Allegrex `max`/`min` preservados (`0x17F4`, `0x1818`, `0x181C`). O resultado
+real permanece **NONMATCHING 42/182**, com 140 diferenças e 32 problemas de
+pairing de relocation. O bloqueio não é semântico: é uma permutação global de
+registradores acoplada ao schedule do delay slot.
+
+#### Mapa de registradores
+
+| Valor | Original | Candidato rastreado | Família delay-slot (`v1`/`p00`) |
+|---|---|---|---|
+| `renderer` | `s7` | `s6` | `s5` |
+| `width` | `s3` | `s3` | `s7` |
+| `x` | `s5` | `s5` | `s4` |
+| `y` | `s4` | `s4` | `s3` |
+| `height` | `76(sp)` | `s8` | `76(sp)` |
+| `start_value` | `s2` | `s2` | `s2` |
+| `end_value` | `s1` | `s1` | `s1` |
+| `ready` | `s6` | `s0` | `s0` |
+| `full` → `start` | `s8` (reuso) | `s7` (`full`/`filled`); `start` em `76(sp)` | `s8` |
+| `filled` | `s0` | `s7` | `s6` |
+| `full = width - 2` | `addiu s8,s3,-2` no delay do `jal 0x1D08` (`0x17B4`) | `addiu s7,s3,-2` no delay do `beql` (`0x68`), depois do branch de `ready` | `addiu s8,s7,-2` no delay do `jal` (`0x50`) |
+
+#### Por que `height` vai para `76(sp)` e `renderer` fica em `s7`
+
+O original ocupa os nove registradores salvos com nove valores vivos:
+`filled=s0`, `end=s1`, `start=s2`, `width=s3`, `y=s4`, `x=s5`, `ready=s6`,
+`renderer=s7` e `full`/`start=s8`. `height` é o décimo valor: entra em `t0`,
+é usado em `0x17F8` para calcular `start` e só volta a ser usado em `0x19A4` e
+`0x19DC`, nas duas chamadas a `func_000014E0`. O vão entre esses usos atravessa
+todas as chamadas de renderer, então o alocador escolhe spillar `height` e
+manter `start` no registrador. O candidato faz a escolha oposta: mantém
+`height` em `s8` e spilla `start` em `76(sp)`.
+
+`renderer` precisa sobreviver a todas as chamadas de import: cada uma devolve
+o novo renderer em `v0` e clobbera os caller-saved, então o valor tem de ficar
+em um registrador salvo (`s7` no original, `s6` no candidato). Isso consome um
+dos nove registradores e é parte da pressão que expulsa `height`.
+
+O cálculo `full = width - 2` é independente da chamada `0x1D08` e cabe no
+delay slot do `jal` (`0x17B4`), executando incondicionalmente antes do teste
+de `ready`. A forma de dois passos (`full = width; full -= 2;`) mantém os
+parâmetros originais, mas o compilador afunda o cálculo para o delay do
+`beql` (`0x68`), depois do branch de `ready`. A forma de um passo
+(`full = width - 2;`) ocupa o delay do `jal`, mas seleciona a rotação
+alternativa de parâmetros (`renderer=s5`, `width=s7`, `x=s4`, `y=s3`,
+`filled=s6`). Nenhuma fonte testada combina o delay slot original com o mapa
+`renderer/x/y/width` original.
+
+#### Experimentos da 022
+
+Além do corpus da 021 (31 variantes `v1`–`v31`, 24 permutações `perm-*`,
+5 micro-formas `q1`–`q6` e o candidato rastreado = 61 objetos), a 022 gerou
+**35 variantes de contexto/inlining** (posição de `context`/`total`/`current`,
+inlining de `func_000037E0`, cinco formas de `ready`) em
+`build/seto022/experiments/1764/new/` e **30 variantes de declaração/hint**
+(24 permutações puras + 6 `register` em `full`/`filled`/`height`/`ready`/
+`renderer`/`start`) em `build/seto022/experiments/1764/decl/`. O corpus total
+tem 126 candidatos montados e pontuados por `score_variants.py`.
+
+Todos os melhores candidatos empatam em **42 words exatas, 81 de mesma forma,
+primeira diferença na instrução 14** (a word `sw t0,76(sp)` do original contra
+`addu s8,t0,zero` do candidato): nenhuma variante superou 42. A família
+delay-slot (`v1`/`p00`) cai para 19 exatas, com primeira diferença na word 26,
+justamente porque a rotação de parâmetros atinge mais words. O resultado
+confirma que o bloqueio é uma decisão global do alocador, não uma ordem de
+declaração, um contexto inlineado ou uma micro-forma de expressão.
+
+#### Pré-condições aritméticas e de memória
+
+O código C reproduz as instruções originais; ele não adiciona guards. Para
+comportamento C definido:
+
+| Entrada / operação | Requisito |
+|---|---|
+| `full = width - 2` | `width - 2` representável em `int`; `width < 2` produz `full` negativo, que é passado às chamadas de renderer sem guarda |
+| `start_value < end_value` | o ramo de cálculo usa `filled = start_value * full / end_value`; `end_value != 0` é necessário para divisão definida (o original executa `div` por zero se `end_value == 0`) |
+| `end_value - start_value` | divisor de `height * (full - filled) / (end_value - start_value)`; no ramo, `start_value < end_value` implica diferença positiva, mas a subtração pode overflow se os extremos forem `INT_MIN`/`INT_MAX` |
+| Produtos `start_value * full` e `height * (full - filled)` | devem caber em `int`; o original usa `mult`/`mflo` e mantém os 32 bits baixos do produto de 64 bits |
+| Divisões | são `div` assinado com truncamento em direção a zero; `INT_MIN / -1` é o caso excepcional da arquitetura |
+| `context = func_000037E0()`, `current_context = func_000037E0()` | devem retornar ponteiros válidos; `context[1]` e `*current_context` são desreferenciados sem checagem de null |
+| `ready = func_00001D08(0x1003)` | se `ready == 0`, a função retorna o `renderer` de entrada antes de qualquer divisão ou desreferência; caso contrário, `ready` é o nono argumento de `func_000014E0` |
+| `height` | usado como booleano (`height > 0`) e em `height < end_value - start_value`; a comparação herda o possível overflow da subtração |
+
+Os intrínsecos `__builtin_allegrex_max`/`min` são a construção mínima fiel às
+três words `dadd`/`daddu` de `0x17F4`/`0x1818`/`0x181C`; nenhuma forma
+`if`/ternário os reproduziu em nenhum nível de otimização testado.
+
+### Total verificado após 022
+
+| Módulo / estado | Contagem |
+|---|---:|
+| `MATCHED` acumulados (7 `libhtml_view` + 7 `libtutoriallist`) | **14 funções** |
+| `INCONCLUSIVE` novos em 022 | **2 funções**: `0xE24` 113/115 e `0x1D08` 53/59 |
+| Words com instruções equivalentes nos dois novos `INCONCLUSIVE` | **166** (113 + 53), com zero diferenças de instrução |
+| Words excluídas por pares HI16/LO16 não resolvidos | **8** (2 em `0xE24`, 6 em `0x1D08`) |
+| `NONMATCHING` atual | **1 função**: `0x1764`, 42/182 |
+| Novos `MATCHED` em 022 | **0** |
+| Words `MATCHED` acumulados | **906** (inalterado) |
+
+A meta de 15–16 `MATCHED` não foi atingida. As duas funções novas têm zero
+diferenças de instrução, mas a identidade dos objetos de dados não é
+demonstrável cross-artifact; convertê-las a `MATCHED` exigiria inventar um
+símbolo ou afrouxar o critério, o que não foi feito. `0x1764` continua sendo a
+única função ainda não certificada sem datarefs e, portanto, a única rota
+restante para um novo `MATCHED` estrito neste módulo.
+
+### Gates e regressões 022
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 37 skipped |
+| `pytest -q -rs` | WSL2 | 779 passed, 19 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 32 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 42 passed, 13 skipped, 743 deselected |
+| Opt-ins reais 018 + 019 + 020 + 021 + 022 | WSL2 | 6 passed (2+1+1+1+1) |
+| Objetos 021 após a rodada | WSL2 | SHA-256 idênticos: `78ab23a0…`, `24df0bdb…`, `301afd4c…`, `0a8d3235…` |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean |
+
+Os logs dos gates ficam em `build/seto022/final/` e nos diretórios
+`build/seto022/matches/f0e24/`, `f1d08/` e `f1764/`. Os skips restantes são
+requisitos de plataforma, ISO ausente, opt-ins intencionais e provedores
+REA/Ghidra não instalados; nenhum skip foi promovido a aprovação.
+
+### Hashes finais
+
+| Distinção | Artefato | SHA-256 |
+|---|---|---|
+| 1. PRX original | `libtutoriallist.prx` | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+| 1. evidência 018 | `baseline.json` | `6ef4ee553ce21205ed7ba738db519086c140a1374097a77e59e39a9cbf4fa043` |
+| 1. evidência 018 | `triage.json` | `fb1cc157ada5448dfb8e88e2b73bd4d26b6d665d9ff11ef667e2298158aa17a5` |
+| 1. evidência 018 | `ghidra-boundaries.json` | `e86fb8c954421a4f2923e8409adcec8ec2578bef6a0941dfa6f95ef390bb671b` |
+| 2. fonte 022 | `func_00000E24.c` | `46dd819022ff312a75af47f783b5c6866428489790c51f226901f1f12f5f1a10` |
+| 2. fonte 022 | `func_00001D08.c` | `75cd5d01b8448f8f8a8dc85c92f4d7858dff4fdd5b3655a6f5657b9503c83012` |
+| 2. fonte 022 (inalterada) | `func_00001764.c` | `e8e9a4a5834a9b84d6ccb38c21125361641e491114c9ddc4efaf526aa0718cdd` |
+| 3. objeto 022 | `0xE24` | `3a237eb0a42d20429506963862c5f6a08ed22d59443d92b802f89fd6be312d63` |
+| 3. objeto 022 | `0x1D08` | `49bd56ade7ea183703b7e02655ec5f072d563312a62fef0b67dbf10ea3d9ef16` |
+| 3. objeto 022 (inalterado) | `0x1764` | `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea` |
+| 3. objeto 021 (inalterado) | `0x1254` | `78ab23a040226e1217487d08d6cfb5ccc5b6812e4ea8c4bdac368e3dcbcb2c06` |
+| 3. objeto 021 (inalterado) | `0x1E94` | `24df0bdbcc2926ef4c5e8bf0c18231dcf9047068447ed978e68916f834c8fcc4` |
+| 3. objeto 021 (inalterado) | `0x14E0` | `301afd4c338e0ac606c065e05150e6c336a030be61bc01f9fcd64d7905e9bd69` |
+
+As fontes 021 não foram tocadas nesta rodada; os quatro objetos 021
+permanecem byte a byte idênticos aos certificados na 021-R2.
+
+### Próximo candidato
+
+`func_00001B70` (42 words) é o próximo front viável. Ele tem zero imports, uma
+única chamada local (`0x1C58`), nenhuma dependência de tabela e quatro
+referências a um único byte de estado global no offset `0x6250` do segmento de
+load; o corpo testa/atualiza um bitfield em `0x1B70–0x1C14`. A reconstrução
+deve chegar a zero diferenças de instrução e ficar limitada apenas pelas words
+dos pares HI16/LO16 daquele global. Em seguida, `func_00001DF4` (36 words, um
+import `0x3780`, o mesmo global) reusa o mesmo estado.
+
+Todas as funções EXACT ainda não reconstruídas têm datarefs; não há outra
+função não certificada com zero datarefs além de `0x1764`. Portanto, um novo
+`MATCHED` estrito exige resolver o bloqueio de alocação de `0x1764` ou provar a
+identidade do objeto global — não basta reconstruir mais uma função.
+
+### SETO-DECOMP-022-R2 — Prototype Compatibility & Memory Contracts
+
+Correção posterior à auditoria da PR #21, aplicada sobre a mesma branch/PR:
+`feat/seto-decomp-022`, HEAD-base
+`716d89bfaebbc6b534e9b1829a1ff126d6fa37b6`. Não há função nova, mudança de
+critério de matching, flag, toolchain, relocation ou equivalência. Dos oito
+arquivos de código e header alterados, seis são chamadores que apenas perderam
+a declaração local duplicada de `0x1D08`; nenhum statement, constante, import
+ou corpo de função foi alterado. A única mudança de código é a largura do
+parâmetro `key` de `0x1D08` e os protótipos locais compartilhados no header.
+
+**Compatibilidade de protótipos**
+
+A definição certificada de `0x1E94` usa `unsigned short key` e o objeto
+original mascara o argumento com `andi a0,a0,0xffff` em `0x1EB0`. O call site
+original de `0x1D08` em `0x1D24` passa `a0` sem qualquer máscara. O domínio do
+chamador é, portanto, 16 bits.
+
+A primeira tentativa manteve `func_00001D08(int key)` e alterou apenas o
+protótipo de `0x1E94` para `unsigned short key`. O Metrowerks inseriu uma
+máscara redundante `andi a0,a0,0xffff` em `0x1D10`, deslocando o corpo: o
+resultado caiu para **NONMATCHING 3/59**, com 51 diferenças e a primeira
+divergência já na word 2 (associação HI16/LO16). A conversão do argumento
+`int` para `unsigned short` no caller não é gratuita.
+
+A correção usa o mesmo domínio de 16 bits nos dois lados: `0x1D08` e `0x1E94`
+são declarados em `libtutoriallist_stubs.h` com `unsigned short key`, e as seis
+declarações locais duplicadas de `0x1D08` foram removidas. Os callers passam
+constantes que cabem em 16 bits (`0x1003`, `0x1011`, `0x1020`), então a
+conversão é compile-time e não gera instrução. O objeto de `0x1D08` ficou byte
+a byte idêntico ao certificado; a divergência acima é a justificativa para a
+largura do parâmetro do caller, não um cast artificial.
+
+**Contratos de memória**
+
+Nenhum guard, clamp, cast ou branch foi adicionado. Os comentários distinguem
+o que o binário demonstra do que é apenas domínio de entrada necessário:
+
+| Acesso | Demonstrado | Hipótese / obrigação do chamador |
+|---|---|---|
+| `name[func_00004120()]` em `0x1D08` | o fragmento tem seis bytes copiados de `.data+0x80`; o byte é lido em `buffer+index`; não há clamp nem bounds check | `func_00004120()` deve retornar `0..5`; o artefato não prova essa faixa; outros usos da função no módulo a comparam com zero; fora da faixa o original lê bytes adjacentes da stack |
+| `func_00000E24_extents[index]` em `0x0E24` | a base combina para o offset de módulo `0x00006204`; o load de halfword usa `index` diretamente; não há bounds check | `index` deve selecionar um elemento válido; o tamanho e a posse da tabela não estão provados; a faixa dos chamadores não foi estabelecida |
+
+A tabela de `0x1D08` (quatro entradas, stride 12) tem count/stride
+demonstrados pelos argumentos da chamada e pela reconstrução de `0x1E94`; a
+extensão e a posse continuam hipóteses. Nenhum limite foi inventado para
+`name` ou para os extents.
+
+**Resultados e limitações**
+
+| Função | Resultado | Objeto SHA-256 |
+|---|---|---|
+| `0x0E24` | `INCONCLUSIVE` 113/115, zero diferenças | `3a237eb0…` (inalterado) |
+| `0x1D08` | `INCONCLUSIVE` 53/59, zero diferenças | `49bd56ad…` (inalterado) |
+| `0x1764` | `NONMATCHING` 42/182, 140 diferenças / 32 relocation issues | `0a8d3235…` (inalterado) |
+
+O total continua **14 `MATCHED` / 906 words**. As seis funções chamadoras de
+`0x1D08` — `0x6E8` 47/47, `0x7A4` 83/83, `0xFF0` 153/153, `0x1254` 163/163,
+`0xE24` 113/115 e `0x1764` 42/182 — mantiveram status, contagem e objeto byte
+a byte. Os objetos de `0x14E0` `301afd4c…`, `0x1E94` `24df0bdb…` e `0x1A3C`
+`c2932f8c…` também permaneceram idênticos. A limitação de identidade de dados
+de `0xE24`/`0x1D08` e o bloqueio de alocação de `0x1764` não foram alterados;
+nenhum deles foi promovido a `MATCHED`.
+
+**Hashes finais da R2**
+
+| Distinção | Artefato | SHA-256 |
+|---|---|---|
+| 1. PRX original | `libtutoriallist.prx` | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+| 2. fonte R2 | `func_00000E24.c` | `7b09c23e70ac9e668a7633f236cd3811fe1231d815096f40ea02243c89e097f4` |
+| 2. fonte R2 | `func_00001D08.c` | `a65b41419346eab1e817f118243c2f1bec6dff30c52f2183ed3a6d7614a47911` |
+| 2. fonte R2 | `func_00001764.c` | `2a1126ed3dd3d2f62fca54b956f0496e44f55866df6097e3b406a9066b36eb62` |
+| 2. fonte R2 | `libtutoriallist_stubs.h` | `638ce2d1880cecfd33d8b497fcf6d167143043029f3c8948f6aa44061988f9d0` |
+| 2b. chamador R2 (declaração removida) | `func_000006E8.c` | `7323db7f0f6b36b254b0ba67c9babd63b972981e9ac2096c7c84957ed0bd06d5` |
+| 2b. chamador R2 (declaração removida) | `func_000007A4.c` | `f10766ab55eb459650052c642c74de73291d3da1152651b6f612b67b25f01ac0` |
+| 2b. chamador R2 (declaração removida) | `func_00000FF0.c` | `a0cad5d06ea90126440847da770191f79ad389d7c735b356989d7840a2f80195` |
+| 2b. chamador R2 (declaração removida) | `func_00001254.c` | `8fd98ea08087f1471951ac75a0d2f63362e3152926cbc284a0434b62b99f7397` |
+| 2b. fonte 021-R2 (inalterada) | `func_000014E0.c` | `464b158ef133b8f589cf875236bc47a0f4657f4f24a2be2fb6322936152a8b97` |
+| 2b. fonte 021-R2 (inalterada) | `func_00001E94.c` | `34722bc5e04dc6e6f8da79d4768a122879a04fd4bc48ce4ce941ac0f1f18563a` |
+| 3. objeto | `0x0E24` | `3a237eb0a42d20429506963862c5f6a08ed22d59443d92b802f89fd6be312d63` |
+| 3. objeto | `0x1D08` | `49bd56ade7ea183703b7e02655ec5f072d563312a62fef0b67dbf10ea3d9ef16` |
+| 3. objeto | `0x1764` | `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea` |
+| 3. objeto 021-R2 (inalterado) | `0x1254` | `78ab23a040226e1217487d08d6cfb5ccc5b6812e4ea8c4bdac368e3dcbcb2c06` |
+| 3. objeto 021-R2 (inalterado) | `0x1E94` | `24df0bdbcc2926ef4c5e8bf0c18231dcf9047068447ed978e68916f834c8fcc4` |
+| 3. objeto 021-R2 (inalterado) | `0x14E0` | `301afd4c338e0ac606c065e05150e6c336a030be61bc01f9fcd64d7905e9bd69` |
+
+As fontes de `0x14E0`/`0x1E94` continuam com os hashes da 021-R2; a fonte de
+`0x1254` mudou apenas pela remoção da declaração local de `0x1D08`, com objeto
+inalterado. A fonte de `0x1764` mudou apenas pela remoção da mesma declaração;
+o corpo e o objeto continuam os da 022.
+
+**Testes após a correção**
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 37 skipped |
+| `pytest -q -rs` | WSL2 | 779 passed, 19 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 32 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 42 passed, 13 skipped, 743 deselected |
+| Opt-ins reais 018 + 019 + 020 + 021 + 022 | WSL2 | 6 passed (2+1+1+1+1) |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean |
+
+Cada função afetada foi compilada e comparada em duas tentativas frescas por
+execução; a suíte 022 também recompila `0x0E24`, `0x1D08` e `0x1764` duas vezes
+e compara os resultados. Os logs da R2 ficam em `build/seto022/r2/` e o
+detalhe operacional em `build/seto022/REPORT.md`.

@@ -10,8 +10,6 @@
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001D08(int arg0);
-
 void *func_00001254(void *renderer, int x, int y, int width, int height)
 {
     int ready = func_00001D08(0x1003);
