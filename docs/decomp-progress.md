@@ -4418,7 +4418,7 @@ sucesso.
 | Fonte `func_00001DF4.c` | `206691cdfcb332ea72205794447d0e6da617a64458db0bfb427d9df4eff44bf8` |
 | Objeto `0x1DF4` (`NONMATCHING` 19/36) | `085fea270aa437d117dc8f2e310dfccca3463519c6414cffd337c5d68c97ec00` |
 | `libtutoriallist_stubs.h` | `dfd25c5a41aa789576b7a24d88017fa885f9ca734d74503d9e66cd2da7879735` |
-| Teste real 023 | `a11203f022f661ea1ad992b3719ddc8231ac988664abfc40f4c5cb4f2c61735d` |
+| Teste real 023 | `c636ba603a07493e2ae56a8ebe52a0654ca775f0c75e08586f770aa5d99afeef` |
 
 ### Testes e skips
 
