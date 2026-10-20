@@ -210,7 +210,7 @@ def test_023_shared_state_identity_and_fresh_candidate_diagnostics() -> None:
     results: list[dict[str, object]] = []
     timings: list[dict[str, object]] = []
     for address, expected_size, candidate_size in (
-        (0x1B70, 168, 152),
+        (0x1B70, 168, 156),
         (0x1DF4, 144, 140),
     ):
         name = triage.mips.function_name(address)
