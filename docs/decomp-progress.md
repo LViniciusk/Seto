@@ -4258,13 +4258,13 @@ registradores; `0x1BD8/0x1BE4` depende da ordem das relocations. O slot de delay
 em `0x1BE4` é o `sb` que grava o byte antes do salto para o retorno.
 
 **Resultado real, duas tentativas frescas:** o Metrowerks compilou o objeto
-deterministicamente com 152 bytes, mas o intervalo original precisa de 168.
+deterministicamente com 156 bytes, mas o intervalo original precisa de 168.
 `match_function` devolveu `ERROR` na fase `compare` antes de comparar instruções
-(`candidate section '.text': needs 168 bytes ... but the section is 152 bytes`).
+(`candidate section '.text': needs 168 bytes ... but the section is 156 bytes`).
 Isso **não é** `NONMATCHING` nem `INCONCLUSIVE`; não há `matching_words`,
 diferenças, limitações ou instruções certificadas para reportar. A fonte
 versionada preserva o comportamento interpretado e não acrescenta NOPs,
-statements mortos ou operações para preencher os quatro words ausentes.
+statements mortos ou operações para preencher os três words ausentes.
 
 ### `func_00001DF4` — reconstrução sem comparação concluída
 
@@ -4364,12 +4364,12 @@ permanece distinto de `BLOCKED`, `NONMATCHING` e `INCONCLUSIVE`.
 | Artefato | SHA-256 |
 |---|---|
 | PRX original | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
-| Fonte `func_00001B70.c` | `4e47aaea5fe4ac780f093b475f37003e0435092be9b7380f47be9a6b5442eb90` |
-| Objeto `0x1B70` (compilado; comparação retorna ERROR) | `fd37e1a8e19a5d0601d487b991cbb8c972b779313c858c1953001fb582f10c6b` |
+| Fonte `func_00001B70.c` | `a985c995d7dc098d5c87094d4ac9ef9e56bbbac591dc347cc7ca501c9d9249a6` |
+| Objeto `0x1B70` (compilado; comparação retorna ERROR) | `fbfa06ab150283df615539e4aed46496dce4d91f633aa93f9893ca320d3bb28a` |
 | Fonte `func_00001DF4.c` | `5b54bef8e40a6d3558167b84bb08340e7746f5629a59c123283de93c3d220eea` |
 | Objeto `0x1DF4` (compilado; comparação retorna ERROR) | `5aa1c36c2b839ff87d191f61f15bdf67833a953e4f00d01833dee8bed50d465a` |
 | `libtutoriallist_stubs.h` | `dfd25c5a41aa789576b7a24d88017fa885f9ca734d74503d9e66cd2da7879735` |
-| Teste real 023 | `59f12355a6cee38a5ad73eb80f856fb0b07f1a446ab3561fa34782604955a722` |
+| Teste real 023 | `6cdab6b7cac49ebcc38168f3d2e69407be674af269e80c4cc67c427ce750ac34` |
 
 ### Testes e skips
 
