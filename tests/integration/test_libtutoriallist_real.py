@@ -173,16 +173,19 @@ def test_selected_real_matches_run_fresh_twice_and_preserve_reports() -> None:
     assert buffer_clear["limitations"] == []
     assert buffer_clear["verified_decompilation"] is True
 
-    nonmatching = by_address[0x1E94]
-    assert nonmatching["status"] == "NONMATCHING" and nonmatching["exit_code"] == 3
-    assert nonmatching["matching_words"] == 7 and nonmatching["total_words"] == 31
-    assert nonmatching["difference_count"] == len(nonmatching["differences"]) == 24
-    assert [item["word_index"] for item in nonmatching["differences"]] == [
-        4, 5, 6, *range(8, 21), *range(22, 30)
-    ]
-    assert nonmatching["relocation_issues"] == []
-    assert nonmatching["limitations"] == []
-    assert nonmatching["verified_decompilation"] is False
+    # SETO-DECOMP-020 recorded this search as NONMATCHING 7/31 with 24
+    # differences; SETO-DECOMP-021 recovered the do/while plus wrapper form and
+    # the tracked source now matches, so the baseline expectation moves with
+    # the proven result while the historical record stays in
+    # docs/decomp-progress.md.
+    search = by_address[0x1E94]
+    assert search["status"] == "MATCHED" and search["exit_code"] == 0
+    assert search["matching_words"] == search["total_words"] == 31
+    assert search["difference_count"] == 0
+    assert search["differences"] == []
+    assert search["relocation_issues"] == []
+    assert search["limitations"] == []
+    assert search["verified_decompilation"] is True
 
     summary = {
         "schema_version": 1,
