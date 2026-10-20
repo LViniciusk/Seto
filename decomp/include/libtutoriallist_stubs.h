@@ -60,4 +60,18 @@ extern void func_00004350(void *arg0);
 extern void *func_00004358(void);
 /* libehsys, NID 0xA4AFF8E6, stub 0x4358 */
 
+/* func_00000E24 / func_00001D08: usage-derived state and buffer calls. */
+extern int func_00004120(void);
+/* libehsys, NID 0x31454993, stub 0x4120 */
+extern void func_00004340(unsigned int arg0);
+/* libehsys, NID 0xAB962AE7, stub 0x4340 */
+extern void func_000042A8(
+    int arg0, int arg1, int arg2, int arg3, void *arg4, int arg5
+);
+/* libehsys, NID 0x3BB2BAC6, stub 0x42A8 */
+extern void func_000025D0(void *arg0, int arg1, int arg2);
+/* libehsys, NID 0x7661E728, stub 0x25D0 */
+extern int func_00003790(int arg0, void *arg1, int arg2);
+/* libehsys, NID 0xC6C15111, stub 0x3790 */
+
 #endif /* SETO_DECOMP_LIBTUTORIALLIST_STUBS_H */
