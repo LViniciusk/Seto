@@ -9,8 +9,6 @@
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001D08(int arg0);
-
 void *func_00000FF0(
     void *arg0,
     unsigned int width,
