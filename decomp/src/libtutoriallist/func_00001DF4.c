@@ -13,20 +13,20 @@
  * named sections. The shared provisional candidate symbol therefore does not
  * establish cross-artifact identity.
  *
- * Current Metrowerks result: the source compiles to 140 bytes, while the
- * original interval is 144 bytes. The matcher returns ERROR before comparing
- * words because the candidate section is short; this is not NONMATCHING or
- * INCONCLUSIVE evidence. No no-op statements were added to pad the function.
+ * The explicit 0/1 return form compiles to the complete 144-byte interval and
+ * is compared below. Its current result is NONMATCHING 19/36; differences are
+ * confined to the final shared-state update/return block and include three
+ * relocation-pairing issues. The compact `return enabled` form was four bytes
+ * short, so it produced ERROR rather than comparison evidence.
  */
 
 #include "libtutoriallist_stubs.h"
 
 int func_00001DF4(int arg0, int arg1)
 {
-    int enabled;
     unsigned int state;
     unsigned int count;
-    int final_state;
+    int enabled;
 
     enabled = arg1 > 0;
     if (enabled != 0) {
@@ -39,7 +39,10 @@ int func_00001DF4(int arg0, int arg1)
     }
 
     state = func_00006250_state;
-    final_state = (state & ~1) | 1;
-    func_00006250_state = final_state;
-    return enabled;
+    state &= ~1;
+    state |= 1;
+    func_00006250_state = state;
+    if (enabled == 0)
+        return 0;
+    return 1;
 }
