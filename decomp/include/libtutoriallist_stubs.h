@@ -73,6 +73,15 @@ extern void func_000025D0(void *arg0, int arg1, int arg2);
 /* libehsys, NID 0x7661E728, stub 0x25D0 */
 extern int func_00003790(int arg0, void *arg1, int arg2);
 /* libehsys, NID 0xC6C15111, stub 0x3790 */
+extern void func_00003780(int arg0, int arg1);
+/* libehsys, NID 0x4B0DABFA, stub 0x3780; return value unused at 0x1DF4 */
+
+/*
+ * Provisional shared-byte symbol for the references that combine to module
+ * offset 0x6250. The original address is in a zero-filled PT_LOAD tail, not a
+ * named section; this declaration does not establish candidate object identity.
+ */
+extern unsigned char func_00006250_state;
 
 /*
  * Local (non-imported) entry points shared by this module's reconstructions.
