@@ -4215,3 +4215,186 @@ Cada função afetada foi compilada e comparada em duas tentativas frescas por
 execução; a suíte 022 também recompila `0x0E24`, `0x1D08` e `0x1764` duas vezes
 e compara os resultados. Os logs da R2 ficam em `build/seto022/r2/` e o
 detalhe operacional em `build/seto022/REPORT.md`.
+
+## SETO-DECOMP-023 — Shared State Reconstruction & Data Identity Recovery
+
+Branch `feat/seto-decomp-023`, criada de `main` atualizado para
+`3e154b0d51b3c602ab4626e1530aa085f1980ab8`. O PRX original manteve o SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`. Antes
+das alterações, a baseline real 018 foi reconstruída e comparada canonicamente
+com `baseline.json`/`triage.json`; os boundaries Ghidra preservados também
+revalidaram. Os opt-ins reais 018–022 passaram (6 testes), reproduzindo as
+certificações anteriores.
+
+### Baseline
+
+| Estado antes da 023 | Resultado reproduzido |
+|---|---|
+| `MATCHED` acumulados | **14 funções / 906 instruções** (7 `libhtml_view`, 7 `libtutoriallist`) |
+| `libhtml_view` | 8 `INCONCLUSIVE`, preservadas |
+| `0xE24` | `INCONCLUSIVE` 113/115, zero diferenças, 1 par de dados sem identidade |
+| `0x1D08` | `INCONCLUSIVE` 53/59, zero diferenças, 3 pares sem identidade |
+| `0x1764` | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues |
+
+O hash do PRX, a baseline/triage 018 e os limites Ghidra estão em
+`build/seto023/baseline/`. A compilação usa a configuração local WSL2 existente
+e as flags oficiais `-O4,p -sdatathreshold 0`; matcher, critérios, relocations e
+toolchain não foram alterados.
+
+### `func_00001B70` — reconstrução sem comparação concluída
+
+Intervalo Ghidra exato `[0x1B70,0x1C18)`, 42 instruções; nenhuma importação e
+uma chamada local em `0x1BA4` para `0x1C58`. A função não recebe argumentos e
+retorna 0 ou 1. O C versão a operação observável: testa o bit 0 do byte em
+`0x6250`; se os bits 1–7 são não-zero, limpa o campo e retorna 1; se o campo é
+zero, chama `0x1C58` e, quando o retorno é não-zero, incrementa o campo modulo
+128 antes de retornar 0. Os nomes “flag”/“count” descrevem somente a forma dos
+bits; semântica de nível superior não foi atribuída.
+
+As quatro referências originais são pares HI16/LO16 para o mesmo endereço de
+módulo `0x6250`. Loads/stores diretos são byte (`lbu`/`sb`) em `0x1B7C`,
+`0x1BB8`, `0x1BE4` e `0x1BFC`. Três pares são confirmados pelo fluxo de
+registradores; `0x1BD8/0x1BE4` depende da ordem das relocations. O slot de delay
+em `0x1BE4` é o `sb` que grava o byte antes do salto para o retorno.
+
+**Resultado real, duas tentativas frescas:** o Metrowerks compilou o objeto
+deterministicamente com 152 bytes, mas o intervalo original precisa de 168.
+`match_function` devolveu `ERROR` na fase `compare` antes de comparar instruções
+(`candidate section '.text': needs 168 bytes ... but the section is 152 bytes`).
+Isso **não é** `NONMATCHING` nem `INCONCLUSIVE`; não há `matching_words`,
+diferenças, limitações ou instruções certificadas para reportar. A fonte
+versionada preserva o comportamento interpretado e não acrescenta NOPs,
+statements mortos ou operações para preencher os quatro words ausentes.
+
+### `func_00001DF4` — reconstrução sem comparação concluída
+
+Boundary Ghidra exato `[0x1DF4,0x1E84)`, 36 instruções, argumentos assinados
+`(arg0,arg1)`. O retorno é o predicado assinado `arg1 > 0`. Quando esse
+predicado é verdadeiro e `arg0 != 0`, chama o import `libehsys`, NID
+`0x4B0DABFA`, stub `0x3780`, com `(0,arg0)`; o retorno do import é ignorado. Em
+seguida incrementa modulo 128 os bits 1–7 do byte compartilhado e, em todos os
+caminhos, força o bit 0 para 1. A declaração `void func_00003780(int,int)` no
+header registra apenas os argumentos observados e o retorno não utilizado;
+não afirma um protótipo SDK.
+
+Os quatro pares em `0x1E20/0x1E24`, `0x1E44/0x1E4C`, `0x1E50/0x1E54` e
+`0x1E6C/0x1E70` são confirmados por fluxo de registradores. As referências
+`0x1E24`/`0x1E54` são `lbu`; `0x1E4C`/`0x1E70` são `sb`.
+
+**Resultado real, duas tentativas frescas:** o objeto compilado tem 140 bytes;
+o intervalo original exige 144. O matcher devolveu `ERROR` em `compare` antes
+da comparação (`candidate section '.text': needs 144 bytes ... but the section
+is 140 bytes`). Isso também **não** é `NONMATCHING` ou `INCONCLUSIVE`, e não
+certifica words. A fonte não contém padding artificial.
+
+Os dois erros são limitações reais do codegen sob as flags oficiais, não
+ausência do PRX/compiler nem skips. Não foi alterado matcher, faixa comparada,
+flags ou assembly inline. A meta de obter dois resultados comparáveis ainda
+não foi atingida; o objeto dos erros foi preservado apenas como evidência
+operacional ignorada pelo Git.
+
+### `func_00001C58` — análise condicionada
+
+O intervalo original tem 44 instruções e foi inspecionado porque é a chamada
+local de `0x1B70`. O fast path carrega a word em `0x6248` e retorna-a se
+não-zero. Sem essa word, só prossegue se o bit 0 de `0x6250` estiver set; nesse
+caminho limpa o bit, chama imports `0x36A0` (NID `D2A768F4`), `0x3A00` (NID
+`41AABF28`) e `0x3668` (NID `8288EEBC`), grava o resultado em `0x6248` e
+retorna zero. Isso explica por que `0x1B70` só incrementa o campo quando
+`0x1C58` encontra um estado já inicializado; a rotina de inicialização pode
+limpar o bit de atividade.
+
+Não foi versionado `func_00001C58.c`: além de oito referências de dados, o call
+site de `0x3668` carrega `0x1DF4` em `t0` no delay slot. A função importada não
+tem protótipo local equivalente que permita modelar esse uso de `t0` com a ABI C
+observada sem inventar uma assinatura ou argumento. A análise acima é evidência
+de instruções, não uma reconstrução compilada.
+
+### Identidade estrutural dos quatro destinos
+
+O ELF tem um único `PT_LOAD` com `p_filesz=0x6190`, `p_memsz=0x6290` e `vaddr=0`.
+`.data` cobre `[0x60EC,0x6190)` e `.bss` é `SHT_NOBITS` de tamanho zero.
+Assim, `0x6204` e `0x6250` estão no tail zero-filled do segmento 0 (offsets
+`0x6204` e `0x6250`), não em seção nomeada; o valor numérico não cria um
+`DataTarget`.
+
+| Destino original | Referências encontradas no módulo | Evidência binária | Identidade cross-artifact |
+|---|---|---|---|
+| `0x6250` | 13 pares em `0x1B0C` (3), `0x1B70` (4), `0x1C58` (2), `0x1DF4` (4) | mesmo endereço no PT_LOAD; acessos diretos são byte; 12 pares têm pairing provado e entram no grupo de localização do segmento, 1 par de `0x1B70` depende da ordem da relocation | **não provada** |
+| `0x6204` | 3 pares em `0x2F4`, `0x0E24`, `0x21F8` | todos localizados no tail do mesmo PT_LOAD; loads da tabela são `lhu` em `0x664`, `0xEDC` e `0x2518` | **não provada**; tamanho/posse da tabela seguem desconhecidos |
+| `.data+0x34` (`0x6120`) | `0x1B0C` em `0x1B50`; `0x1D08` em `0x1D18` e `0x1D48` | três referências `PROVEN` à mesma localização `.data` no PRX; `0x1D08` usa tabela count 4/stride 12; `0x1B0C` passa o endereço ao call local `0x2638` | **não provada** |
+| `.data+0x80` (`0x616C`) | `0x1D08` em `0x1D74` | uma localização `PROVEN`; código consome um fragmento de seis bytes | **não provada** |
+
+`datarefs.build_global_usage` foi reutilizado para agrupar somente localizações
+do PRX, sem as promover a identidade. O teste real tenta resolvers de módulo e
+um `SymbolLink` com `verified=False`; ambos retornam `None`. As fontes candidatas
+referem o símbolo provisório `func_00006250_state`, que é um nome criado nesta
+reconstrução, não um vínculo independente. Nenhum link foi marcado
+`verified=True`.
+
+### Busca limitada de evidência independente
+
+Foi inspecionada somente a árvore imediata `PSP_GAME`, `USRDIR`, `gmodule`,
+`module` e `SYSDIR`, sem execução ou busca de sistema. Não há `.map`, `.o`,
+`.elf`, `.sym`, `.dbg`, `.pdb` ou `.dwo` que estabeleça o layout de link.
+`libtutoriallist.prx` e o PRX irmão `libhtml_view.prx` não têm símbolos nem
+seções de debug; `libadler.prx` e `EBOOT.BIN` são payloads PSP e não foram
+desempacotados nem executados. Os artefatos gerados do próprio PRX, nomes
+escolhidos pelo decompilador, bytes iguais, mesma seção/offset e referências
+múltiplas não demonstram identidade cross-artifact. A busca não encontrou
+evidência independente; nenhum dos quatro destinos foi resolvido.
+
+### Regressores preservados e totais
+
+Os opt-ins reais 018–022 foram repetidos depois das declarações compartilhadas:
+**6 passaram**. Os hashes dos objetos certificados não mudaram; em particular
+`0xE24` segue `INCONCLUSIVE` 113/115, `0x1D08` segue `INCONCLUSIVE` 53/59 e
+`0x1764` segue `NONMATCHING` 42/182. Os oito `INCONCLUSIVE` de `libhtml_view`
+também permanecem. O total continua **14 `MATCHED` / 906 instruções**; a 023
+não acrescentou instruções certificadas nem novos `MATCHED`.
+
+O opt-in 023 (`SETO_LIBTUTORIALLIST_023_REAL=1`) passou uma validação de
+contratos e duas tentativas frescas por função. Seu resultado não é aprovação
+de matching: ele exige e registra os dois `ERROR` estáveis acima, com os
+objetos compilados e sem `matching_words` ou `verified_decompilation`. `ERROR`
+permanece distinto de `BLOCKED`, `NONMATCHING` e `INCONCLUSIVE`.
+
+### Hashes da 023
+
+| Artefato | SHA-256 |
+|---|---|
+| PRX original | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+| Fonte `func_00001B70.c` | `4e47aaea5fe4ac780f093b475f37003e0435092be9b7380f47be9a6b5442eb90` |
+| Objeto `0x1B70` (compilado; comparação retorna ERROR) | `fd37e1a8e19a5d0601d487b991cbb8c972b779313c858c1953001fb582f10c6b` |
+| Fonte `func_00001DF4.c` | `5b54bef8e40a6d3558167b84bb08340e7746f5629a59c123283de93c3d220eea` |
+| Objeto `0x1DF4` (compilado; comparação retorna ERROR) | `5aa1c36c2b839ff87d191f61f15bdf67833a953e4f00d01833dee8bed50d465a` |
+| `libtutoriallist_stubs.h` | `dfd25c5a41aa789576b7a24d88017fa885f9ca734d74503d9e66cd2da7879735` |
+| Teste real 023 | `59f12355a6cee38a5ad73eb80f856fb0b07f1a446ab3561fa34782604955a722` |
+
+### Testes e skips
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 38 skipped |
+| `pytest -q -rs` | WSL2 | 778 passed, 21 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 33 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 41 passed, 15 skipped, 743 deselected |
+| Opt-ins reais 018–023 | WSL2 | 7 passed (2+1+1+1+1+1; o opt-in 023 valida os ERROR, não comparação) |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean |
+
+Os skips incluem opt-ins deliberadamente inativos, plataforma, ISO ausente,
+Ghidra/REA/Splat não configurados e, no full WSL, três testes de YAML porque
+`PyYAML` não está instalado no venv. Nenhum desses skips foi contado como
+matching. Logs, baseline, auditorias e objetos ficam em `build/seto023/`.
+
+### Próximo bloqueio
+
+Antes de promover esta rodada como reconstrução comparada, é necessário achar
+formas C fiéis de `0x1B70`/`0x1DF4` que o Metrowerks compile com comprimento
+suficiente para o matcher comparar (sem statements/NOPs artificiais), ou
+registrar por que o codegen sob as flags oficiais não oferece tal forma. Só
+depois de existir comparação real e zero diferenças será possível avaliar as
+limitações de identidade dos oito pares de dados; sem prova independente, elas
+devem continuar sem resolver. A identidade de `0x6250`, `0x6204`, `.data+0x34`
+e `.data+0x80` permanece pendente.
