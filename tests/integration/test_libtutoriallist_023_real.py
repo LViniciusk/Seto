@@ -51,7 +51,16 @@ def _stable_result(result: dict[str, object]) -> dict[str, object]:
         "module_sha256",
         "source_sha256",
         "object_sha256",
-        "error",
+        "matching_words",
+        "total_words",
+        "difference_count",
+        "differences",
+        "relocation_issues",
+        "limitations",
+        "resolved_calls",
+        "resolved_data",
+        "equivalence",
+        "verified_decompilation",
     )
     return {key: result.get(key) for key in keys}
 
@@ -73,7 +82,7 @@ def _instruction_word(module: elf.ElfFile, address: int) -> int:
 @pytest.mark.skipif(
     os.environ.get(OPT_IN) != "1", reason=f"set {OPT_IN}=1 for real WSL2 matching"
 )
-def test_023_shared_state_identity_and_fresh_candidate_diagnostics() -> None:
+def test_023_shared_state_identity_and_fresh_comparisons() -> None:
     if sys.platform != "linux":
         pytest.fail("BLOCKED: the real Metrowerks integration must run under WSL2/Linux")
 
@@ -209,10 +218,45 @@ def test_023_shared_state_identity_and_fresh_candidate_diagnostics() -> None:
     assert original_resolver(state_hi, 0x6250) is None
     results: list[dict[str, object]] = []
     timings: list[dict[str, object]] = []
-    for address, expected_size, candidate_size in (
-        (0x1B70, 168, 156),
-        (0x1DF4, 144, 140),
-    ):
+    expected_comparisons = {
+        0x1B70: {
+            "matching_words": 5,
+            "difference_count": 30,
+            "relocation_issues": [
+                "word 2 (0x1b78): relocated word differs outside the relocation field",
+                "word 15 (0x1bac): HI16/LO16 association differs (original: no relocation; candidate: LO16 at word 16)",
+                "word 17 (0x1bb4): HI16/LO16 association differs (original: LO16 at word 18; candidate: no relocation)",
+                "word 22 (0x1bc8): HI16/LO16 association differs (original: no relocation; candidate: LO16 at word 25)",
+                "word 26 (0x1bd8): HI16/LO16 association differs (original: LO16 at word 29; candidate: no relocation)",
+                "word 34 (0x1bf8): HI16/LO16 association differs (original: LO16 at word 35; candidate: LO16 at word 36)",
+                "word 13 (0x1ba4): relocation present only on the original side",
+                "word 19 (0x1bbc): relocation present only on the candidate side",
+            ],
+            "limitations": [
+                "word 29: register-flow pairing is uncertain: control flow crosses the HI16-to-LO16 scan",
+                "word 29: HI16/LO16 association relies on relocation order (symbol identity unavailable)",
+            ],
+            "resolved_calls": [],
+        },
+        0x1DF4: {
+            "matching_words": 19,
+            "difference_count": 11,
+            "relocation_issues": [
+                "word 23 (0x1e50): relocated word differs outside the relocation field",
+                "word 27 (0x1e60): HI16/LO16 association differs (original: no relocation; candidate: LO16 at word 30)",
+                "word 30 (0x1e6c): HI16/LO16 association differs (original: LO16 at word 31; candidate: R_MIPS_LO16 alone)",
+            ],
+            "limitations": [
+                "word 11: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+                "word 20: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+            ],
+            "resolved_calls": [
+                "word 9 (0x1e18): libehsys/0x4B0DABFA (stub 0x3780, target 0x3780) <=> libehsys/0x4B0DABFA (stub 0x3780, symbol 'func_00003780' -> 0x3780)"
+            ],
+        },
+    }
+    for address in CASES:
+        expected = expected_comparisons[address]
         name = triage.mips.function_name(address)
         source = REPO_ROOT / "decomp" / "src" / "libtutoriallist" / f"{name}.c"
         attempts = []
@@ -233,18 +277,20 @@ def test_023_shared_state_identity_and_fresh_candidate_diagnostics() -> None:
             })
             attempts.append(result)
         first, second = attempts
-        assert _stable_result(first) == _stable_result(second), f"fresh {name} diagnostic changed"
-        # These are genuine matcher ERRORs, not comparison statuses: the compiler
-        # emits the lean C reconstruction shorter than the original interval.
-        assert first["status"] == "ERROR"
-        assert first["phase"] == "compare"
-        assert first["exit_code"] == 1
-        assert first["error"] == (
-            f"error: candidate section '.text': needs {expected_size} bytes at section offset 0x0 "
-            f"but the section is {candidate_size} bytes"
-        )
-        assert "matching_words" not in first
-        assert "verified_decompilation" not in first
+        assert _stable_result(first) == _stable_result(second), f"fresh {name} comparison changed"
+        assert first["status"] in ("MATCHED", "INCONCLUSIVE", "NONMATCHING")
+        assert first["status"] == "NONMATCHING"
+        assert first["exit_code"] == 3
+        assert first["matching_words"] == expected["matching_words"]
+        assert first["total_words"] == CASES[address]
+        assert first["difference_count"] == expected["difference_count"]
+        assert len(first["differences"]) == expected["difference_count"]
+        assert first["relocation_issues"] == expected["relocation_issues"]
+        assert first["limitations"] == expected["limitations"]
+        assert first["resolved_calls"] == expected["resolved_calls"]
+        assert first["resolved_data"] == []
+        assert first["equivalence"] == ""
+        assert first["verified_decompilation"] is False
         results.append(first)
 
     candidate = elf.parse(

@@ -4241,7 +4241,12 @@ O hash do PRX, a baseline/triage 018 e os limites Ghidra estão em
 e as flags oficiais `-O4,p -sdatathreshold 0`; matcher, critérios, relocations e
 toolchain não foram alterados.
 
-### `func_00001B70` — reconstrução sem comparação concluída
+**Histórico da R1 (commit `e43f52b`):** o teste 023 aceitava `ERROR` para os
+objetos curtos: `0x1B70` 156/168 bytes e a forma compacta `return enabled` de
+`0x1DF4` 140/144 bytes. A R2 preserva esse diagnóstico histórico e muda o teste
+para exigir comparação real; `ERROR`/`BLOCKED` não são resultados aceitos.
+
+### `func_00001B70` — NONMATCHING 5/42
 
 Intervalo Ghidra exato `[0x1B70,0x1C18)`, 42 instruções; nenhuma importação e
 uma chamada local em `0x1BA4` para `0x1C58`. A função não recebe argumentos e
@@ -4257,16 +4262,43 @@ módulo `0x6250`. Loads/stores diretos são byte (`lbu`/`sb`) em `0x1B7C`,
 registradores; `0x1BD8/0x1BE4` depende da ordem das relocations. O slot de delay
 em `0x1BE4` é o `sb` que grava o byte antes do salto para o retorno.
 
-**Resultado real, duas tentativas frescas:** o Metrowerks compilou o objeto
-deterministicamente com 156 bytes, mas o intervalo original precisa de 168.
-`match_function` devolveu `ERROR` na fase `compare` antes de comparar instruções
-(`candidate section '.text': needs 168 bytes ... but the section is 156 bytes`).
-Isso **não é** `NONMATCHING` nem `INCONCLUSIVE`; não há `matching_words`,
-diferenças, limitações ou instruções certificadas para reportar. A fonte
-versionada preserva o comportamento interpretado e não acrescenta NOPs,
-statements mortos ou operações para preencher os três words ausentes.
+**Resultado R2, duas tentativas frescas:** `NONMATCHING` 5/42, 30 diferenças,
+8 relocation issues e 2 limitações de pairing; `resolved_calls = []`,
+`resolved_data = []`, `verified_decompilation = false`. A comparação efetivamente
+compara os 42 words, mas não certifica a função.
 
-### `func_00001DF4` — reconstrução sem comparação concluída
+Os primeiros desvios mostram a hipótese de retorno/branch: o original usa
+`beql v0,zero,epílogo` com `move v0,zero` no delay slot; o candidato inverte o
+branch-likely e usa um salto separado para o epílogo. O count extraído como
+`unsigned short` introduz `andi 0xffff` após `srl`; o original chega diretamente
+ao teste de zero. No caminho count-nonzero, o original agenda o clear da
+contagem e o `sb` no delay slot do salto; o candidato distribui stores e
+retorno por blocos diferentes. O call a `0x1C58` deixa de coincidir no mesmo
+word, e os HI16/LO16 seguintes ficam desalinhados. A localização do estado
+continua no mesmo PT_LOAD, mas a comparação não comprova equivalência.
+
+Hipóteses C testadas, sem padding: retorno antecipado vs wrapper ativo; retorno
+comum em local e `goto` para o clear; layout comum/separado do store; `count`
+`unsigned int`/`unsigned char`/`unsigned short`; `state` byte vs word. O retorno
+comum/`result` atingiu 42 words, e a combinação byte-state/short-count/byte-result
+é a melhor comparação observada (5/42). As formas compactas com `unsigned int`
+foram menores e geravam `ERROR`; nenhuma variante testada superou 5 palavras
+comparáveis.
+
+#### Blocos e registradores de `0x1B70`
+
+| Bloco original | Candidato R2 | Divergência observada |
+|---|---|---|
+| Entrada: `lbu a0`; `andi`; `beql` para retorno-zero com `move v0,zero` no delay | `lbu v1`; `andi`; `bnel` com `sll v0,v1,24` no delay e salto ao epílogo | desvio de GPR/branch no início; o delay slot de retorno não é reproduzido |
+| Campo: `sll`/`srl`, depois `beq count,zero,call` | `sll`/`srl`, `andi 0xffff` da conversão de `count`, depois branch | count deixa de estar imediatamente no formato de 7 bits original |
+| Count nonzero: salto com `andi zero,0x7f` no delay para clear posterior; `sll zero`, mask, `or`, store | clear inline com resultado local; store/return em blocos distintos | call e stores deslocam; o call `0x1C58` não alinha no mesmo word |
+| Call/zero-count: `beq v0,zero,return`; update e `sb` no delay do salto | branch-likely inverso e salto separado; atualização/retorno em outros blocos | delay slots e pairing HI16/LO16 divergem |
+
+O original não usa registradores `$s*`; a fonte R2 também compila sem salvá-los.
+O objeto final e as 30 diferenças completas estão em
+`build/seto023/matches/f1b70/attempt-{1,2}`.
+
+### `func_00001DF4` — NONMATCHING 19/36
 
 Boundary Ghidra exato `[0x1DF4,0x1E84)`, 36 instruções, argumentos assinados
 `(arg0,arg1)`. O retorno é o predicado assinado `arg1 > 0`. Quando esse
@@ -4281,17 +4313,34 @@ Os quatro pares em `0x1E20/0x1E24`, `0x1E44/0x1E4C`, `0x1E50/0x1E54` e
 `0x1E6C/0x1E70` são confirmados por fluxo de registradores. As referências
 `0x1E24`/`0x1E54` são `lbu`; `0x1E4C`/`0x1E70` são `sb`.
 
-**Resultado real, duas tentativas frescas:** o objeto compilado tem 140 bytes;
-o intervalo original exige 144. O matcher devolveu `ERROR` em `compare` antes
-da comparação (`candidate section '.text': needs 144 bytes ... but the section
-is 140 bytes`). Isso também **não** é `NONMATCHING` ou `INCONCLUSIVE`, e não
-certifica words. A fonte não contém padding artificial.
+**Resultado R2, duas tentativas frescas:** `NONMATCHING` 19/36, 11 diferenças,
+3 relocation issues e 2 limitações HI16/LO16 de identidade nos dados
+`0x6250`; a chamada importada foi resolvida por NID. `resolved_data = []` e
+`verified_decompilation = false`.
 
-Os dois erros são limitações reais do codegen sob as flags oficiais, não
-ausência do PRX/compiler nem skips. Não foi alterado matcher, faixa comparada,
-flags ou assembly inline. A meta de obter dois resultados comparáveis ainda
-não foi atingida; o objeto dos erros foi preservado apenas como evidência
-operacional ignorada pelo Git.
+A divergência começa na word 23, no registrador base (`lui v0` vs `lui v1`), e
+continua no bloco final de atualização/retorno: candidato e original escolhem
+ordem e registradores diferentes para `state & ~1`, o bit de ativação, store e
+retornos. Os três relocation issues nos words 23/27/30 mostram a mudança de
+pairing/alinhamento no final. A forma compacta `return enabled` foi testada e
+compilou 140 bytes (4 bytes curta), logo produziu `ERROR`; a versão atual usa
+retornos explícitos 0/1 para que o matcher compare o intervalo completo.
+
+Também foram testados estado local byte/word, ordem de declarações,
+`state &= ~1; state |= 1;` versus `(state & ~1) | 1`, e formas aritméticas de
+setar o bit. O Metrowerks manteve os mesmos desvios no bloco final; o candidato
+R2 de 36 words é a comparação mais próxima observada. Não foram adicionados
+guards, operações de padding ou assembly inline.
+
+#### Bloco final e registradores de `0x1DF4`
+
+Até o teste de `arg0` e o import, `$s0` contém o predicado signed `arg1 > 0` e
+sobrevive ao call, como no original. A primeira diferença é word 23: original
+`lui v1`/`lbu a1`, candidato `lui v0`/`lbu a0`. Depois o original prepara `1` em
+`a0`, copia `$s0` para `v0`, calcula `state & -2` em `v1`, faz
+`or a0,v1,a0`, grava e cai no epílogo comum. O candidato mascara em `a0`, usa
+`ori`, grava e emite branches explícitos para os retornos 0/1. Isso explica as
+diferenças de words 25–35 e os relocation issues nos words 23/27/30.
 
 ### `func_00001C58` — análise condicionada
 
@@ -4347,29 +4396,29 @@ evidência independente; nenhum dos quatro destinos foi resolvido.
 ### Regressores preservados e totais
 
 Os opt-ins reais 018–022 foram repetidos depois das declarações compartilhadas:
-**6 passaram**. Os hashes dos objetos certificados não mudaram; em particular
+**6 passaram**. Na R2, os hashes dos objetos certificados não mudaram; em particular
 `0xE24` segue `INCONCLUSIVE` 113/115, `0x1D08` segue `INCONCLUSIVE` 53/59 e
 `0x1764` segue `NONMATCHING` 42/182. Os oito `INCONCLUSIVE` de `libhtml_view`
 também permanecem. O total continua **14 `MATCHED` / 906 instruções**; a 023
 não acrescentou instruções certificadas nem novos `MATCHED`.
 
-O opt-in 023 (`SETO_LIBTUTORIALLIST_023_REAL=1`) passou uma validação de
-contratos e duas tentativas frescas por função. Seu resultado não é aprovação
-de matching: ele exige e registra os dois `ERROR` estáveis acima, com os
-objetos compilados e sem `matching_words` ou `verified_decompilation`. `ERROR`
-permanece distinto de `BLOCKED`, `NONMATCHING` e `INCONCLUSIVE`.
+O opt-in 023 (`SETO_LIBTUTORIALLIST_023_REAL=1`) passou a validação de contratos
+e duas tentativas frescas por função. Ele agora exige comparações reais
+`NONMATCHING`, verifica counts/diferenças/relocation issues/limitações e
+`verified_decompilation=false`; `ERROR` e `BLOCKED` não são aceitos como
+sucesso.
 
 ### Hashes da 023
 
 | Artefato | SHA-256 |
 |---|---|
 | PRX original | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
-| Fonte `func_00001B70.c` | `a985c995d7dc098d5c87094d4ac9ef9e56bbbac591dc347cc7ca501c9d9249a6` |
-| Objeto `0x1B70` (compilado; comparação retorna ERROR) | `fbfa06ab150283df615539e4aed46496dce4d91f633aa93f9893ca320d3bb28a` |
-| Fonte `func_00001DF4.c` | `5b54bef8e40a6d3558167b84bb08340e7746f5629a59c123283de93c3d220eea` |
-| Objeto `0x1DF4` (compilado; comparação retorna ERROR) | `5aa1c36c2b839ff87d191f61f15bdf67833a953e4f00d01833dee8bed50d465a` |
+| Fonte `func_00001B70.c` | `3f593557c7f40441b17ee0e2503a098dfd231135e9d0b3e8d758934f103a398f` |
+| Objeto `0x1B70` (`NONMATCHING` 5/42) | `fbca086054040a74bc25c3a60c5b31d8b3d35d8a91e025f3e47e5731b0ed1c20` |
+| Fonte `func_00001DF4.c` | `206691cdfcb332ea72205794447d0e6da617a64458db0bfb427d9df4eff44bf8` |
+| Objeto `0x1DF4` (`NONMATCHING` 19/36) | `085fea270aa437d117dc8f2e310dfccca3463519c6414cffd337c5d68c97ec00` |
 | `libtutoriallist_stubs.h` | `dfd25c5a41aa789576b7a24d88017fa885f9ca734d74503d9e66cd2da7879735` |
-| Teste real 023 | `6cdab6b7cac49ebcc38168f3d2e69407be674af269e80c4cc67c427ce750ac34` |
+| Teste real 023 | `a11203f022f661ea1ad992b3719ddc8231ac988664abfc40f4c5cb4f2c61735d` |
 
 ### Testes e skips
 
@@ -4379,7 +4428,7 @@ permanece distinto de `BLOCKED`, `NONMATCHING` e `INCONCLUSIVE`.
 | `pytest -q -rs` | WSL2 | 778 passed, 21 skipped |
 | `pytest -m integration -q -rs` | Windows | 23 passed, 33 skipped, 743 deselected |
 | `pytest -m integration -q -rs` | WSL2 | 41 passed, 15 skipped, 743 deselected |
-| Opt-ins reais 018–023 | WSL2 | 7 passed (2+1+1+1+1+1; o opt-in 023 valida os ERROR, não comparação) |
+| Opt-ins reais 018–023 | WSL2 | 7 passed (2+1+1+1+1+1; o 023 verifica comparações `NONMATCHING` estáveis) |
 | `compileall -q src scripts tests` | Windows | clean |
 | `git diff --check` | Windows Git | clean |
 
@@ -4391,10 +4440,8 @@ matching. Logs, baseline, auditorias e objetos ficam em `build/seto023/`.
 ### Próximo bloqueio
 
 Antes de promover esta rodada como reconstrução comparada, é necessário achar
-formas C fiéis de `0x1B70`/`0x1DF4` que o Metrowerks compile com comprimento
-suficiente para o matcher comparar (sem statements/NOPs artificiais), ou
-registrar por que o codegen sob as flags oficiais não oferece tal forma. Só
-depois de existir comparação real e zero diferenças será possível avaliar as
-limitações de identidade dos oito pares de dados; sem prova independente, elas
-devem continuar sem resolver. A identidade de `0x6250`, `0x6204`, `.data+0x34`
-e `.data+0x80` permanece pendente.
+formas C fiéis de `0x1B70`/`0x1DF4` que reproduzam branches, delay slots,
+registradores e stores sem padding, e aumentar a comparação além de 5/42 e
+19/36. Os diffs e relocation issues R2 já são comparação real; não devem ser
+escondidos. Mesmo após resolver o codegen, a identidade de `0x6250`, `0x6204`,
+`.data+0x34` e `.data+0x80` continua pendente sem prova independente.
