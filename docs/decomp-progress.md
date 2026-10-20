@@ -4107,3 +4107,111 @@ Todas as funções EXACT ainda não reconstruídas têm datarefs; não há outra
 função não certificada com zero datarefs além de `0x1764`. Portanto, um novo
 `MATCHED` estrito exige resolver o bloqueio de alocação de `0x1764` ou provar a
 identidade do objeto global — não basta reconstruir mais uma função.
+
+### SETO-DECOMP-022-R2 — Prototype Compatibility & Memory Contracts
+
+Correção posterior à auditoria da PR #21, aplicada sobre a mesma branch/PR:
+`feat/seto-decomp-022`, HEAD-base
+`716d89bfaebbc6b534e9b1829a1ff126d6fa37b6`. Não há função nova, mudança de
+critério de matching, flag, toolchain, relocation ou equivalência. Dos oito
+arquivos de código e header alterados, seis são chamadores que apenas perderam
+a declaração local duplicada de `0x1D08`; nenhum statement, constante, import
+ou corpo de função foi alterado. A única mudança de código é a largura do
+parâmetro `key` de `0x1D08` e os protótipos locais compartilhados no header.
+
+**Compatibilidade de protótipos**
+
+A definição certificada de `0x1E94` usa `unsigned short key` e o objeto
+original mascara o argumento com `andi a0,a0,0xffff` em `0x1EB0`. O call site
+original de `0x1D08` em `0x1D24` passa `a0` sem qualquer máscara. O domínio do
+chamador é, portanto, 16 bits.
+
+A primeira tentativa manteve `func_00001D08(int key)` e alterou apenas o
+protótipo de `0x1E94` para `unsigned short key`. O Metrowerks inseriu uma
+máscara redundante `andi a0,a0,0xffff` em `0x1D10`, deslocando o corpo: o
+resultado caiu para **NONMATCHING 3/59**, com 51 diferenças e a primeira
+divergência já na word 2 (associação HI16/LO16). A conversão do argumento
+`int` para `unsigned short` no caller não é gratuita.
+
+A correção usa o mesmo domínio de 16 bits nos dois lados: `0x1D08` e `0x1E94`
+são declarados em `libtutoriallist_stubs.h` com `unsigned short key`, e as seis
+declarações locais duplicadas de `0x1D08` foram removidas. Os callers passam
+constantes que cabem em 16 bits (`0x1003`, `0x1011`, `0x1020`), então a
+conversão é compile-time e não gera instrução. O objeto de `0x1D08` ficou byte
+a byte idêntico ao certificado; a divergência acima é a justificativa para a
+largura do parâmetro do caller, não um cast artificial.
+
+**Contratos de memória**
+
+Nenhum guard, clamp, cast ou branch foi adicionado. Os comentários distinguem
+o que o binário demonstra do que é apenas domínio de entrada necessário:
+
+| Acesso | Demonstrado | Hipótese / obrigação do chamador |
+|---|---|---|
+| `name[func_00004120()]` em `0x1D08` | o fragmento tem seis bytes copiados de `.data+0x80`; o byte é lido em `buffer+index`; não há clamp nem bounds check | `func_00004120()` deve retornar `0..5`; o artefato não prova essa faixa; outros usos da função no módulo a comparam com zero; fora da faixa o original lê bytes adjacentes da stack |
+| `func_00000E24_extents[index]` em `0x0E24` | a base combina para o offset de módulo `0x00006204`; o load de halfword usa `index` diretamente; não há bounds check | `index` deve selecionar um elemento válido; o tamanho e a posse da tabela não estão provados; a faixa dos chamadores não foi estabelecida |
+
+A tabela de `0x1D08` (quatro entradas, stride 12) tem count/stride
+demonstrados pelos argumentos da chamada e pela reconstrução de `0x1E94`; a
+extensão e a posse continuam hipóteses. Nenhum limite foi inventado para
+`name` ou para os extents.
+
+**Resultados e limitações**
+
+| Função | Resultado | Objeto SHA-256 |
+|---|---|---|
+| `0x0E24` | `INCONCLUSIVE` 113/115, zero diferenças | `3a237eb0…` (inalterado) |
+| `0x1D08` | `INCONCLUSIVE` 53/59, zero diferenças | `49bd56ad…` (inalterado) |
+| `0x1764` | `NONMATCHING` 42/182, 140 diferenças / 32 relocation issues | `0a8d3235…` (inalterado) |
+
+O total continua **14 `MATCHED` / 906 words**. As seis funções chamadoras de
+`0x1D08` — `0x6E8` 47/47, `0x7A4` 83/83, `0xFF0` 153/153, `0x1254` 163/163,
+`0xE24` 113/115 e `0x1764` 42/182 — mantiveram status, contagem e objeto byte
+a byte. Os objetos de `0x14E0` `301afd4c…`, `0x1E94` `24df0bdb…` e `0x1A3C`
+`c2932f8c…` também permaneceram idênticos. A limitação de identidade de dados
+de `0xE24`/`0x1D08` e o bloqueio de alocação de `0x1764` não foram alterados;
+nenhum deles foi promovido a `MATCHED`.
+
+**Hashes finais da R2**
+
+| Distinção | Artefato | SHA-256 |
+|---|---|---|
+| 1. PRX original | `libtutoriallist.prx` | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+| 2. fonte R2 | `func_00000E24.c` | `7b09c23e70ac9e668a7633f236cd3811fe1231d815096f40ea02243c89e097f4` |
+| 2. fonte R2 | `func_00001D08.c` | `a65b41419346eab1e817f118243c2f1bec6dff30c52f2183ed3a6d7614a47911` |
+| 2. fonte R2 | `func_00001764.c` | `2a1126ed3dd3d2f62fca54b956f0496e44f55866df6097e3b406a9066b36eb62` |
+| 2. fonte R2 | `libtutoriallist_stubs.h` | `638ce2d1880cecfd33d8b497fcf6d167143043029f3c8948f6aa44061988f9d0` |
+| 2b. chamador R2 (declaração removida) | `func_000006E8.c` | `7323db7f0f6b36b254b0ba67c9babd63b972981e9ac2096c7c84957ed0bd06d5` |
+| 2b. chamador R2 (declaração removida) | `func_000007A4.c` | `f10766ab55eb459650052c642c74de73291d3da1152651b6f612b67b25f01ac0` |
+| 2b. chamador R2 (declaração removida) | `func_00000FF0.c` | `a0cad5d06ea90126440847da770191f79ad389d7c735b356989d7840a2f80195` |
+| 2b. chamador R2 (declaração removida) | `func_00001254.c` | `8fd98ea08087f1471951ac75a0d2f63362e3152926cbc284a0434b62b99f7397` |
+| 2b. fonte 021-R2 (inalterada) | `func_000014E0.c` | `464b158ef133b8f589cf875236bc47a0f4657f4f24a2be2fb6322936152a8b97` |
+| 2b. fonte 021-R2 (inalterada) | `func_00001E94.c` | `34722bc5e04dc6e6f8da79d4768a122879a04fd4bc48ce4ce941ac0f1f18563a` |
+| 3. objeto | `0x0E24` | `3a237eb0a42d20429506963862c5f6a08ed22d59443d92b802f89fd6be312d63` |
+| 3. objeto | `0x1D08` | `49bd56ade7ea183703b7e02655ec5f072d563312a62fef0b67dbf10ea3d9ef16` |
+| 3. objeto | `0x1764` | `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea` |
+| 3. objeto 021-R2 (inalterado) | `0x1254` | `78ab23a040226e1217487d08d6cfb5ccc5b6812e4ea8c4bdac368e3dcbcb2c06` |
+| 3. objeto 021-R2 (inalterado) | `0x1E94` | `24df0bdbcc2926ef4c5e8bf0c18231dcf9047068447ed978e68916f834c8fcc4` |
+| 3. objeto 021-R2 (inalterado) | `0x14E0` | `301afd4c338e0ac606c065e05150e6c336a030be61bc01f9fcd64d7905e9bd69` |
+
+As fontes de `0x14E0`/`0x1E94` continuam com os hashes da 021-R2; a fonte de
+`0x1254` mudou apenas pela remoção da declaração local de `0x1D08`, com objeto
+inalterado. A fonte de `0x1764` mudou apenas pela remoção da mesma declaração;
+o corpo e o objeto continuam os da 022.
+
+**Testes após a correção**
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 37 skipped |
+| `pytest -q -rs` | WSL2 | 779 passed, 19 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 32 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 42 passed, 13 skipped, 743 deselected |
+| Opt-ins reais 018 + 019 + 020 + 021 + 022 | WSL2 | 6 passed (2+1+1+1+1) |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean |
+
+Cada função afetada foi compilada e comparada em duas tentativas frescas por
+execução; a suíte 022 também recompila `0x0E24`, `0x1D08` e `0x1764` duas vezes
+e compara os resultados. Os logs da R2 ficam em `build/seto022/r2/` e o
+detalhe operacional em `build/seto022/REPORT.md`.

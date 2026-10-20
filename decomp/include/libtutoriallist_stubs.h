@@ -74,4 +74,17 @@ extern void func_000025D0(void *arg0, int arg1, int arg2);
 extern int func_00003790(int arg0, void *arg1, int arg2);
 /* libehsys, NID 0xC6C15111, stub 0x3790 */
 
+/*
+ * Local (non-imported) entry points shared by this module's reconstructions.
+ * func_00001D08 and func_00001E94 use a 16-bit key; these prototypes must stay
+ * in sync with their definitions so callers cannot drift to another key width.
+ */
+extern int func_00001D08(unsigned short key);
+extern int func_00001E94(
+    unsigned short key,
+    const unsigned short *values,
+    int count,
+    int stride_bytes
+);
+
 #endif /* SETO_DECOMP_LIBTUTORIALLIST_STUBS_H */
