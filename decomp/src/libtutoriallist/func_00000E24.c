@@ -14,6 +14,16 @@
  * claim that a candidate symbol names the original object. The table entry is
  * scaled as (value * 3) * 8, matching the three shift/add words at 0x0EE8.
  *
+ * Demonstrated by the binary for `func_00000E24_extents[index]`: the base
+ * combines to module offset 0x00006204, the halfword load uses index directly,
+ * and the path contains no bounds check.
+ *
+ * Required input domain for `func_00000E24_extents[index]` (hypothesis, not
+ * demonstrated): index must select a valid element of that table. Its size and
+ * ownership are not proven, and the known callers' index ranges are not
+ * established here. This is the caller's obligation; the original does not
+ * guard it.
+ *
  * The import NIDs and the parameter meanings are usage-derived. In particular
  * 0x180/0x280, 12/14, 0x4400 and 0xFF000000 are passed through unchanged; they
  * are not assigned invented flag or unit meanings.
@@ -32,7 +42,6 @@
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001D08(int arg0);
 extern void *func_00000FF0(
     void *arg0,
     unsigned int width,

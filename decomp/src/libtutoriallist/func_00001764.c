@@ -28,7 +28,6 @@
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001D08(int arg0);
 extern void *func_000014E0(
     void *renderer, int x, int y, int mode, unsigned int total,
     unsigned int progress, int flag, unsigned int current, int context

@@ -9,8 +9,6 @@
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001D08(int arg0);
-
 void *func_000007A4(void *arg0)
 {
     int status = func_00001D08(0x1003);

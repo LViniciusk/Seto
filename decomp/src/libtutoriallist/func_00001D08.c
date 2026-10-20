@@ -30,6 +30,31 @@
  * early return is also load-bearing; a positive wrapper selects a different
  * branch layout and saves one instruction.
  *
+ * Key ABI: func_00001E94 masks its key with `andi a0,a0,0xffff` at 0x1EB0,
+ * and the original call site at 0x1D24 passes a0 unchanged. The caller-side
+ * key is therefore a 16-bit domain. Declaring func_00001E94(unsigned short)
+ * while keeping this function's key as int makes Metrowerks insert a redundant
+ * `andi a0,a0,0xffff` at 0x1D10; the body shifts and the result is NONMATCHING
+ * 3/59. Declaring both keys unsigned short removes the call-site conversion and
+ * reproduces the certified object byte for byte.
+ *
+ * Demonstrated by the binary for `name[func_00004120()]`: the name fragment is
+ * six bytes copied from .data+0x80, the selected byte is read at buffer+index,
+ * and the path contains no clamp or bounds check.
+ *
+ * Required input domain for `name[func_00004120()]` (hypothesis, not
+ * demonstrated): func_00004120() must return a value in [0, 5]. The artifact
+ * does not prove that range; other uses of func_00004120 in the module compare
+ * it with zero, and an out-of-range value makes the original read adjacent
+ * stack bytes (undefined behavior in C). This is the caller's obligation, not
+ * a property of every call.
+ *
+ * Demonstrated by the binary for the table: func_00001E94 is called with
+ * count 4 and stride 12, and the returned index addresses a four-entry table.
+ * Required input domain (hypothesis, not demonstrated): the index must select
+ * a valid entry; the table's ownership and full extent remain unproven, and
+ * the original does not bounds-check the index.
+ *
  * Status: INCONCLUSIVE 53/59, zero instruction differences. The three
  * limitations are the HI16/LO16 pairs at words 2, 15 and 25: the original
  * targets .data+0x34, .data+0x34 and .data+0x80, while the candidate symbols
@@ -39,23 +64,12 @@
 
 #include "libtutoriallist_stubs.h"
 
-/*
- * Caller-side prototype: the original passes the incoming a0 unchanged, so the
- * full register is passed here. func_00001E94 itself documents the key as a
- * 16-bit value; the known callers pass 0x1003/0x1020, which fit that domain.
- */
-extern int func_00001E94(
-    int key,
-    const unsigned short *values,
-    int count,
-    int stride_bytes
-);
 extern int func_00001C58(void);
 
 extern unsigned short func_00001D08_entries[];
 extern const char func_00001D08_names[];
 
-int func_00001D08(int key)
+int func_00001D08(unsigned short key)
 {
     char buffer[256];
     char name[6];
