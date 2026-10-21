@@ -13,11 +13,12 @@
  * named sections. The shared provisional candidate symbol therefore does not
  * establish cross-artifact identity.
  *
- * The explicit 0/1 return form compiles to the complete 144-byte interval and
- * is compared below. Its current result is NONMATCHING 19/36; differences are
- * confined to the final shared-state update/return block and include three
- * relocation-pairing issues. The compact `return enabled` form was four bytes
- * short, so it produced ERROR rather than comparison evidence.
+ * The explicit 0/1 return form emits a 152-byte function symbol; the matcher
+ * compares the original 144-byte interval. Its current result is NONMATCHING
+ * 19/36; differences are confined to the final shared-state update/return block
+ * and include three relocation-pairing issues. The compact `return enabled`
+ * form emits 140 bytes, so it is four bytes short and produces ERROR rather than
+ * comparison evidence.
  */
 
 #include "libtutoriallist_stubs.h"

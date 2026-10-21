@@ -4316,7 +4316,9 @@ Os quatro pares em `0x1E20/0x1E24`, `0x1E44/0x1E4C`, `0x1E50/0x1E54` e
 **Resultado R2, duas tentativas frescas:** `NONMATCHING` 19/36, 11 diferenças,
 3 relocation issues e 2 limitações HI16/LO16 de identidade nos dados
 `0x6250`; a chamada importada foi resolvida por NID. `resolved_data = []` e
-`verified_decompilation = false`.
+`verified_decompilation = false`. O símbolo `func_00001DF4` no objeto tem 152
+bytes (38 words); o matcher compara os 36 words/144 bytes do intervalo original.
+Os dois words extras no objeto não são certificados como parte do intervalo.
 
 A divergência começa na word 23, no registrador base (`lui v0` vs `lui v1`), e
 continua no bloco final de atualização/retorno: candidato e original escolhem
@@ -4328,9 +4330,9 @@ retornos explícitos 0/1 para que o matcher compare o intervalo completo.
 
 Também foram testados estado local byte/word, ordem de declarações,
 `state &= ~1; state |= 1;` versus `(state & ~1) | 1`, e formas aritméticas de
-setar o bit. O Metrowerks manteve os mesmos desvios no bloco final; o candidato
-R2 de 36 words é a comparação mais próxima observada. Não foram adicionados
-guards, operações de padding ou assembly inline.
+setar o bit. O Metrowerks manteve os mesmos desvios no bloco final; a comparação
+R2 sobre o intervalo de 36 words é a mais próxima observada. Não foram
+adicionados guards, operações de padding ou assembly inline.
 
 #### Bloco final e registradores de `0x1DF4`
 
@@ -4445,3 +4447,140 @@ registradores e stores sem padding, e aumentar a comparação além de 5/42 e
 19/36. Os diffs e relocation issues R2 já são comparação real; não devem ser
 escondidos. Mesmo após resolver o codegen, a identidade de `0x6250`, `0x6204`,
 `.data+0x34` e `.data+0x80` continua pendente sem prova independente.
+
+## SETO-DECOMP-024 — Control-Flow & Register Matching
+
+Branch `feat/seto-decomp-024`, criado sobre `main` em
+`721a802ec5cd3ad3425e34d51c9a6605f0fdbde4`, após o merge da PR #22. O PRX
+original tem SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`. A rodada
+reproduziu a baseline com Metrowerks `mwccpsp_3.0.1_219`, WSL2/wibo e flags
+oficiais `-O4,p -sdatathreshold 0`, sem alterar compilador, flags, comparador,
+imports, assinaturas ou identidade de dados.
+
+### Resultado
+
+| Função | Baseline pré-024 | Final reproduzido (2 compilações) | Tamanho do símbolo candidato | Estado |
+|---|---|---|---:|---|
+| `0x1DF4` | `NONMATCHING` 19/36; 11 diferenças; 3 relocation issues | `NONMATCHING` 19/36; 11 diferenças; 3 relocation issues; 2 limitações | 152 bytes (38 words); compara-se o intervalo original de 144 bytes | **sem avanço** |
+| `0x1B70` | `NONMATCHING` 5/42; 30 diferenças; 8 relocation issues | `NONMATCHING` 5/42; 30 diferenças; 8 relocation issues; 2 limitações | 168 bytes (42 words) | **sem avanço** |
+
+As duas tentativas frescas de cada fonte produziram status, diferenças, limitações,
+relocations e hashes estáveis. Nenhum resultado `ERROR`/`BLOCKED` foi contado como
+comparação final. Os experimentos curtos listados abaixo são explicitamente
+`ERROR`, não resultados de matching. Nenhuma variante foi mantida nas fontes C:
+o código executável continua sendo o melhor candidato da R2; `func_00001DF4.c`
+recebe somente uma correção de comentário sobre o tamanho real do símbolo.
+
+O total certificado continua em **14 `MATCHED` / 906 instruções**. As oito
+funções `libhtml_view` `INCONCLUSIVE`, os resultados da 022 e as certificações
+anteriores permanecem inalterados. Não há nova função `MATCHED` nem equivalência
+alegada para estes dois alvos. A identidade cross-artifact do byte `0x6250`
+continua sem prova.
+
+### Comparação alinhada por blocos
+
+Mapas com todos os words/opcodes originais e candidatos, razões do matcher e
+limitações estão em `build/seto024/final/aligned-instructions.md`.
+
+#### `0x1DF4`
+
+As words 0–22 mantêm a sequência de prólogo, predicado signed, guards, chamada
+importada e incremento do campo. O import em `0x1E18` segue resolvido como
+`libehsys/0x4B0DABFA`, stub `0x3780`, com retorno não usado. A primeira diferença
+é a word 23 (`0x1E50`): `lui v1` original versus `lui v0` candidato, com palavra
+relocada diferente fora do campo. O bloco original `[23,36)` carrega em `a1`,
+prepara `1` em `a0`, copia `s0` para `v0`, mascara e combina o byte, armazena e
+cai no epílogo comum. O candidato carrega em `a0`, usa `ori`, armazena no delay
+slot de um branch e emite branches/constantes distintos para os retornos; o
+epílogo é deslocado. As diferenças agrupam-se no bloco final, não no import nem
+no cálculo do contador. Relocation issues nas words 23, 27 e 30; as duas
+limitações de identidade permanecem nas words 11 e 20.
+
+**Correção de tamanho:** o símbolo candidato atual mede 152 bytes (38 words),
+embora o intervalo original tenha 144 bytes (36 words). A comparação R2/024
+alinha e compara os 36 words solicitados, mas os dois words excedentes impedem
+afirmar tamanho binário exato. A forma compacta `return enabled` mede 140 bytes
+e resulta em `ERROR` por ser curta.
+
+#### `0x1B70`
+
+A primeira diferença é a word 2 (`0x1B78`): o opcode `lui v0` coincide, mas o
+valor relocável não, pois o destino original zero-fill `0x6250` não tem
+identidade cross-artifact demonstrada. Na word 4, `andi v0,a0,1` original vira
+`andi v0,v1,1`; a word 5 troca `beql` para o epílogo, com `move v0,zero` no
+delay slot, por `bnel` em direção ao corpo, com a extração `sll` no delay slot.
+Esse grupo (words 4–12) altera registradores, sucessores e retorno-zero inicial;
+o candidato também introduz `andi 0xffff` por `count` `unsigned short`.
+
+O call local original é a word 13 (`0x1BA4`); na R2 candidata a relocation do
+call aparece na word 19 (`0x1BBC`). O original testa o campo, salta ao clear
+posterior com `andi zero,0x7f` no delay slot, chama `0x1C58` no caso zero e
+coloca o `sb` em `0x1BE4` no delay slot do salto ao retorno-zero. O candidato
+emite blocos clear/call/retorno em outra ordem, deslocando os HI16/LO16 do
+restante da atualização. Os oito relocation issues são nas words 2, 13, 15, 17,
+19, 22, 26 e 34; a associação de word 29 continua limitada por fluxo de controle
+que cruza o scan. `resolved_calls=[]`, portanto não se afirma que o call local
+foi alinhado/provado pelo matcher.
+
+### Hipóteses novas e variantes refutadas
+
+| Função / hipótese | Evidência compilada em duas tentativas | Decisão |
+|---|---|---|
+| `0x1DF4`: acesso direto `func_00006250_state = (global & ~1u) | 1u`, retorno compacto | Final do bloco aproximou `lui v1`, `lbu a1` e `addu v0,s0`, mas o Metrowerks usou a máscara como operando e `ori`; objeto 140 bytes, `ERROR` (5aa1c36a…). | Rejeitada: não há comparação completa. |
+| `0x1DF4`: limpar bit e somar 1 no mesmo lvalue | Também 140 bytes, `ERROR`; o candidato emite `addiu`, não a combinação `or` necessária, e continua um word curto. | Rejeitada; não é evidência de match. |
+| `0x1DF4`: acesso direto com retornos explícitos | O otimizador emitiu o objeto R2 `085fea27…`, 152 bytes, sem qualquer mudança nos 19/36, 11 diffs e 3 relocations. | Rejeitada: volta ao codegen baseline. |
+| `0x1DF4`: habilitar bit por condição sobre seu estado anterior | Introduziu branch no update e manteve `NONMATCHING` 19/36, 11/3; não corrigiu o bloco final nem o pairing. | Rejeitada. |
+| `0x1B70`: count-zero/call antes do clear, `count` `unsigned int`, retornos antecipados | Call aproximou-se da word original (candidato word 12, original word 13), mas o objeto mede 152 bytes/38 words e retorna `ERROR`; entry/count branches e delay slots continuam distintos. | Rejeitada: `ERROR`, não comparação. |
+| `0x1B70`: retorno comum com resultado local e `count` `unsigned int` | 152 bytes/38 words (`ERROR`); ainda organiza clear/call incorretamente e a variante de resultado local salva `$s0`, ao contrário do original. | Rejeitada. |
+| `0x1B70`: retorno comum com `count` `unsigned short`/resultado byte | 160 bytes/40 words (`ERROR`); reaparecem dois `andi 0xffff`, e o CFG não se alinha. | Rejeitada. |
+| `0x1B70`: `goto` para os blocos call/clear e expressões explícitas para limpar/preservar o bit | O compilador otimizou as expressões/gotos para os mesmos objetos de 38 words; não gerou a sequência de branches/slots necessária. | Rejeitada; nenhum status `ERROR` foi usado como comparação. |
+
+Variantes não comparáveis foram descartadas e não são aceitas pelo teste. Não
+foram adicionados NOPs, padding, código morto, `volatile`, assembly inline,
+casts artificiais, mudanças de flags ou lógica no comparador.
+
+### Hashes e reprodutibilidade
+
+| Artefato | SHA-256 |
+|---|---|
+| PRX original | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` |
+| Fonte final `func_00001B70.c` | `0ae3b52221d31266984227ab17e0e7759765020ff23e1ee0ad5e1cb294f2d39f` |
+| Objeto `0x1B70`, tentativas 1 e 2 (168 bytes) | `fbca086054040a74bc25c3a60c5b31d8b3d35d8a91e025f3e47e5731b0ed1c20` |
+| Fonte final `func_00001DF4.c` | `d3dcf4766df569e99649415bca71943ace9cfa870e227353e7915e58c8c97949` |
+| Objeto `0x1DF4`, tentativas 1 e 2 (152 bytes) | `085fea270aa437d117dc8f2e310dfccca3463519c6414cffd337c5d68c97ec00` |
+
+O opt-in 024 (`SETO_LIBTUTORIALLIST_024_REAL=1`) usa duas compilações frescas
+por função e compara exatamente os campos estáveis; exige estado `NONMATCHING`
+medido e grava diferenças/relocations completas sob `build/seto024/`. Não
+interpreta `matching_words` como certificação. A validação 023 continua verde;
+como o código C executável não mudou, seus contratos históricos 19/36 e 5/42
+seguem válidos.
+
+### Testes e preservação
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | 761 passed, 40 skipped |
+| `pytest -q -rs` | WSL2 | 778 passed, 23 skipped |
+| `pytest -m integration -q -rs` | Windows | 23 passed, 35 skipped, 743 deselected |
+| `pytest -m integration -q -rs` | WSL2 | 41 passed, 17 skipped, 743 deselected |
+| Opt-ins reais 018–024 | WSL2 | 9 passed; 023 e 024 repetidos após a correção do comentário |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows Git | clean |
+
+Os três skips YAML na suíte WSL permanecem por ausência de `PyYAML`; skips de
+ISO/Splat, Ghidra/REA e opt-ins não ativados continuam sendo skips, não matching.
+Relatórios, disassemblies, objetos e mapas ficam em `build/seto024/`; PRX e
+objetos não são versionados.
+
+### Bloqueio e próxima hipótese
+
+O objetivo principal desta rodada não foi atingido: `0x1DF4` não chegou a zero
+diferenças e o símbolo candidato ainda excede o tamanho original; `0x1B70` não
+avançou além de 5/42. Não há ganho a promover como matching. A próxima tentativa
+deve encontrar uma expressão C semanticamente natural que mantenha o retorno em
+`v0`, produza o operando `1` em `a0` e o mask em `v1` sem branches explícitos em
+`0x1DF4`; para `0x1B70`, deve reproduzir o `beql`/delay slot inicial, o branch
+ordinary zero-count para o call na word 13, o `sb` em delay slot e o clear
+posterior, sem `$s*`. Não relaxar a identidade do byte `0x6250`.
