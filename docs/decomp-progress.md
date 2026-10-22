@@ -4819,3 +4819,360 @@ callback cujo corpo já é `MATCHED`. `0x1764` conserva o bloqueio global de
 alocação/spill. Os próximos passos devem tratar essas provas ou um novo grafo
 de interferência de `0x1764`, não repetir máscaras/retornos/permutações já
 refutados. Esta rodada entrega implementação real, não apenas gates verdes.
+
+---
+
+## SETO-DECOMP-025 — Full-Scale One-Shot Decompilation Offensive
+
+### 1. Base, artefatos e escopo
+
+A rodada parte de `origin/main` em
+`e3c5935009867657af7cae4a92fee1971d8da8a6`, no branch
+`feat/seto-decomp-025-oneshot`. O HEAD inicial e o merge-base são o mesmo
+commit; nenhum merge ou reescrita de histórico foi feito.
+
+| Artefato | Tamanho | SHA-256 | Papel |
+|---|---:|---|---|
+| `libtutoriallist.prx` | 30 234 | `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49` | módulo principal, `.text` 0x0–0x25B0 |
+| `libhtml_view.prx` | 21 426 | `319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26` | auditoria de cobertura e preservação |
+| `EBOOT.BIN` | 1 110 624 | `9a5bbf89419b6ba13494318fce4adb6279d099bda54fbf40b9c2dc178b96809a` | `~PSP`, não-ELF |
+| `libadler.prx` | 1 088 | `dcb2765c0e99f18a326b62b7b1cbcf960d5e970c8b587e100cbf4d1457a841d1` | `~SCE`, não-ELF |
+
+O `.text` de `libtutoriallist.prx` tem 9 648 bytes (2 412 words) e termina em
+0x25B0, onde começa `.sceStub.text` (9 960 bytes). O `.text` de
+`libhtml_view.prx` tem 2 036 bytes (509 words). O `.comment` do tutorial
+registra `MW MIPS C Compiler (2.4.1.01)`; a reconstrução usa o compilador
+disponível `mwccpsp 3.0.1 build 219` com `-O4,p -sdatathreshold 0`. Isso é
+equivalência para o compilador/flags observados, não uma alegação de
+equivalência com o compilador histórico.
+
+A baseline de 024 — **15 `MATCHED` / 910 instruções certificadas**, sendo
+8 funções de tutorial / 694 words e 7 de `libhtml_view` / 216 words — foi
+preservada. Nenhum objeto certificado anterior foi substituído. Os cinco
+objetos de 024 (`0x1DF4`, `0x1B70`, `0x1C58`, `0x1B0C`, `0x1E84`) foram
+recompilados duas vezes nesta rodada; status, words, source SHA-256 e object
+SHA-256 coincidiram com `build/seto024/deep-push/final-results.json`.
+
+### 2. Inventário linear: 0x1C18 é um thunk, 0x1C20 é seu corpo
+
+O inventário linear antigo tratava `[0x1C18,0x1C58)` como uma única entrada de
+16 words. Os bytes originais mostram duas entidades:
+
+- `[0x1C18,0x1C20)` — `08 07 00 08 00 00 00 00`, ou seja `j 0x1C20; nop`;
+- `[0x1C20,0x1C58)` — 14 words, começando por `addiu sp,sp,-16;
+  sw ra,12(sp)` e terminando em 0x1C58, com prólogo/epílogo próprios.
+
+A evidência de chamada é `func_00000280` word 2, que chama 0x1C18; o alvo do
+salto direto é 0x1C20. O corpo de 0x1C20 é uma função completa, não um label
+interno: ele testa o handle provisório em 0x6248, chama o import
+`libehsys/0x20E340D9` (stub 0x3A08) com o contexto em 0x6238 e o handle, e zera
+o handle. A divisão correta é, portanto, **2 + 14 words**, não 16 words com um
+único dono.
+
+Para comparar o intervalo autêntico de 2 words sem alterar o comparador, foi
+adicionado um pass-through `--size` ao `scripts/match_function.py`. A CLI
+`seto match` já aceitava `--size`; o script apenas não o encaminhava. O
+`run_real_match` do triage também aceita `function_size` e valida que ele é
+um múltiplo positivo de 4 e que `function_size // 4 == expected_total_words`.
+Isso não muda regras de matching, não mascara diferenças e não é um novo
+critério de certificação.
+
+O resultado oficial é:
+
+- `0x1C18`: **`MATCHED` 2/2**, objeto de 8 bytes, zero diferenças/issues/
+  limitações. A equivalência é `function equivalence with canonically resolved
+  relocations`, porque o salto local para 0x1C20 é resolvido por identidade de
+  símbolo; não é igualdade binária bruta do campo de relocation.
+- `0x1C20`: **`INCONCLUSIVE` 8/14**, objeto de 56 bytes, zero diferenças/
+  issues, três limitações HI16/LO16 (words 2, 6 e 9). O call para 0x3A08
+  resolve por `libehsys/0x20E340D9`.
+
+### 3. Novas reconstruções C e comparações de símbolo completo
+
+Foram adicionadas dez fontes novas em `decomp/src/libtutoriallist/`, cobrindo
+1 213 words originais. Todas compilam com o compilador oficial e foram
+comparadas duas vezes a partir de objetos recém-gerados.
+
+Para as funções cujo símbolo completo difere do intervalo antigo (0x2F4 é
+menor; 0x8F0, 0x1F10 e 0x21F8 são maiores), a CLI pública truncaria ou
+recusaria a comparação. Esses quatro casos usam `seto.matching.compare` sobre
+o símbolo completo do candidato e o intervalo original explícito — a mesma
+API de comparação de produção, sem regra nova. `ERROR`/`BLOCKED` nunca foram
+aceitos como veredito.
+
+| Intervalo | Fonte | Words originais | Objeto candidato | Status | Words iguais | Diferenças | Issues de relocation | Limitações |
+|---|---:|---:|---:|---|---:|---:|---:|---:|
+| `0x8–0x154` | `func_00000008.c` | 83 | 332 B / 83 | `INCONCLUSIVE` | 63/83 | 0 | 0 | 16 |
+| `0x154–0x280` | `func_00000154.c` | 75 | 300 B / 75 | `INCONCLUSIVE` | 65/75 | 0 | 0 | 9 |
+| `0x280–0x2C8` | `func_00000280.c` | 18 | 72 B / 18 | `INCONCLUSIVE` | 12/18 | 0 | 0 | 3 |
+| `0x2C8–0x2F4` | `func_000002C8.c` | 11 | 44 B / 11 | `NONMATCHING` | 7/11 | 1 | 1 | 4 |
+| `0x2F4–0x6E8` | `func_000002F4.c` | 253 | 996 B / 249 | `NONMATCHING` | 93/253 | 137 | 35 | 2 |
+| `0x8F0–0xE24` | `func_000008F0.c` | 333 | 1 368 B / 342 | `NONMATCHING` | 50/342 | 286 | 70 | 1 |
+| `0x1C18–0x1C20` | `func_00001C18.c` | 2 | 8 B / 2 | **`MATCHED`** | **2/2** | **0** | **0** | **0** |
+| `0x1C20–0x1C58` | `func_00001C20.c` | 14 | 56 B / 14 | `INCONCLUSIVE` | 8/14 | 0 | 0 | 3 |
+| `0x1F10–0x21F8` | `func_00001F10.c` | 186 | 748 B / 187 | `NONMATCHING` | 70/187 | 81 | 3 | 21 |
+| `0x21F8–0x25B0` | `func_000021F8.c` | 238 | 964 B / 241 | `NONMATCHING` | 119/241 | 78 | 11 | 21 |
+
+Os quatro `INCONCLUSIVE` com zero diferenças (0x8, 0x154, 0x280 e 0x1C20)
+não são promovidos: as words não-iguais são pares HI16/LO16 cuja identidade
+de dados não pode ser provada a partir do PRX stripped. O `0x1C18` é a única
+nova certificação estrita; seu match é por equivalência de relocation local
+resolvida, explicitamente registrada no teste.
+
+### 4. `0x2C8`: limitação de associação do comparador, não erro de fonte
+
+`0x2C8` compila para as mesmas palavras de instrução do original e usa o mesmo
+layout de relocations:
+
+| Sítio original | Offset candidato | Relocation | Addend original | Addend candidato |
+|---|---:|---|---|---|
+| `0x2C8` | 0 | `R_MIPS_HI16` | 0 | 0 |
+| `0x2CC` | 4 | `R_MIPS_LO16` | 0x6194 | 4 (símbolo `func_00006190_panel` + 4) |
+| `0x2DC` | 20 | `R_MIPS_HI16` | 0 | 0 |
+| `0x2E8` | 32 | `R_MIPS_LO16` | 0x6196 | 6 (símbolo `func_00006190_panel` + 6) |
+
+A word 7 (`addiu v0,zero,-1`) redefine o registrador-base da LO16 antes de
+`0x2E8`. O comparador, do lado original, perde a associação entre a HI16 de
+`0x2DC` e a LO16 de `0x2E8`; do lado candidato, a associação sobrevive por
+identidade do símbolo. O resultado é `NONMATCHING` 7/11 com uma diferença e uma
+issue de relocation, embora os bytes sejam idênticos. O teste de integração
+fixa essa limitação exata. **Não foi relaxada nenhuma regra do comparador nem
+adicionada uma identidade de dados fabricada para promover a função.**
+
+### 5. Funções grandes: divergência medida e hipóteses rejeitadas
+
+- **`0x2F4` (93/253).** O candidato tem 996 bytes, quatro words menor que os
+  1 012 bytes originais. As primeiras diferenças, words 32/34, são
+  deslocamentos de branch causados por esse tamanho menor. A primeira
+  divergência substancial é a word 81 (`lui v1` no candidato, `lui a0` no
+  original), no setup de flags/lista. O original contém um `lhu a0,20(t3)`
+  duplicado e aparentemente morto em 0x4B0, depois de um `beq` incondicional;
+  o compilador candidato escolhe a forma bnel/fall-through mais compacta. Não
+  foi inserido código morto, padding ou branch artificial para reproduzir o
+  duplicado.
+- **`0x8F0` (50/342).** O candidato tem 1 368 bytes, nove words maior que os
+  1 332 bytes originais. A primeira diferença é a word 15: o original mantém
+  `height` em `s2` desde a entrada até 0xb44 e depois reutiliza `s2` como
+  contador do loop; o candidato spill-a `height` em `0x4c(sp)` e entrega `s2`
+  a `top`. A forma de alocação/interferência não foi reproduzida sem alterar
+  a semântica observável.
+- **`0x1F10` (70/187).** O candidato tem 748 bytes, uma word maior que os
+  744 originais. As words 0–95 são exatamente iguais; a word 96 (`andi t0` no
+  candidato, `andi t2` no original) inicia a rotação da cauda, com `group` em
+  `t0` em vez de `t2`. O accessor else-first melhorou o corpo, mas não fechou
+  a alocação da cauda.
+- **`0x21F8` (119/241).** O candidato tem 964 bytes, três words maior que os
+  952 originais. As words extras deslocam branches desde cedo (word 32). A
+  divergência estrutural está na rotação dos registradores de grupo/janela:
+  o original mantém `group` em `a2`, `group*2` em `t2`, `&leading` em `a0` e
+  `&count` em `a3`; o candidato usa `group` em `t0`, `group*2` em `a3`,
+  `&leading` em `a1` e `&count` em `a2`. A forma else-first e a remoção das
+  duplicações de guarda foram adotadas, mas a pressão de registradores continua
+  diferente.
+- **`0x1764` (42/182).** A fonte foi novamente compilada para confirmar que o
+  resultado não regrediu: 728 bytes, 140 diferenças, 32 issues de relocation,
+  primeira divergência na word 10 (alocação do prólogo). As mais de 120
+  variantes de alocação/ordenação já refutadas não foram repetidas. A função
+  permanece congelada até surgir um grafo de interferência novo.
+
+### 6. ABI, layout e fatos de import recuperados
+
+- **`func_00004118` retorna `unsigned short`.** Com `int`, o compilador omite
+  o `andi v0,v0,0xffff` observado; com `unsigned short`, o `andi` aparece. A
+  assinatura está no header compartilhado e é usada por `0x21F8` nos masks
+  `pressed & func_00004118(1)` (fechamento) e `pressed & func_00004118(0)`
+  (atualização de janela).
+- **`func_00003A38` retorna `int *`.** `0x21F8` lê `input[1]` sem guarda de
+  null, como no original. A assinatura é derivada do uso, não de um SDK.
+- **Layout provisório do painel em 0x6190.** A estrutura de 0xB8 bytes usada
+  pelas novas fontes tem `phase` em +0, `flags` em +4, `current` em +6,
+  `leading[2]` em +8, `trailing[2]` em +0xC, `count[2]` em +0x10,
+  `entries[2][24]` em +0x14 e `extents[26]` em +0x74. `0x8` zera os 0xB8
+  bytes via import 0x2610. Isso prova **localização e uso**, não a identidade
+  de um objeto de dados linkado; nenhuma definição `.data` foi inventada.
+- **`0x1C20`** chama `libehsys/0x20E340D9` (stub 0x3A08) com o contexto em
+  0x6238 e o handle em 0x6248, e então zera 0x6248. O handle é provisório.
+- **`0x1C18`** é um salto direto para 0x1C20, com a word de delay `nop`; o
+  objeto candidato reproduz oito bytes exatos.
+- **`0x2F4`** passa o endereço do renderer local para 0x4908; a vida
+  stack-backed observável foi mantida, sem `volatile`. O endereço do callback
+  não ganhou uma identidade cross-artifact.
+- **`0x8F0`** usa as constantes de cor observadas `0x80FFFFFF` e `0xFF808080`;
+  não foi introduzida uma cor “semântica” nova.
+- **Globais provisórios**: 0x6238 (contexto), 0x623C (file), 0x6240 (data),
+  0x6248 (handle), 0x6250 (byte compartilhado), 0x60F0 (nome). Todos são
+  referências por endereço; os testes e comentários não os promovem a objetos
+  originais.
+
+### 7. `libhtml_view.prx`: cobertura e o fragmento 0x84–0x8C
+
+O módulo irmão foi recompilado e comparado por inteiro, sem alterar suas 15
+fontes:
+
+| Grupo | Funções | Words | Resultado |
+|---|---:|---:|---|
+| `MATCHED` | 7 | 216 | `0x244` 13, `0x34` 20, `0x134` 17, `0x358` 17, `0x8C` 42, `0x178` 51, `0x278` 56 |
+| `INCONCLUSIVE` | 8 | 291 | 231 words iguais + 60 words limitadas por pares HI16/LO16 |
+| `NONMATCHING` | 0 | 0 | — |
+| Fragmento sem fonte | 1 | 2 | `[0x84,0x8C)` |
+
+O único intervalo sem C é `[0x84,0x8C)`, oito bytes `jr ra; nop`. `func_00000000`
+passa 0x84 como segunda address de código ao import `libehsys/0xB4471B5E`;
+0x84 também é o fim exclusivo do corpo `[0x34,0x84)` de `func_00000034`. O
+mesmo endereço é consistente com um callback no-op **ou** com um ponteiro de
+fim de faixa. O PRX sozinho não distingue as duas leituras; não há caller
+direto, outro site que tome o endereço, nem relocation que exija uma entry de
+função. Por isso o fragmento não foi promovido, nenhuma fonte `func_00000084.c`
+foi criada e as 2 words não entram na cobertura reconstruída. O bloqueio é de
+**identidade independente**, não de compilação.
+
+### 8. Expansão de módulos: `EBOOT.BIN` e `libadler.prx`
+
+A árvore local contém apenas dois PRX ELF em `USRDIR/gmodule`:
+`libtutoriallist.prx` e `libhtml_view.prx`. Os outros candidatos Executáveis
+da mídia não são ELF:
+
+- `EBOOT.BIN` começa com `~PSP` (`7e505350...`), tem 1 110 624 bytes e não
+  contém a magic `\x7fELF`; `seto.elf.parse` falha com `bad ELF magic`.
+- `libadler.prx` começa com `~SCE` (`7e534345...`), tem 1 088 bytes e também
+  não contém `\x7fELF`; `seto.elf.parse` falha com `bad ELF magic`.
+
+Não foram usadas chaves, decriptação caseira ou bypass de container. A
+expansão para um terceiro módulo fica **bloqueada no decoding do container
+PSP**, não por falta de uma função escolhida. Nenhum módulo foi inventado ou
+promovido a partir de bytes não parseáveis.
+
+### 9. TDD, ferramenta e teste de integração real
+
+- O defeito observado foi `match_function.py` não expor o `--size` que a CLI
+  já suportava, o que fazia o thunk autêntico de 2 words ser reportado como
+  erro de tamanho. O teste RED
+  `test_an_explicit_function_size_is_forwarded` falhou antes da implementação
+  porque `build_match_argv` não aceitava o parâmetro; o teste
+  `test_real_match_rejects_an_inconsistent_explicit_function_size` cobre a
+  validação de consistência. Depois da correção, ambos passam.
+- O novo teste opt-in
+  `tests/integration/test_libtutoriallist_025_real.py`
+  (`SETO_LIBTUTORIALLIST_025_REAL=1`) cobre as dez fontes novas. Seis usam a
+  CLI oficial com duas compilações frescas; quatro usam o comparador de
+  símbolo completo com duas compilações frescas. Ele verifica status, words
+  iguais, diferenças, issues, limitações, tamanho integral do símbolo,
+  determinismo dos objetos e a limitação exata de 0x2C8. Não é um teste que
+  apenas reafirma contagens antigas: todas as dez fontes são novas.
+- Nenhum arquivo de experimento descartado, objeto, PRX ou dump de asset foi
+  versionado. Os artefatos completos ficam em `build/seto025/` (ignorado).
+
+### 10. Métricas consolidadas
+
+| Métrica | `libtutoriallist` | `libhtml_view` | Total |
+|---|---:|---:|---:|
+| Intervalos identificados | 26 / 2 412 words | 16 / 509 words | 42 / 2 921 words |
+| Funções com C reconstruído | 25 / 2 410 words | 15 / 507 words | **40 / 2 917 words** |
+| Funções compiladas | 25 | 15 | **40** |
+| Funções comparadas por caminho de produção | 25 | 15 | **40** |
+| Funções sem diferença de instrução | 19 | 15 | **34** |
+| `MATCHED` estrito (words certificadas) | 9 / 696 words | 7 / 216 words | **16 / 912 words** |
+| `INCONCLUSIVE` com zero diferenças | 10 / 511 words | 8 / 291 words | **18 / 802 words** |
+| `NONMATCHING` (diferenças reais ou associação) | 6 / 1 203 words | 0 | **6 / 1 203 words** |
+| Words reconstruídas não certificadas | 1 714 | 291 | **2 005** |
+| Objetos de dados identificados separadamente | 0 | 0 | **0** |
+| Fragmentos sem C | 1 / 2 words (`0x0`) | 1 / 2 words (`0x84`) | **2 / 4 words** |
+
+Seis das dez funções novas usam a CLI oficial; duas delas, 0x1C18 e 0x1C20,
+passam `--size` explícito para os intervalos divididos. As quatro funções de
+símbolo maior ou menor usam `seto.matching.compare` sobre o símbolo completo.
+O caminho de compilação é o mesmo em todos os casos.
+
+A soma fecha exatamente: **912 certificadas + 802 zero-diferença não
+certificadas + 1 203 nonmatching + 4 não reconstruídas = 2 921 words
+identificadas**. As 802 words zero-diferença estão excluídas da certificação
+apenas por limitações de identidade HI16/LO16. Das 1 203 `NONMATCHING`, 1 192
+têm diferenças reais de instrução/relocation; as 11 de `0x2C8` são
+byte-idênticas e ficam fora da certificação apenas pela associação HI16/LO16
+do comparador. **Nenhum objeto de dados foi identificado separadamente**: o
+painel em 0x6190 e os globais 0x6238/0x6248 são hipóteses de uso e layout, não
+definições de dados provadas.
+
+A baseline anterior de 15 `MATCHED` / 910 words permanece; a única nova
+certificação estrita é `0x1C18` (2 words), levando a **16 / 912**. A contagem
+de funções sem diferença sobe de 29 para **34** (16 `MATCHED` + 18
+`INCONCLUSIVE`), e as funções `NONMATCHING` passam de 1 para **6**, todas no
+tutorial.
+
+### 11. Hashes de fonte e objeto
+
+As fontes abaixo são os bytes finais do worktree, incluindo os comentários de
+resultado; os objetos foram gerados em duas compilações independentes, e os
+dois SHA-256 coincidiram. O compilador e os flags são os mesmos em todas as
+linhas.
+
+| Intervalo | Fonte | Fonte SHA-256 | Objeto SHA-256 (tentativas 1/2) |
+|---|---|---|---|
+| `0x8–0x154` | `func_00000008.c` | `b2cceab6fa81efe7673b4a3f6eda75a853429e6628db73ffcf7b9114a4e53f7d` | `e6686faca953a1410b1763071f47a144a99f30acd27b234c1ff0b205979c4fbe` |
+| `0x154–0x280` | `func_00000154.c` | `2d7a6b4fc83407ee5cf1a46cf2a4be7a6cee3c51c22addfa43bd19e9ad0cf202` | `b5f6266ba2457d1a1e320a0ec6d63e6c813af7c0028501fddb118db2d55ccfbc` |
+| `0x280–0x2C8` | `func_00000280.c` | `132a41a4576cf3b0c147bd651ab6caf4c62347a16cb939e9d3a9677c1fa40acb` | `4530e5d5dddba52f514f552dde5ec162f18737ffc96b33144e563f9d74a619d2` |
+| `0x2C8–0x2F4` | `func_000002C8.c` | `288f212496e967c977b595fcf4f8f00e5d77e6485e4fc3a4236ae2620345a9cb` | `91ec22544572f806cc699186edb15a6bd2088184559f9115c5314c49997d7061` |
+| `0x2F4–0x6E8` | `func_000002F4.c` | `b6de2d486169e933b96e6565d77216e4b5604fd4fd316b1475e75c0f180a556c` | `63814b2c9574503fe5afc1d93705bb554de865e9971c60e7dd49920fff79795c` |
+| `0x8F0–0xE24` | `func_000008F0.c` | `b5b015bd6ee629882d5b3433221e8a4b39a016f91fb49ea1bd78d7cda5a7b0aa` | `fdebb87c3f3f9c97a25430f9a55f4584e6a8ebae1c54fd384377e7ea0de1c184` |
+| `0x1C18–0x1C20` | `func_00001C18.c` | `f70c65c3a636136498030738b946f1ddce6e6ecd7bae64e00fcb8729e6bb7e45` | `ddc8d7426b2835563404dd42d09eac4ae251af9a95278176935b8b8ac273d7c7` |
+| `0x1C20–0x1C58` | `func_00001C20.c` | `ca7968a4438db0f0ae332350db473d17c36d975404654c524b3ee63ed7d42813` | `9341110d4613d51de998aa23aee2e188eb411fae3d34aca6308b311680a4dd7a` |
+| `0x1F10–0x21F8` | `func_00001F10.c` | `9324fa585a924be4efe62b72eae872206fedc9fe04679d210789c6e02462f282` | `ad4d8719b5e4e9fc6ad0b2b177d96587876047963e016a9af0363a0d534a3a1c` |
+| `0x21F8–0x25B0` | `func_000021F8.c` | `aef3982506454100b98db2fdf1f4d9f440b3b1da7032a2d798d259abd1c5831d` | `ef45a3c3cc0288ee6b0ce1f81ca28030e014bf4c8f93eb8b4494567e3a6cf94c` |
+
+Header provisório do painel:
+`a1205bf9afa2f50d24b18bcf40b55b6f269bbb3caec18849d66cf4cf98088873`.
+Header compartilhado de stubs:
+`a07e2711fa860efc843f75343957057aa55da5abe3c6e1a604f06151bfc12fb0`.
+Hashes de fonte dependem dos bytes efetivamente compilados (CRLF/LF); os
+objetos e relatórios completos estão em `build/seto025/final/` e
+`build/seto025/integration-results.json`, ambos ignorados.
+
+### 12. Gates finais
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | **763 passed, 40 skipped** |
+| `pytest -q -rs` | WSL2 | **780 passed, 23 skipped** |
+| `pytest -m integration -q -rs` | Windows | **23 passed, 35 skipped, 745 deselected** |
+| `pytest -m integration -q -rs` | WSL2 | **41 passed, 17 skipped, 745 deselected** |
+| Opt-ins reais 018–023 + callbacks + 025 | WSL2 | **9 passed**; cada alvo novo compilado duas vezes |
+| Preservação 024 (5 funções) | WSL2 | **5/5** com status, words e source/object SHA-256 idênticos |
+| `test_toolchain_runtime.py -k real_mwccpsp` | WSL2 | **16 passed, 3 deselected**; 15 funções de `libhtml_view` preservadas |
+| `compileall -q src scripts tests` | Windows e WSL2 | clean |
+| `git diff --check` | Windows Git | clean |
+
+Os skips restantes são requisitos de plataforma (WSL2), ausência das
+ferramentas GNU MIPSel e opt-ins inativos. Eles não foram convertidos em
+aprovação. O teste 025 é opt-in e aparece como skip nas suítes sem a variável
+`SETO_LIBTUTORIALLIST_025_REAL=1`.
+
+### 13. Bloqueios restantes e próximos alvos
+
+1. **Alocação de registradores/spill (maior payoff):** `0x21F8` (119/241),
+   `0x1F10` (70/187) e `0x8F0` (50/342) já têm estrutura semântica e
+   divergem na rotação/spill. Um novo grafo de interferência ou uma forma de
+   acesso que reduza a pressão pode recuperar muitas words de uma vez.
+2. **Layout de branches/código morto:** `0x2F4` (93/253) precisa de uma forma
+   de fonte que reproduza o `lhu` duplicado em 0x4B0 sem inserir código morto.
+   `0x1764` (42/182) precisa de uma alocação nova, não de mais permutações.
+3. **Associação HI16/LO16 do comparador:** `0x2C8` é byte-idêntico e continua
+   `NONMATCHING` 7/11 apenas pela associação original. Um conserto principiado
+   do comparador (sem afrouxar as regras) poderia promover o caso; não foi
+   feito nesta rodada.
+4. **Identidade de dados:** `0x8`, `0x154`, `0x280`, `0x1C20` e as funções
+   `INCONCLUSIVE` de `libhtml_view` dependem de pares HI16/LO16 sem objeto
+   cross-artifact. A estrutura do painel em 0x6190 e os globais 0x6238/0x6248
+   continuam provisórios.
+5. **Fragmentos:** `0x0` (2 words, `jr ra; return 0`) e `0x84` (2 words,
+   `jr ra; nop`) não têm evidência independente de entrypoint. O primeiro não
+   tem caller nem ponteiro resident; o segundo é ambíguo entre callback no-op e
+   fim de faixa.
+6. **Expansão de módulos:** `EBOOT.BIN` (`~PSP`) e `libadler.prx` (`~SCE`)
+   exigem decoding de container que o repositório não possui. Sem isso, não há
+   um terceiro módulo ELF para reconstruir.
+
+Ordem sugerida para a próxima rodada: `0x21F8` → `0x1F10` → `0x2F4` →
+`0x8F0` → `0x1764` (somente com grafo novo) → `0x2C8` (comparador) →
+identidade de dados → decoding de container. Nenhuma dessas funções foi
+descrita como concluída; as certificações novas são apenas as 2 words de
+`0x1C18`.
