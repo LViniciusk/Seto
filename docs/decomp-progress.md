@@ -5499,9 +5499,13 @@ do accessor e a soma de saída duplicada, sem alterar imports ou side effects.
 
 | Antes R2 | Depois | Diferença restante |
 |---|---|---|
-| 127/240, 960 bytes, 66 diferenças, 9 relocation issues, 23 limitações | **159/238, 952 bytes, 31 diferenças, 2 relocation issues, 25 limitações** | word 157: ordem LUI/ANDI e rotação `group`/`leading` |
+| 127/240, 960 bytes, 66 diferenças, 9 relocation issues, 23 limitações | **187/238, 952 bytes, 3 diferenças, 0 relocation issues, 26 limitações** | words 165/166: ordem dos loads; word 168: ordem dos operandos da soma |
 
-O teste real 025 passou (73,68 s), incluindo duas compilações independentes e
-objetos idênticos. Continua `NONMATCHING`; tamanho exato não é certificação.
-Fonte SHA-256: `7fa83ccc659925da7ed7681dcfa2edd5e5026d903dce5888aba64219b320a258`.
-Objeto SHA-256: `8fd8c1379ca02ac0091162779b382bc0e4182c00fbfa10b8d32535a2b06c3b39`.
+A etapa intermediária 159/238 passou no teste real 025 (73,68 s). Inicializar
+`position` com `trailing`, cachear `leading` e somá-lo a `position` recuperou
+depois o mapa original de registradores e todos os pares HI16/LO16: **187/238**.
+Duas compilações integrais independentes (ensaio e fonte final) produziram o
+mesmo objeto. Só diferem `lhu` em 0x248C/0x2490 e a ordem dos operandos do
+`addu` em 0x2498. Continua `NONMATCHING`; não houve certificação artificial.
+Fonte SHA-256: `7e2fb7ef84a076ce3e46c3fb710ab1021347ca0e88a3e25b913833fdfa876343`.
+Objeto SHA-256: `14d25c2ec2caf36ccd6de7cfa12d714f24434a377027e71625d99a4576bde0dc`.

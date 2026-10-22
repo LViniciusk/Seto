@@ -84,11 +84,9 @@ WHOLE_CASES = {
         "symbol_size": 744, "first_word": 96,
     }),
     0x21F8: (238, {
-        "status": "NONMATCHING", "matching": 159, "total": 238,
-        "differences": 31, "relocations": 2, "limitations": 25,
-        "symbol_size": 952, "first_word": 157,
-        "first_reason": "HI16/LO16 association differs "
-        "(original: no relocation; candidate: LO16 at word 161)",
+        "status": "NONMATCHING", "matching": 187, "total": 238,
+        "differences": 3, "relocations": 0, "limitations": 26,
+        "symbol_size": 952, "first_word": 165,
     }),
 }
 
