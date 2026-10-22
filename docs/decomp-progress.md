@@ -5464,3 +5464,28 @@ honesta de `0x2C8`, a remoção dos avisos de `0x1C58`, a recuperação do loop 
 `0x21F8`, o tamanho exato de `0x1F10`, as melhorias parciais de `0x2F4`/`0x8F0`
 e os controles adicionais de strictness do CFG. A PR #25 permanece aberta,
 sem merge; os hashes do HEAD e dos commits estão publicados na própria PR.
+
+## SETO-DECOMP-026-R2 — Maximum Recovery Campaign
+
+Início: `f68c86e23d76b59c576930c4db32da4aa54fa623`, mesma branch e PR #25.
+O PRX original foi revalidado com SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+
+### Correção obrigatória de ambiguidade do CFG
+
+Um CFG já analisado não volta ao scan linear quando encontra múltiplas
+definições HI16, HI16 misturado com definição comum, valor de entrada ou
+clobber de chamada. Esses casos retornam `uncertain`; `definite-none` exige
+que **todas** as definições alcançantes sejam comuns, e `match` exige um único
+HI16. Construções não suportadas ainda podem recorrer ao scan anterior;
+evidência independente de símbolo ELF continua prevalecendo.
+
+RED: quatro novos casos reproduziram a promoção indevida ou a falsa exclusão
+de um HI16. GREEN: **83 testes de matching aprovados**, incluindo controles
+de múltiplas definições comuns e símbolo ELF. Destinos de dados diferentes
+não viram uma divergência definitiva por meio de um par ambíguo.
+
+Os testes reais 025 e callbacks passaram (**2 passed**, 108,09 s), preservando
+`0x2C8` em `INCONCLUSIVE` 7/11, zero diferenças/issues, e `0x1C58` em
+`INCONCLUSIVE` 28/44, zero avisos de pareamento. Os cinco alvos `NONMATCHING`
+mantiveram os resultados de partida. Nenhuma certificação foi acrescentada.
