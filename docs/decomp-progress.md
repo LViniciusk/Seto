@@ -1,4 +1,4 @@
-# Decompilation progress
+﻿# Decompilation progress
 
 Status vocabulary, used strictly:
 
@@ -5525,7 +5525,7 @@ usado no loop interno, como o registrador original em a3.
 | 73/186, 744 bytes, 76 diferenças, 2 relocation issues, 21 limitações | **89/186, 744 bytes, 60 diferenças, 1 relocation issue, 22 limitações** | word 96: permutação de registradores (grupo t4/t2, posição t2/t4 e rotação dependente) |
 
 A cauda é isomórfica ao original instrução a instrução; não há diferença de
-tamanho, CFG, imports ou operandos de memória. Foram testadas 24 variantes
+tamanho, CFG, imports ou operandos de memória. Foram testadas mais de 40 variantes
 equivalentes de ordem de expressão, ordem de declaração, locais de valor,
 `count`/`index` explícitos, ponteiros persistentes e invertidos, sem remover a
 permutação. Duas compilações integrais independentes produziram o mesmo objeto.
@@ -5573,3 +5573,4 @@ Bloqueios restantes: identidades de dados de `0x2C8`/`0x1C58` e dos pares de
 ordem em `0x21F8`; cópias inalcançáveis de `0x2F4` (não inserir dead code);
 pressão de registradores de `0x8F0`; `0x1764` congelada; fragmentos sem
 entrypoint; containers `~PSP`/`~SCE`.
+
