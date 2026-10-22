@@ -1,13 +1,12 @@
 """Opt-in WSL2/Metrowerks evidence for SETO-DECOMP-025.
 
 The six CLI cases use ``scripts/match_function.py`` and the public comparator,
-including an explicit ``--size`` for the split 0x1C18/0x1C20 functions.  The four
-large functions have candidates whose complete symbols are not exactly the old
-linear-inventory window (0x2F4 is smaller; 0x8F0, 0x1F10 and 0x21F8 are larger),
-so they are compiled through the same official compiler/flag path and compared
-with the production ``seto.matching.compare`` API over the complete candidate
-symbol and the explicit original interval.  No matcher rule is changed and an
-ERROR/BLOCKED outcome is never accepted as a comparison.
+including an explicit ``--size`` for the split 0x1C18/0x1C20 functions. Four
+large functions use the production ``seto.matching.compare`` API over complete
+candidate symbols and explicit original intervals, preserving size mismatches
+where present. 0x2F4 and 0x1F10 now have exact sizes; 0x8F0 and 0x21F8 remain
+larger. Compilation uses the same official compiler/flag path; ERROR/BLOCKED
+is never accepted as a comparison.
 """
 
 from __future__ import annotations
@@ -72,6 +71,7 @@ WHOLE_CASES = {
         "status": "NONMATCHING", "matching": 134, "total": 253,
         "differences": 99, "relocations": 20, "limitations": 4,
         "symbol_size": 1012, "first_word": 81,
+        "first_reason": "relocated word differs outside the relocation field",
     }),
     0x8F0: (333, {
         "status": "NONMATCHING", "matching": 52, "total": 342,
@@ -352,7 +352,7 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
         assert first["candidate_size"] == expected["symbol_size"]
         assert first["differences"][0]["word_index"] == expected["first_word"]
         if first["difference_count"]:
-            assert first["differences"][0]["reason"] == "word differs"
+            assert first["differences"][0]["reason"] == expected.get("first_reason", "word differs")
         whole_results.append(first)
 
     results = {

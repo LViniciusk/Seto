@@ -5215,14 +5215,26 @@ fonte do LO16. O CFG:
 - só devolve prova positiva quando um único `lui` realocado alcança o LO16 em
   todos os caminhos modelados;
 - devolve `definite-none` para uma redefinição inequívoca;
-- devolve `None` (fallback linear) quando há chamada, instrução desconhecida,
+- devolve `None` (fallback linear) quando há chamada antes do LO, instrução desconhecida,
   alvo fora da região ou fluxo que não pode ser modelado.
 
 Controles sintéticos novos: prova através de um branch condicional; prova
 através de delay slots mutuamente exclusivos (a forma de `0x2C8`); rejeição
 de uma redefinição que cai no LO16; e separação entre um alvo diferente em par
 provado pelo CFG (vira `NONMATCHING`) e um par apenas order-only (continua
-`INCONCLUSIVE`). `tests/test_matching.py`: **68 passed**.
+`INCONCLUSIVE`). `tests/test_matching.py`: **77 casos aprovados** na suíte final.
+
+A revisão de strictness acrescentou controles para backedges após o LO, retorno
+de `jal`/`jalr` e entrada normal em um delay slot. A propriedade dos delay slots
+agora cobre a janela inteira; chamadas posteriores ao LO propagam registradores
+desconhecidos após seu delay slot, sem apagar o possível caminho de retorno.
+Branches que entram em delay slots caem no fallback conservador, pois essa
+entrada não herda o destino pendente do branch dono. Também foi corrigida a
+classificação de SPECIAL `0x18`: é `mult`, não `eret`. Nenhuma dessas provas
+confere identidade a dados; os resultados reais de `0x2C8`/callbacks se mantêm.
+As quatro variantes de REGIMM branch-and-link são chamadas condicionais:
+novos controles reproduziram falsas provas quando eram tratadas como branches
+locais. Elas agora usam o fallback conservador, sem ignorar o retorno do callee.
 
 Resultado real de `0x2C8` (duas compilações independentes, objeto idêntico):
 
@@ -5245,7 +5257,7 @@ independente. Nenhuma identidade foi fabricada para transformar o caso em
 
 ### 3. `0x1C58`: pares provados, avisos removidos
 
-O mesmo CFG provou o par da word 29, que antes era apenas order-only. O
+O mesmo CFG provou o par HI da word 6 / LO da word 9, antes apenas order-only. O
 resultado real permanece `INCONCLUSIVE` 28/44, com 8 pares de dados, 3
 chamadas diretas resolvidas e **0 avisos de pareamento** (antes: 2). As 8
 limitações de identidade de dados continuam, e nenhuma foi promovida. O caso
@@ -5321,7 +5333,7 @@ compiladas; nenhuma removeu a duplicação sem perder a alocação do loop.
 |---|---:|---|---:|
 | `0x2F4` | 253 / 253 | `NONMATCHING` 134/253, 99 diferenças, 20 relocation issues, 4 limitações | word 81 |
 | `0x8F0` | 333 / 342 | `NONMATCHING` 52/342, 284 diferenças, 68 relocation issues, 1 limitação | word 15 |
-| `0x1764` | 182 / 182 | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues | word 0 |
+| `0x1764` | 182 / 182 | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues | word 10 |
 
 Em `0x2F4`, somente a consulta da linha visível passou ao accessor compartilhado:
 **93/253 → 134/253**, **137 → 99 diferenças**, **35 → 20 relocation issues**,
@@ -5387,10 +5399,10 @@ da função, não por uma promoção artificial.
 | `0x2F4–0x6E8` | `func_000002F4.c` | `a80470ddc1f0653e6a3c3555be5d01670b6ebbd3d710e5e221eecd1319c9da42` | `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c` |
 | `0x8F0–0xE24` | `func_000008F0.c` | `53d38ec10f50b75c1afa396689b942dd2ed64eac06ff80649e191a8adf53dd0c` | `591face818cb8f1958f17c43821228029887908f3d317ce41df6e176c40f91dc` |
 
-O objeto de `0x2C8` é o mesmo certificado em 025; o hash de fonte registrado
+O objeto de `0x2C8` é o mesmo medido em 025; o hash de fonte registrado
 na tabela de 025 para essa função (`288f2124...`) não corresponde ao arquivo
-atual (`f344cdfc...`), mas o objeto permanece `91ec2254...`, ou seja, a
-diferença é apenas de bytes de fonte/comentário, não de código gerado. O
+atual (`f344cdfc...`), mas o objeto reproduzido permanece `91ec2254...`.
+O registro anterior de hash de fonte está desatualizado, não o objeto. O
 objeto de `0x1C58` também é o mesmo de 025. `0x1F10` mudou de 748 para 744
 bytes; as duas compilações independentes do teste 025 produziram o mesmo
 `3f4f3789...`. `0x21F8` mudou de 964 para 960 bytes; as duas compilações
@@ -5400,18 +5412,18 @@ independentes do teste 025 produziram o mesmo `9eb6aee6...`.
 
 | Gate | Ambiente | Resultado |
 |---|---|---|
-| `pytest -q -rs` (suíte completa) | Windows, `PYTHONPATH=src` | **764 passed, 42 skipped** |
-| `pytest -m integration -q -rs` | WSL2 | **41 passed, 17 skipped, 748 deselected** |
-| Opt-ins reais 018–025 + callbacks | WSL2 | **9 passed** (298,21 s) |
-| `test_toolchain_runtime.py -k real_mwccpsp` | WSL2 | **16 passed, 3 deselected** |
-| `compileall -q src scripts tests` | Windows | clean |
+| `pytest -q -rs` (suíte completa) | Windows, `PYTHONPATH=src` | **773 passed, 42 skipped** |
+| `pytest -m integration -q -rs` com opt-ins de tutorial ativos | WSL2 | **49 passed, 9 skipped, 753 deselected** (448,97 s) |
+| Opt-ins reais 018–025 + callbacks | WSL2 | **9 casos aprovados**, incluídos na suíte acima |
+| Runtime real mwccpsp / `libhtml_view` | WSL2 | **16 casos aprovados**, incluídos na suíte acima |
+| `compileall -q src scripts tests` | Windows e WSL2 | clean |
 | `git diff --check` | Windows | clean |
 
 Os skips continuam sendo requisitos de plataforma/ferramentas ausentes ou
 opt-ins inativos; nenhum skip foi convertido em aprovação. Os 9 opt-ins reais
 incluem `0x2C8` (`INCONCLUSIVE` 7/11, 0 diferenças), `0x1F10` (73/186, 744
-bytes) e `0x21F8` (127/240, 960 bytes), todos compilados duas vezes com objetos
-determinísticos.
+bytes), `0x21F8` (127/240, 960 bytes), `0x2F4` (134/253, 1 012 bytes) e `0x8F0`
+(52/342, 1 368 bytes), todos compilados duas vezes com objetos determinísticos.
 
 ### 10. Bloqueios restantes e ordem de ataque
 
@@ -5442,4 +5454,6 @@ determinísticos.
 Nenhuma dessas funções foi descrita como concluída. O resultado principal da
 026 é a correção principiada do pareamento HI16/LO16, a reclassificação
 honesta de `0x2C8`, a remoção dos avisos de `0x1C58`, a recuperação do loop de
-`0x21F8` e a recuperação do tamanho exato de `0x1F10`.
+`0x21F8`, o tamanho exato de `0x1F10`, as melhorias parciais de `0x2F4`/`0x8F0`
+e os controles adicionais de strictness do CFG. A PR #25 permanece aberta,
+sem merge; os hashes do HEAD e dos commits estão publicados na própria PR.
