@@ -750,6 +750,7 @@ def run_real_match(
     *,
     attempt: int,
     expected_total_words: int,
+    function_size: int | None = None,
     config_value: Path = Path("config/wsl/seto.toml"),
     repo_root: Path = REPO_ROOT,
     build_subdir: str = "seto018",
@@ -763,6 +764,16 @@ def run_real_match(
         or expected_total_words <= 0
     ):
         raise ProbeError("FAIL", "selected function word total must be positive")
+    if function_size is not None:
+        if (
+            isinstance(function_size, bool)
+            or not isinstance(function_size, int)
+            or function_size <= 0
+            or function_size % 4
+        ):
+            raise ProbeError("FAIL", "explicit function size must be a positive multiple of 4 bytes")
+        if function_size // 4 != expected_total_words:
+            raise ProbeError("FAIL", "explicit function size disagrees with the expected word total")
     if not re.fullmatch(r"seto\d{3}", build_subdir):
         raise ProbeError("FAIL", "match build subdirectory must be a setoNNN name")
     build_root = validated_build_root(repo_root, subdir=build_subdir)
@@ -815,6 +826,10 @@ def run_real_match(
         relative(prx_path, repo_root),
         "--function",
         hex(function_address),
+    ]
+    if function_size is not None:
+        match_argv += ["--size", str(function_size)]
+    match_argv += [
         "--source",
         relative(source_path, repo_root),
         "--out",

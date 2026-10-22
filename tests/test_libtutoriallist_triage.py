@@ -705,6 +705,19 @@ def test_real_match_build_subdirectory_is_a_single_seto_name(tmp_path: Path) -> 
         )
 
 
+def test_real_match_rejects_an_inconsistent_explicit_function_size(tmp_path: Path) -> None:
+    with pytest.raises(triage.ProbeError, match="function size"):
+        triage.run_real_match(
+            0x1C18,
+            Path("unused"),
+            attempt=1,
+            expected_total_words=2,
+            function_size=12,
+            repo_root=tmp_path,
+            build_subdir="seto025",
+        )
+
+
 def test_match_outputs_reject_a_directory_instead_of_a_regular_file(tmp_path: Path) -> None:
     build_root = tmp_path / "build" / "seto018"
     build_root.mkdir(parents=True)
