@@ -5176,3 +5176,200 @@ Ordem sugerida para a próxima rodada: `0x21F8` → `0x1F10` → `0x2F4` →
 identidade de dados → decoding de container. Nenhuma dessas funções foi
 descrita como concluída; as certificações novas são apenas as 2 words de
 `0x1C18`.
+
+---
+
+## SETO-DECOMP-026 — Maximum Matching Offensive
+
+### 1. Base, artefatos e escopo
+
+- HEAD inicial e merge-base: `96b941fdd6a4a07cc8128abe14ea61133557e2e0`
+  (merge da PR #25). Branch: `feat/seto-decomp-026-matching-offensive`.
+- PRX original: `libtutoriallist.prx`, SHA-256
+  `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`;
+  `.text` em `[0, 0x25B0)`.
+- Toolchain e flags inalterados: mwccpsp 3.0.1.219 via wibo, `-O4,p
+  -sdatathreshold 0`, include `decomp/include`.
+- Nenhum flag, binário original, regra de comparação ou identidade de dados
+  foi alterado para promover funções. As únicas mudanças de produção são o
+  pareamento HI16/LO16 no comparador e uma expressão equivalente em `0x1F10`.
+
+### 2. Pareamento HI16/LO16 com CFG local (0x2C8)
+
+O pareamento anterior era estritamente linear: qualquer transferência
+condicional entre o `lui` e o `lhu`/`addiu` fazia o par cair em
+`relocation-order` ou em “controle de fluxo incerto”. Em `0x2C8`, a word 7
+(`addiu v0,zero,-1`) redefine o registrador-base do LO16 em um caminho, mas os
+quatro sítios HI16/LO16 estão em caminhos mutuamente exclusivos:
+
+- o `beql` leva ao LO16 e seu delay slot instala a base HI16;
+- o caminho não tomado redefine o mesmo registrador no delay slot de um `beq`
+  incondicional que salta o LO16.
+
+Foi adicionado um CFG intraprocedural mínimo em `src/seto/matching.py`
+(`_cfg_*`), com análise de definições alcançantes apenas para o registrador
+fonte do LO16. O CFG:
+
+- entende branches, branch-likely, jumps, `jr`/`jalr`, delay slots e
+  redefinições explícitas;
+- só devolve prova positiva quando um único `lui` realocado alcança o LO16 em
+  todos os caminhos modelados;
+- devolve `definite-none` para uma redefinição inequívoca;
+- devolve `None` (fallback linear) quando há chamada, instrução desconhecida,
+  alvo fora da região ou fluxo que não pode ser modelado.
+
+Controles sintéticos novos: prova através de um branch condicional; prova
+através de delay slots mutuamente exclusivos (a forma de `0x2C8`); rejeição
+de uma redefinição que cai no LO16; e separação entre um alvo diferente em par
+provado pelo CFG (vira `NONMATCHING`) e um par apenas order-only (continua
+`INCONCLUSIVE`). `tests/test_matching.py`: **68 passed**.
+
+Resultado real de `0x2C8` (duas compilações independentes, objeto idêntico):
+
+| Antes | Depois |
+|---|---|
+| `NONMATCHING` 7/11, 1 diferença, 1 relocation issue, 4 limitações | **`INCONCLUSIVE` 7/11, 0 diferenças, 0 relocation issues, 2 limitações** |
+
+As duas limitações restantes são exatamente:
+
+```text
+word 0: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)
+word 5: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)
+```
+
+As quatro words de HI16/LO16 ficam fora de `matching_words`, por isso o
+resultado é 7/11 e não 11/11. **`INCONCLUSIVE` é o resultado correto**: o
+símbolo provisório do painel em 0x6190 não tem identidade cross-artifact
+independente. Nenhuma identidade foi fabricada para transformar o caso em
+`MATCHED`.
+
+### 3. `0x1C58`: pares provados, avisos removidos
+
+O mesmo CFG provou o par da word 29, que antes era apenas order-only. O
+resultado real permanece `INCONCLUSIVE` 28/44, com 8 pares de dados, 3
+chamadas diretas resolvidas e **0 avisos de pareamento** (antes: 2). As 8
+limitações de identidade de dados continuam, e nenhuma foi promovida. O caso
+ativo em `tests/integration/test_libtutoriallist_callbacks_real.py` passou de
+`(44, 28, 8, 3, 2)` para `(44, 28, 8, 3, 0)`.
+
+### 4. `0x1F10`: tamanho exato recuperado, alocação da cauda ainda aberta
+
+A expressão do teste de saída do loop interno foi escrita como
+`j > trailing[group]` (equivalente a `trailing[group] < j`). Isso reproduz o
+único merge de `sum + extent` depois do loop, em vez de duplicar a soma no
+delay slot do `break`, e elimina a word extra:
+
+| Antes | Depois |
+|---|---|
+| `NONMATCHING` 70/187, 81 diferenças, 3 relocation issues, 21 limitações, 748 bytes | **`NONMATCHING` 73/186, 76 diferenças, 2 relocation issues, 21 limitações, 744 bytes** |
+
+O candidato agora tem exatamente as 186 words / 744 bytes originais. A
+primeira diferença continua na word 96: o original usa `andi t2,...` e o
+candidato `andi t0,...`; o compilador colore `group` em `t0` em vez de `t2`,
+o que gira os registradores da cauda e mantém 76 diferenças. Cerca de 30
+formas de fonte foram testadas com o compilador real (ordem da soma, acesso
+direto ao bitfield, acessor explícito, `else-first`, ponteiros locais,
+`while`, tipos de `j`/`group`, ordem de declaração, escopos aninhados,
+`register`, blocos com inicializadores). Nenhuma fechou a word 96; a melhor
+alternativa continuou em 73/186. Não foi inserido código morto, padding,
+`volatile` ou assembly para forçar a alocação.
+
+As 21 limitações são de identidade HI16/LO16 ou de pareamento order-only; as
+duas relocation issues restantes (`word 106` e `word 109`) são consequência
+direta da rotação de registradores, não de uma associação de dados inventada.
+
+### 5. Alvos grandes não alterados
+
+| Função | Original / candidato | Resultado | Primeira diferença |
+|---|---:|---|---:|
+| `0x21F8` | 238 / 241 | `NONMATCHING` 119/241, 78 diferenças, 11 relocation issues, 21 limitações | word 32 |
+| `0x2F4` | 253 / 249 | `NONMATCHING` 93/253, 137 diferenças, 35 relocation issues, 2 limitações | word 32 |
+| `0x8F0` | 333 / 342 | `NONMATCHING` 50/342, 286 diferenças, 70 relocation issues, 1 limitação | word 15 |
+| `0x1764` | 182 / 182 | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues | word 0 |
+
+Nenhuma dessas funções foi promovida nem teve a semântica alterada nesta
+rodada. `0x1764` permanece congelada após mais de 120 variantes refutadas em
+025; só deve ser revisitada com uma hipótese estrutural nova.
+
+### 6. Métricas globais
+
+A reclassificação de `0x2C8` move 11 words de `NONMATCHING` para
+`INCONCLUSIVE` sem alterar o total reconstruído:
+
+| Métrica | 025 | 026 |
+|---|---:|---:|
+| Funções com C reconstruído | 40 / 2 917 words | **40 / 2 917 words** |
+| `MATCHED` estrito | 16 / 912 words | **16 / 912 words** |
+| `INCONCLUSIVE` com zero diferenças | 18 / 802 words | **19 / 813 words** |
+| `NONMATCHING` | 6 / 1 203 words | **5 / 1 192 words** |
+| Funções sem diferença de instrução | 34 | **35** |
+| Words reconstruídas não certificadas | 2 005 | **2 005** |
+| Objetos de dados identificados separadamente | 0 | **0** |
+| Fragmentos sem C | 2 / 4 words | **2 / 4 words** |
+
+A soma continua exata: **912 certificadas + 813 zero-diferença não
+certificadas + 1 192 nonmatching + 4 não reconstruídas = 2 921 words
+identificadas**. Não houve nova certificação estrita; a contagem permanece
+**16 MATCHED / 912 words**. O ganho de `0x2C8` é de classificação correta e de
+comparador, não de certificação.
+
+### 7. Hashes de fonte e objeto
+
+| Intervalo | Fonte | Fonte SHA-256 | Objeto SHA-256 |
+|---|---|---|---|
+| `0x2C8–0x2F4` | `func_000002C8.c` | `f344cdfcb576fa4df6b6f701ef2740ed09d04063139bdb834b7166eaddc8237e` | `91ec22544572f806cc699186edb15a6bd2088184559f9115c5314c49997d7061` |
+| `0x1C58–0x1D08` | `func_00001C58.c` | `e99748be52320e19591f93ae0d50dea33159967b870b9e3f44556c1b19ea5e13` | `807134dfd1ee244300d69df3be325b1aa64127c9a432f8418d14fa04689124d7` |
+| `0x1F10–0x21F8` | `func_00001F10.c` | `0ff65a4f12d2e84e99a163b6abf10dc760abe022ad9662b30761f0948c5cf890` | `3f4f3789ed471bfd69c491106bc982712e11e3b30e39820aa61c70ad33b4f613` |
+
+O objeto de `0x2C8` é o mesmo certificado em 025; o hash de fonte registrado
+na tabela de 025 para essa função (`288f2124...`) não corresponde ao arquivo
+atual (`f344cdfc...`), mas o objeto permanece `91ec2254...`, ou seja, a
+diferença é apenas de bytes de fonte/comentário, não de código gerado. O
+objeto de `0x1C58` também é o mesmo de 025. `0x1F10` mudou de 748 para 744
+bytes; as duas compilações independentes do teste 025 produziram o mesmo
+`3f4f3789...`.
+
+### 8. Validação executada
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` (suíte completa) | Windows, `PYTHONPATH=src` | **764 passed, 42 skipped** |
+| `pytest -m integration -q -rs` | WSL2 | **41 passed, 17 skipped, 748 deselected** |
+| Opt-ins reais 018–025 + callbacks | WSL2 | **9 passed** (166,17 s) |
+| `test_toolchain_runtime.py -k real_mwccpsp` | WSL2 | **16 passed, 3 deselected** |
+| `compileall -q src scripts tests` | Windows | clean |
+| `git diff --check` | Windows | clean |
+
+Os skips continuam sendo requisitos de plataforma/ferramentas ausentes ou
+opt-ins inativos; nenhum skip foi convertido em aprovação. Os 9 opt-ins reais
+incluem `0x2C8` (`INCONCLUSIVE` 7/11, 0 diferenças) e `0x1F10` (73/186, 744
+bytes), ambos compilados duas vezes com objetos determinísticos.
+
+### 9. Bloqueios restantes e ordem de ataque
+
+1. **`0x1F10` (word 96):** a alocação de `group` em `t0` versus `t2` continua
+   sendo o bloqueio principal. A cauda já tem o tamanho exato e o merge de
+   saída correto; falta uma forma de fonte que mude a coloração sem código
+   artificial.
+2. **`0x21F8` (119/241):** rotação de registradores e 3 words extras; o
+   dispatch de input e a janela de atualização precisam de um CFG/registradores
+   equivalente.
+3. **`0x2F4` (93/253):** quatro words ausentes, branch displacements e o
+   `lhu` duplicado em 0x4B0; é necessário reconstruir o CFG do renderer, não
+   inserir código morto.
+4. **`0x8F0` (50/342):** spill de `height` e nove words extras; o grafo de
+   interferência global precisa de uma representação de fonte que preserve o
+   `s2` original.
+5. **`0x1764` (42/182):** congelada; só revisitar com uma hipótese nova de
+   alocação global.
+6. **Identidade de dados:** 0x6190, 0x6238, 0x6248, 0x6250, 0x6204,
+   `.data+0x34`, `.data+0x80` e os pares de `libhtml_view` continuam sem
+   identidade cross-artifact. Nenhum objeto de dados foi promovido.
+7. **Fragmentos e containers:** `0x0`/`0x84` continuam sem evidência
+   independente de entrypoint; `EBOOT.BIN` (`~PSP`) e `libadler.prx` (`~SCE`)
+   continuam bloqueados por formato de container.
+
+Nenhuma dessas funções foi descrita como concluída. O resultado principal da
+026 é a correção principiada do pareamento HI16/LO16, a reclassificação
+honesta de `0x2C8`, a remoção dos avisos de `0x1C58` e a recuperação do
+tamanho exato de `0x1F10`.

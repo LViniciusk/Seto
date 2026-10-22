@@ -79,9 +79,9 @@ WHOLE_CASES = {
         "symbol_size": 1368, "first_word": 15,
     }),
     0x1F10: (186, {
-        "status": "NONMATCHING", "matching": 70, "total": 187,
-        "differences": 81, "relocations": 3, "limitations": 21,
-        "symbol_size": 748, "first_word": 96,
+        "status": "NONMATCHING", "matching": 73, "total": 186,
+        "differences": 76, "relocations": 2, "limitations": 21,
+        "symbol_size": 744, "first_word": 96,
     }),
     0x21F8: (238, {
         "status": "NONMATCHING", "matching": 119, "total": 241,
