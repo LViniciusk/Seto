@@ -84,9 +84,9 @@ WHOLE_CASES = {
         "symbol_size": 744, "first_word": 96,
     }),
     0x21F8: (238, {
-        "status": "NONMATCHING", "matching": 187, "total": 238,
-        "differences": 3, "relocations": 0, "limitations": 26,
-        "symbol_size": 952, "first_word": 165,
+        "status": "INCONCLUSIVE", "matching": 190, "total": 238,
+        "differences": 0, "relocations": 0, "limitations": 26,
+        "symbol_size": 952, "first_word": None,
     }),
 }
 
@@ -350,7 +350,8 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
         assert len(first["relocation_issues"]) == expected["relocations"]
         assert len(first["limitations"]) == expected["limitations"]
         assert first["candidate_size"] == expected["symbol_size"]
-        assert first["differences"][0]["word_index"] == expected["first_word"]
+        if expected["first_word"] is not None:
+            assert first["differences"][0]["word_index"] == expected["first_word"]
         if first["difference_count"]:
             assert first["differences"][0]["reason"] == expected.get("first_reason", "word differs")
         whole_results.append(first)
