@@ -4584,3 +4584,238 @@ deve encontrar uma expressão C semanticamente natural que mantenha o retorno em
 `0x1DF4`; para `0x1B70`, deve reproduzir o `beql`/delay slot inicial, o branch
 ordinary zero-count para o call na word 13, o `sb` em delay slot e o clear
 posterior, sem `$s*`. Não relaxar a identidade do byte `0x6250`.
+
+### SETO-DECOMP-024-R3 — Deep Decompilation Push
+
+Executada na mesma branch `feat/seto-decomp-024` e PR #23, partindo de
+`547c5b0a9037e73beb8df97c2ab0f0548707274d`. O PRX mantém SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`. Compilador,
+wibo, includes e flags oficiais `-O4,p -sdatathreshold 0` foram preservados;
+nenhum código em `matching.py`, `datarefs.py` ou na infraestrutura Python de
+produção foi alterado. Todos os artefatos operacionais da R3 ficam em
+`build/seto024/deep-push/`.
+
+**Resultado:** os dois alvos antes bloqueados agora têm zero diferenças e
+tamanho exato; duas funções conectadas foram reconstruídas também sem
+diferenças, e o callback comparador recuperado acrescentou **um `MATCHED` / 4
+words**. O total certificado passou de **14/906 para 15 funções/910 words**.
+Os pares de dados/endereços de callback sem identidade continuam inconclusivos.
+
+#### Antes/depois e tamanho integral
+
+| Função | Antes da R3 | Resultado final, duas compilações | Bytes original / símbolo candidato | Diferenças / relocation issues | Limitações |
+|---|---|---|---:|---:|---|
+| `0x1DF4` | `NONMATCHING` 19/36 | **`INCONCLUSIVE` 28/36** | **144 / 144** (antes 152) | **0 / 0** (antes 11 / 3) | 4 pares de identidade de dados |
+| `0x1B70` | `NONMATCHING` 5/42 | **`INCONCLUSIVE` 34/42** | **168 / 168** | **0 / 0** (antes 30 / 8) | 4 pares de identidade + 2 avisos de pairing |
+| `0x1C58` | somente analisada | **`INCONCLUSIVE` 28/44** | **176 / 176** | **0 / 0** | 8 pares de identidade + 2 avisos de pairing |
+| `0x1B0C` | não reconstruída | **`INCONCLUSIVE` 15/25** | **100 / 100** | **0 / 0** | 5 pares de identidade |
+| `0x1E84` | fragmento sem caller direto reconhecido | **`MATCHED` 4/4** | **16 / 16** | **0 / 0** | nenhuma; `verified_decompilation=true` |
+| `0x1764` | `NONMATCHING` 42/182 | inalterado, **42/182** | **728 / 728** | 140 / 32, inalterados | nenhuma; não certificado |
+
+Cada comparação final cobre o símbolo inteiro, não apenas um prefixo. Os cinco
+alvos novos/melhorados foram recompilados duas vezes com objetos e campos
+estáveis idênticos. Os quatro `INCONCLUSIVE` têm `verified_decompilation=false`,
+`resolved_data=[]` e nenhuma diferença de instrução ou relocation issue; as
+words dos pares sem identidade não são contadas como certificadas.
+
+#### Descoberta principal: inserções de bitfield, não máscaras inteiras
+
+A representação mínima fiel é uma struct de **dois bitfields `unsigned char`**:
+bit 0 `active:1`, bits 1–7 `count:7`. Com o Metrowerks oficial ela ocupa um byte
+e produz os acessos `lbu`/`sb`, shifts e inserções observados. Os nomes continuam
+descritivos e provisórios; o tipo não demonstra identidade cross-artifact nem
+semântica de subsistema.
+
+Em `0x1DF4`, `state.count++` mantém o incremento modulo 128 e
+`state.active = 1` preserva a operação de inserção do compilador. A segunda
+atribuição precisa de uma constante em registrador e de um OR de registradores,
+ao contrário da máscara inteira que era otimizada para `ori`. Isso explica por
+que as permutações anteriores repetiam o mesmo objeto errado: modificavam
+expressões dentro de outro grafo de dependências.
+
+| Valor no bloco final `0x1DF4` | Definição / último uso | Original = R3 | Candidato anterior |
+|---|---|---|---|
+| predicado assinado | word 3 / retorno | `s0` → `v0` na word 26 | `s0` testado por branches de retorno |
+| endereço do load | word 23 / word 24 | `v1` | `v0` |
+| byte carregado | word 24 / máscara na word 28 | `a1` | `a0` |
+| valor 1 a inserir no bit baixo | word 25 / OR na word 29 | `a0` | immediate de `ori` |
+| máscara/bits preservados | word 27 / OR na word 29 | `v1` | `v1`, outra ordem |
+| byte atualizado | word 29 / store na word 31 | `a0` | `v1` |
+| endereço do store | word 30 / word 31 | `v1` | `v0`, materializado na word 27 |
+
+Após o load, o endereço em `v1` está morto e pode ser reutilizado pela máscara,
+pelos bits preservados e depois pelo endereço do store. O bit de inserção fica
+vivo em `a0` enquanto o retorno é preparado em `v0`; o resultado cai diretamente
+no epílogo comum. Desaparecem os branches extras, as três relocation issues e
+as duas words excedentes. As quatro limitações restantes estão nas words
+11/20/23/30 e são somente de identidade.
+
+#### `0x1B70`: o CFG original vem de um `switch`
+
+Somente a troca para bitfields não basta. Um `if` do campo não-zero compila o
+clear antes da chamada; a forma call-first usa `bnel` diretamente para o bloco
+clear. Ambas emitem 40 words/160 bytes e são **`ERROR` por tamanho**, não
+comparações válidas.
+
+O `switch (state.count)` com `case 0` e `default` gera exatamente o dispatch
+original: `beq` para a chamada, delay slot vazio e salto separado ao clear
+posterior com `andi v0,zero,0x7f` no delay slot. Com isso:
+
+- entrada: `beql` e retorno-zero no delay slot;
+- extração: `sll`/`srl` sem `andi 0xffff`;
+- chamada local `0x1C58` na word 13 (`0x1BA4`), agora resolvida pelo matcher;
+- releitura do byte depois da chamada, antes do incremento;
+- `sb` no delay slot em `0x1BE4` e clear posterior em `0x1BE8`;
+- nenhum save de registrador `$s*`; símbolo inteiro de 42 words.
+
+O clear só ocorre no caminho não-zero; o incremento só ocorre após retorno
+não-zero de `0x1C58`. Nenhuma leitura cruzou o call nem foi adicionado store.
+O pairing original em words 26/29 continua associado por ordem, sem ser
+artificialmente promovido a prova.
+
+#### `0x1C58`: seis argumentos observados, callback natural em `t0`
+
+A hipótese de quinto argumento é correta mas incompleta: o call site também
+prepara `t1`. A chamada de `libehsys/0x8288EEBC`, stub `0x3668`, usa o seguinte
+conjunto de argumentos observados:
+
+| Registrador | Valor / evidência original |
+|---|---|
+| `a0` | constante 3 em `0x1CDC` |
+| `a1` | endereço `.data+0x64` (path), HI/LO em `0x1CCC`/`0x1CE0` |
+| `a2` | handle retornado por `0x3A00`, `move a2,v0` em `0x1CE4` |
+| `a3` | token retornado por `0x36A0`, mantido em `s0` e copiado em `0x1CD4` |
+| `t0` | endereço de `func_00001DF4`, low em **`0x1CF0`, delay slot do `jal`** |
+| `t1` | o mesmo handle de `a2`, `move t1,v0` em `0x1CE8` |
+
+Um protótipo de seis argumentos reproduz as 44 words sem casts, assembly ou
+mudança de ABI. O retorno do import é ignorado: a instrução seguinte prepara
+zero em `v0`. Esse é um contrato de uso do caller, não uma assinatura SDK nem
+prova de que o import nunca consome outros argumentos.
+
+A reconstrução preserva o fast path que retorna o cache em `0x6248`, o guard
+do bit ativo, o clear antes dos imports, `0x36A0` (`D2A768F4`), `0x3A00`
+(`41AABF28`), o store do handle antes do registro e o retorno-zero do slow path.
+`func_00001DF4(int,int)` permanece com sua assinatura compatível, compartilhada
+no header. Os globals `0x6238`/`0x6248`, o path e o endereço de callback são
+declarados como referências provisórias; nenhum asset foi recriado.
+
+#### `0x1B0C` e o comparador recuperado `0x1E84`
+
+O PRX confirma o intervalo de 25 words e dois **imports**: `0x2610`
+(`libehsys/10F3BB61`) e `0x2638` (`libehsys/1B00FB95`). A menção anterior a
+`0x2638` como chamada local era incorreta. A função passa `(endereço do byte,
+0,1)` ao primeiro, ativa o bit baixo e passa `(tabela,4,12,comparador)` ao segundo.
+A tabela usa o mesmo símbolo provisório de `0x1D08`, sem forjar `.data`.
+
+O primeiro parâmetro de `0x2610` passou de `int *` para `void *`: o mesmo import
+recebe buffers de inteiros nos callers anteriores e este objeto de um byte.
+Isso evita um cast incompatível; os argumentos/ABI e todos os objetos anteriores
+continuam idênticos. Os dois imports têm retorno não utilizado nestes usos.
+
+A relocation `0x1B30`/`0x1B60` fornece o endereço `0x1E84` em `a3` como
+comparador. O corpo `[0x1E84,0x1E94)` contém dois `lhu` e `subu` no delay slot
+do retorno: a forma natural é `return *arg0 - *arg1` para dois ponteiros válidos
+e alinhados a `unsigned short`. A diferença fica em `[-65535,65535]`, sem
+overflow de `int`.
+
+A triagem histórica classificava esse intervalo como `FRAGMENT`: Ghidra não
+o havia identificado e a seleção buscava callers diretos ou pointers da tabela
+resident. A referência de callback no call site agora estabelece o papel de
+função; nem a triagem de produção nem os artefatos Ghidra foram modificados.
+O símbolo completo de 16 bytes é **`MATCHED` 4/4**. Esse match **não** resolve
+automaticamente o par do endereço de callback em `0x1B0C`, que continua
+`INCONCLUSIVE`.
+
+#### Investigação limitada de `0x1764`
+
+Após consultar as gerações 021/022 de hints, declarações, contexto inlineado e
+ordenação de `full`/`ready`, foi testado um grafo diferente: reutilizar o span
+como posição final, mantendo os intrínsecos `max/min` e sem aritmética nova.
+O resultado spillou `height` em `76(sp)` e colocou `full` no delay slot do
+`jal`, mas também spillou a posição em `72(sp)` e manteve a rotação errada
+(`renderer=s5`, `width=s7`, `ready=s0`, `filled=s6`). Emitiu 732 bytes e
+`NONMATCHING` 19/182, 163 diferenças e 38 relocation issues. Foi descartado;
+a fonte e o objeto baseline de 728 bytes/42 words coincidentes não mudaram.
+Não foi repetida uma busca de dezenas de permutações equivalentes.
+
+#### Regressões e evidência TDD
+
+O opt-in 023 foi executado antes das alterações para capturar os objetos reais
+que falhavam nas propriedades alvo: zero diferenças/tamanho exato do bloco
+final e dispatch/slots corretos em `0x1B70`. Os diagnósticos RED existentes e a
+baseline fresca ficam preservados, não aceitos como resultados novos. Depois
+das correções, as asserções ativas de 023 passaram a exigir os resultados
+medidos `INCONCLUSIVE`, zero diffs/issues, limitações exatas e **tamanho do
+símbolo inteiro em ambas as tentativas**. O histórico 19/36 e 5/42 permanece
+apenas documental, não impede melhorias futuras.
+
+O teste duplicado `test_libtutoriallist_024_real.py` foi removido. O novo teste
+focado `test_libtutoriallist_callbacks_real.py`, opt-in
+`SETO_LIBTUTORIALLIST_CALLBACKS_REAL=1`, cobre somente `0x1B0C`, `0x1C58` e
+`0x1E84`; usa `run_real_match`, duas compilações frescas, símbolos integrais,
+determinismo e as limitações reais. Não há teste unitário superficial nem
+mudança de Python de produção. `ERROR`/`BLOCKED` não são resultados aceitos.
+
+#### Cobertura e certificações
+
+| Métrica | Antes | Depois |
+|---|---:|---:|
+| C reconstruído/compilado/comparado em `libtutoriallist` | 12 funções / 1124 words originais | **15 funções / 1197 words** (+3 / +73) |
+| Funções `libtutoriallist` sem diferenças de instrução | 9 (7 `MATCHED` + 2 `INCONCLUSIVE`) | **14 (8 `MATCHED` + 6 `INCONCLUSIVE`)** |
+| Words originais nas cinco funções novas/melhoradas sem diferenças | — | **151**; não somados a certificação |
+| `MATCHED` `libtutoriallist` | 7 / 690 words | **8 / 694 words** |
+| `MATCHED` acumulados com `libhtml_view` | 14 / 906 words | **15 / 910 words** |
+| `libhtml_view` | 7 `MATCHED`, 8 `INCONCLUSIVE` | inalterado |
+
+Os sete objetos `libtutoriallist` anteriormente certificados mantiveram seus
+SHA-256; `0xE24` continua `INCONCLUSIVE` 113/115 e `0x1D08` 53/59 com objetos
+idênticos, e `0x1764` conserva 42/182. As quinze funções de `libhtml_view` foram
+recompiladas/comparadas, mantendo sete `MATCHED`/216 words e oito
+`INCONCLUSIVE`. Os 271 words contados nas seis funções `libtutoriallist`
+inconclusivas não são adicionados aos 910 words de funções certificadas.
+
+#### Hashes finais (bytes das fontes no worktree Windows)
+
+| Função / artefato | Fonte SHA-256 | Objeto SHA-256, idêntico nas tentativas 1/2 |
+|---|---|---|
+| `0x1DF4` | `9e4d4fba6e7c5e089f6cf5eff970861a7ee7c4cac71f6cb973f32ccac47db6e7` | `f0fe0bf974bca659c892847d1b8bc6db8aeaccac8481006aa5475ad7b4063791` |
+| `0x1B70` | `a67e83a6736e469c53914defe49c2acaa3b3e473b67d52071dbcbb9a9ced191e` | `0f2188eb9e3105753a90424adad71406a5bba68b1331b91f04b9e47ca466f491` |
+| `0x1C58` | `e99748be52320e19591f93ae0d50dea33159967b870b9e3f44556c1b19ea5e13` | `807134dfd1ee244300d69df3be325b1aa64127c9a432f8418d14fa04689124d7` |
+| `0x1B0C` | `bdcad2972c39d7e484734957f2831e246c67518cb187e3a0feffb631c86bcc70` | `baf774c761c17ad7a917d883ec09c99e5c54276ba194d0f3328c328cf31d5334` |
+| `0x1E84` | `0ed720acd46dacf6b0b5eb68e1efe82a8b4ab73e3a4f9f9ade4b6c311bd0bdd8` | `ace41b323481c0b6ff7887b74ef339f7473f5ed0dd88ee0dfcac90ca59ff9ce7` |
+
+Header compartilhado:
+`a07e2711fa860efc843f75343957057aa55da5abe3c6e1a604f06151bfc12fb0`.
+Hashes de fonte dependem de LF/CRLF; os registros guardam os bytes efetivamente
+compilados, sem hashes circulares nos comentários C. `final-results.json`
+consolida objetos, tamanho integral, calls, limitações e comparação dos hashes
+anteriores; disassemblies completos por tentativa ficam em `matches/`.
+
+#### Gates finais
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` | Windows | **761 passed, 39 skipped** |
+| `pytest -q -rs` | WSL2 | **778 passed, 22 skipped** |
+| `pytest -m integration -q -rs` | Windows | **23 passed, 34 skipped, 743 deselected** |
+| `pytest -m integration -q -rs` | WSL2 | **41 passed, 16 skipped, 743 deselected** |
+| Opt-ins reais 018–023 + callbacks R3 | WSL2 | **8 passed**; cada alvo alterado/novo compilado duas vezes |
+| `test_toolchain_runtime.py -k real_mwccpsp` | WSL2 | **16 passed, 3 deselected** (15 funções `libhtml_view`; caso `0x508` também validado isoladamente) |
+| `compileall -q src scripts tests` | Windows e WSL2 | clean |
+| `git diff --check` | Windows Git | clean |
+
+Os três skips YAML do full WSL continuam por ausência de PyYAML. ISO/Splat,
+Ghidra/REA e opt-ins inativos continuam explicitamente não executados; nenhum
+requisito ausente foi transformado em aprovação. Não foram versionados objetos,
+PRXs, dumps de assets, variantes descartadas ou ferramentas genéricas novas.
+
+#### Bloqueios restantes
+
+`0x1DF4`, `0x1B70`, `0x1C58` e `0x1B0C` não têm mais bloqueio de codegen;
+permanecem sem identidade independente para globals/tabelas/endereços de
+callback. O comparador continua estrito, inclusive para o endereço de um
+callback cujo corpo já é `MATCHED`. `0x1764` conserva o bloqueio global de
+alocação/spill. Os próximos passos devem tratar essas provas ou um novo grafo
+de interferência de `0x1764`, não repetir máscaras/retornos/permutações já
+refutados. Esta rodada entrega implementação real, não apenas gates verdes.

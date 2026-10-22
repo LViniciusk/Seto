@@ -14,36 +14,27 @@
  * location is not in a named ELF section, so the provisional external symbol
  * cannot prove identity in the candidate object.
  *
- * Current Metrowerks result: NONMATCHING 5/42 (30 differences, 8 relocation
- * issues and 2 pairing limitations). This is a real comparison; it does not
- * establish cross-artifact identity for the shared state.
+ * The switch preserves the original count-zero branch followed by a jump to
+ * the later clear block. An equivalent if/else omits two instructions. Byte
+ * bitfields preserve the original insertion sequence even for count = 0.
+ * Result: INCONCLUSIVE 34/42, zero instruction differences/relocation issues;
+ * unresolved data identity and the original order-only pairing remain.
  */
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001C58(void);
-
 int func_00001B70(void)
 {
-    unsigned char state;
-    unsigned short count;
-    unsigned char result;
-
-    state = func_00006250_state;
-    if ((state & 1) == 0)
-        return 0;
-
-    count = ((unsigned int)state << 24) >> 25;
-    if (count != 0) {
-        func_00006250_state = state & ~0xfe;
-        result = 1;
-    } else {
-        if (func_00001C58() == 0)
-            return 0;
-        state = func_00006250_state;
-        count = ((unsigned int)state << 24) >> 25;
-        func_00006250_state = (state & ~0xfe) | (((count + 1) & 0x7f) << 1);
-        result = 0;
+    if (func_00006250_state.active != 0) {
+        switch (func_00006250_state.count) {
+        case 0:
+            if (func_00001C58() != 0)
+                func_00006250_state.count++;
+            break;
+        default:
+            func_00006250_state.count = 0;
+            return 1;
+        }
     }
-    return result;
+    return 0;
 }
