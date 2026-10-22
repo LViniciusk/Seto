@@ -5192,7 +5192,7 @@ descrita como concluída; as certificações novas são apenas as 2 words de
   -sdatathreshold 0`, include `decomp/include`.
 - Nenhum flag, binário original, regra de comparação ou identidade de dados
   foi alterado para promover funções. As mudanças de produção são o
-  pareamento HI16/LO16 e formas de C equivalentes em `0x1F10`, `0x21F8` e `0x2F4`.
+  pareamento HI16/LO16 e formas de C equivalentes em `0x1F10`, `0x21F8`, `0x2F4` e `0x8F0`.
 
 ### 2. Pareamento HI16/LO16 com CFG local (0x2C8)
 
@@ -5320,7 +5320,7 @@ compiladas; nenhuma removeu a duplicação sem perder a alocação do loop.
 | Função | Original / candidato | Resultado | Primeira diferença |
 |---|---:|---|---:|
 | `0x2F4` | 253 / 253 | `NONMATCHING` 134/253, 99 diferenças, 20 relocation issues, 4 limitações | word 81 |
-| `0x8F0` | 333 / 342 | `NONMATCHING` 50/342, 286 diferenças, 70 relocation issues, 1 limitação | word 15 |
+| `0x8F0` | 333 / 342 | `NONMATCHING` 52/342, 284 diferenças, 68 relocation issues, 1 limitação | word 15 |
 | `0x1764` | 182 / 182 | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues | word 0 |
 
 Em `0x2F4`, somente a consulta da linha visível passou ao accessor compartilhado:
@@ -5333,8 +5333,18 @@ suas instruções. Elas continuam ausentes; nenhum código morto foi inserido.
 Accessors alternativos e os dois pares de acumuladores/cursores não melhoraram
 o candidato. A primeira divergência agora é a word 81, não as words 32/34.
 
+Em `0x8F0`, antecipar `top = y + 15` para antes da configuração coloca a soma
+no delay slot original: **50/342 → 52/342**, 286 → 284 diferenças e 70 → 68
+relocation issues, com objeto determinístico em duas compilações. O spill de
+`height` na word 15 permanece. A análise distinguiu os temporários que o
+candidato mantém vivos (`x+6`, `atlas+11`, `width-20`, `height-27`) das somas
+recomputadas no original. Reuso entre fases, escopos, indução por índice,
+inicialização do contador e expressões encadeadas não recuperaram `height=s2`.
+Reusar `height` como contador removeu seu spill, mas mudou-o para `s3` e
+introduziu outros spills; essa variante não foi adotada.
+
 Nenhuma dessas funções foi promovida nem teve a semântica alterada nesta
-rodada. `0x8F0` permanece no baseline; `0x1764` permanece congelada após mais de 120 variantes refutadas em
+rodada. `0x1764` permanece congelada após mais de 120 variantes refutadas em
 025; só deve ser revisitada com uma hipótese estrutural nova.
 
 ### 7. Métricas globais
@@ -5375,6 +5385,7 @@ da função, não por uma promoção artificial.
 | `0x1F10–0x21F8` | `func_00001F10.c` | `0ff65a4f12d2e84e99a163b6abf10dc760abe022ad9662b30761f0948c5cf890` | `3f4f3789ed471bfd69c491106bc982712e11e3b30e39820aa61c70ad33b4f613` |
 | `0x21F8–0x25B0` | `func_000021F8.c` | `b59a92d80c06de4e656449e7fec59ca30e555c93958a5bb7352e77eb42479300` | `9eb6aee66d6ed6c1dcabb0a7cf6576bfc78a76993ddc79f0eae3f37f003e6aca` |
 | `0x2F4–0x6E8` | `func_000002F4.c` | `a80470ddc1f0653e6a3c3555be5d01670b6ebbd3d710e5e221eecd1319c9da42` | `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c` |
+| `0x8F0–0xE24` | `func_000008F0.c` | `53d38ec10f50b75c1afa396689b942dd2ed64eac06ff80649e191a8adf53dd0c` | `591face818cb8f1958f17c43821228029887908f3d317ce41df6e176c40f91dc` |
 
 O objeto de `0x2C8` é o mesmo certificado em 025; o hash de fonte registrado
 na tabela de 025 para essa função (`288f2124...`) não corresponde ao arquivo
@@ -5416,7 +5427,7 @@ determinísticos.
 3. **`0x2F4` (134/253):** tamanho exato, mas o CFG ainda difere. Primeira
    divergência na word 81; faltam as cópias do scheduler em 0x4B0/0x560/0x634,
    enquanto o accessor emite conversões/reloads diferentes. Não inserir padding.
-4. **`0x8F0` (50/342):** spill de `height` e nove words extras; o grafo de
+4. **`0x8F0` (52/342):** spill de `height` e nove words extras; o grafo de
    interferência global precisa de uma representação de fonte que preserve o
    `s2` original.
 5. **`0x1764` (42/182):** congelada; só revisitar com uma hipótese nova de

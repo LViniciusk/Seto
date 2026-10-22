@@ -2,8 +2,8 @@
  * original arithmetic. Coordinates/products/shifts must fit int; imports and
  * globals are usage-derived, with no invented data identity or null guards.
  *
- * RESULT: NONMATCHING 50/342 compared words (333 original + 9 extra candidate
- * words), 286 differences, 70 relocation issues, one HI16/LO16 limitation;
+ * RESULT: NONMATCHING 52/342 compared words (333 original + 9 extra candidate
+ * words), 284 differences, 68 relocation issues, one HI16/LO16 limitation;
  * 1368-byte candidate versus 1332-byte original. First divergence is word 15:
  * the candidate spills `height` to 0x4c(sp), while the original keeps it in s2
  * through 0xb44 and later reuses s2 as the loop counter.
@@ -35,8 +35,8 @@ void *func_000008F0(void *renderer, int x, int y, int width, int height)
     renderer = func_00003B78(renderer, 0xFFFFFFFFu);
     renderer = func_00003BC0(renderer, 0, 0);
     atlas = func_00006190_panel.flags.group * 32;
-    renderer = func_00003AF0(renderer, 6, 6, 6, 6);
     top = y + 15;
+    renderer = func_00003AF0(renderer, 6, 6, 6, 6);
     renderer = func_00003AE8(renderer, x, top, 0, 0x40, atlas, 0, 0);
     bottom = y + height - 6;
     renderer = func_00003AE8(renderer, x, bottom, 0, 0x40, atlas + 11, 0, 0);
