@@ -220,35 +220,26 @@ def test_023_shared_state_identity_and_fresh_comparisons() -> None:
     timings: list[dict[str, object]] = []
     expected_comparisons = {
         0x1B70: {
-            "matching_words": 5,
-            "difference_count": 30,
-            "relocation_issues": [
-                "word 2 (0x1b78): relocated word differs outside the relocation field",
-                "word 15 (0x1bac): HI16/LO16 association differs (original: no relocation; candidate: LO16 at word 16)",
-                "word 17 (0x1bb4): HI16/LO16 association differs (original: LO16 at word 18; candidate: no relocation)",
-                "word 22 (0x1bc8): HI16/LO16 association differs (original: no relocation; candidate: LO16 at word 25)",
-                "word 26 (0x1bd8): HI16/LO16 association differs (original: LO16 at word 29; candidate: no relocation)",
-                "word 34 (0x1bf8): HI16/LO16 association differs (original: LO16 at word 35; candidate: LO16 at word 36)",
-                "word 13 (0x1ba4): relocation present only on the original side",
-                "word 19 (0x1bbc): relocation present only on the candidate side",
-            ],
+            "matching_words": 34,
             "limitations": [
                 "word 29: register-flow pairing is uncertain: control flow crosses the HI16-to-LO16 scan",
                 "word 29: HI16/LO16 association relies on relocation order (symbol identity unavailable)",
+                "word 2: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+                "word 17: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+                "word 26: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+                "word 34: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
             ],
-            "resolved_calls": [],
+            "resolved_calls": [
+                "word 13 (0x1ba4): this module @ 0x1c58 <=> this module @ 0x1c58",
+            ],
         },
         0x1DF4: {
-            "matching_words": 19,
-            "difference_count": 11,
-            "relocation_issues": [
-                "word 23 (0x1e50): relocated word differs outside the relocation field",
-                "word 27 (0x1e60): HI16/LO16 association differs (original: no relocation; candidate: LO16 at word 30)",
-                "word 30 (0x1e6c): HI16/LO16 association differs (original: LO16 at word 31; candidate: R_MIPS_LO16 alone)",
-            ],
+            "matching_words": 28,
             "limitations": [
                 "word 11: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
                 "word 20: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+                "word 23: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
+                "word 30: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)",
             ],
             "resolved_calls": [
                 "word 9 (0x1e18): libehsys/0x4B0DABFA (stub 0x3780, target 0x3780) <=> libehsys/0x4B0DABFA (stub 0x3780, symbol 'func_00003780' -> 0x3780)"
@@ -276,16 +267,19 @@ def test_023_shared_state_identity_and_fresh_comparisons() -> None:
                 "compile_and_match_seconds": round(time.perf_counter() - started, 3),
             })
             attempts.append(result)
+            candidate = elf.parse(build_root / "matches" / f"f{address:x}" / f"attempt-{attempt}" / f"{name}.o")
+            symbol = next(symbol for symbol in candidate.symbols if symbol.name == name)
+            assert symbol.size == CASES[address] * 4, "the entire symbol must fit the original interval"
         first, second = attempts
         assert _stable_result(first) == _stable_result(second), f"fresh {name} comparison changed"
         assert first["status"] in ("MATCHED", "INCONCLUSIVE", "NONMATCHING")
-        assert first["status"] == "NONMATCHING"
-        assert first["exit_code"] == 3
+        assert first["status"] == "INCONCLUSIVE"
+        assert first["exit_code"] == 5
         assert first["matching_words"] == expected["matching_words"]
         assert first["total_words"] == CASES[address]
-        assert first["difference_count"] == expected["difference_count"]
-        assert len(first["differences"]) == expected["difference_count"]
-        assert first["relocation_issues"] == expected["relocation_issues"]
+        assert first["difference_count"] == 0
+        assert first["differences"] == []
+        assert first["relocation_issues"] == []
         assert first["limitations"] == expected["limitations"]
         assert first["resolved_calls"] == expected["resolved_calls"]
         assert first["resolved_data"] == []

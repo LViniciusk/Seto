@@ -64,8 +64,6 @@
 
 #include "libtutoriallist_stubs.h"
 
-extern int func_00001C58(void);
-
 extern unsigned short func_00001D08_entries[];
 extern const char func_00001D08_names[];
 
