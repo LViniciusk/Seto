@@ -1,4 +1,4 @@
-﻿# Decompilation progress
+# Decompilation progress
 
 Status vocabulary, used strictly:
 
@@ -5573,4 +5573,3 @@ Bloqueios restantes: identidades de dados de `0x2C8`/`0x1C58` e dos pares de
 ordem em `0x21F8`; cópias inalcançáveis de `0x2F4` (não inserir dead code);
 pressão de registradores de `0x8F0`; `0x1764` congelada; fragmentos sem
 entrypoint; containers `~PSP`/`~SCE`.
-
