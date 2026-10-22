@@ -5185,6 +5185,9 @@ descrita como concluída; as certificações novas são apenas as 2 words de
 
 - HEAD inicial e merge-base: `96b941fdd6a4a07cc8128abe14ea61133557e2e0`
   (merge da PR #24). Branch: `feat/seto-decomp-026-matching-offensive`.
+- HEAD final de implementação: `15eb59fbac5a71fbc19eadf29b66430ddeea0a53`.
+  Atualizações posteriores de gates/proveniência são somente documentação na
+  [PR #25](https://github.com/LViniciusk/Seto/pull/25), sem merge automático.
 - PRX original: `libtutoriallist.prx`, SHA-256
   `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`;
   `.text` em `[0, 0x25B0)`.
@@ -5413,6 +5416,7 @@ independentes do teste 025 produziram o mesmo `9eb6aee6...`.
 | Gate | Ambiente | Resultado |
 |---|---|---|
 | `pytest -q -rs` (suíte completa) | Windows, `PYTHONPATH=src` | **773 passed, 42 skipped** |
+| `pytest -q -rs` com opt-ins de tutorial ativos | WSL2 | **800 passed, 15 skipped** (735,91 s) |
 | `pytest -m integration -q -rs` com opt-ins de tutorial ativos | WSL2 | **49 passed, 9 skipped, 753 deselected** (448,97 s) |
 | Opt-ins reais 018–025 + callbacks | WSL2 | **9 casos aprovados**, incluídos na suíte acima |
 | Runtime real mwccpsp / `libhtml_view` | WSL2 | **16 casos aprovados**, incluídos na suíte acima |
@@ -5420,10 +5424,13 @@ independentes do teste 025 produziram o mesmo `9eb6aee6...`.
 | `git diff --check` | Windows | clean |
 
 Os skips continuam sendo requisitos de plataforma/ferramentas ausentes ou
-opt-ins inativos; nenhum skip foi convertido em aprovação. Os 9 opt-ins reais
+opt-ins inativos, incluindo três casos YAML sem PyYAML no WSL2; nenhum skip
+foi convertido em aprovação. Os 9 opt-ins reais
 incluem `0x2C8` (`INCONCLUSIVE` 7/11, 0 diferenças), `0x1F10` (73/186, 744
 bytes), `0x21F8` (127/240, 960 bytes), `0x2F4` (134/253, 1 012 bytes) e `0x8F0`
 (52/342, 1 368 bytes), todos compilados duas vezes com objetos determinísticos.
+Os oito checks hospedados do commit de implementação `15eb59f` também passaram
+(Ubuntu/Windows, Python 3.11/3.12, eventos push e pull request).
 
 ### 10. Bloqueios restantes e ordem de ataque
 
