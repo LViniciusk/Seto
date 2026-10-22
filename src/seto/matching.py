@@ -442,19 +442,275 @@ def pair_hi16_lo16(
     )
 
 
+_CFG_BRANCH_LIKELY_OPS = frozenset((0x14, 0x15, 0x16, 0x17))
+# Link variants are conditional calls, not ordinary intraprocedural edges.
+# Leave them unsupported rather than discarding a possible callee return.
+_CFG_REGIMM_BRANCHES = frozenset((0x00, 0x01))
+_CFG_REGIMM_LIKELY = frozenset((0x02, 0x03))
+_CFG_EXIT_FUNCTS = frozenset((0x0C, 0x0D))
+
+
+def _cfg_control_kind(word: int) -> str | None:
+    """Classify a word for the small intraprocedural CFG used by pairing."""
+    op = (word >> 26) & 0x3F
+    rs = (word >> 21) & 0x1F
+    rt = (word >> 16) & 0x1F
+    funct = word & 0x3F
+    if op == 0:
+        if funct == 8:  # jr
+            return "jr"
+        if funct == 9:  # jalr
+            return "jalr"
+        if funct in _CFG_EXIT_FUNCTS:  # syscall/break (SPECIAL 0x18 is mult)
+            return "exit"
+        return None
+    if op in (2, 3):  # j/jal
+        return "jump"
+    if op == 1:
+        if rt in _CFG_REGIMM_LIKELY:
+            return "branch-likely"
+        if rt in _CFG_REGIMM_BRANCHES:
+            return "branch"
+        return "unsupported"
+    if op in (4, 5, 6, 7):  # beq/bne/blez/bgtz
+        return "branch"
+    if op in _CFG_BRANCH_LIKELY_OPS:
+        return "branch-likely"
+    if op in (0x10, 0x11, 0x12, 0x13) and rs == 8:
+        # Coprocessor branches have not been modeled here.
+        return "unsupported"
+    if _instruction_effect(word)[0]:
+        return "unsupported"
+    return None
+
+
+def _cfg_branch_relation(word: int) -> str:
+    """Return always/never/conditional for a branch comparison of identical regs."""
+    op = (word >> 26) & 0x3F
+    rs = (word >> 21) & 0x1F
+    rt = (word >> 16) & 0x1F
+    if op == 4:
+        return "always" if rs == rt else "conditional"
+    if op == 5:
+        return "never" if rs == rt else "conditional"
+    return "conditional"
+
+
+def _cfg_branch_target(index: int, word: int) -> int:
+    immediate = word & 0xFFFF
+    if immediate & 0x8000:
+        immediate -= 0x10000
+    return index + 1 + immediate
+
+
+def _cfg_is_call(word: int) -> bool:
+    op = (word >> 26) & 0x3F
+    return op == 3 or (
+        op == 0 and (word & 0x3F) == 9 and ((word >> 11) & 0x1F) != 0
+    )
+
+
+def _cfg_precheck(
+    words: tuple[int, ...], low_index: int
+) -> tuple[dict[int, int], str | None]:
+    """Build delay-slot ownership and reject control flow we cannot model.
+
+    The result is intentionally conservative.  A return value other than
+    ``None`` means the straight-line analyzer remains the best available
+    evidence and the CFG must not override it.
+    """
+    delay_of: dict[int, int] = {}
+    # Successors can run beyond the LO and loop back to it. Delay-slot owners
+    # must therefore cover the whole window, not only its prefix.
+    for index in range(len(words)):
+        kind = _cfg_control_kind(words[index])
+        if kind is None:
+            if _instruction_effect(words[index])[2] is None:
+                return delay_of, f"unknown register effects at word {index}"
+            continue
+        if kind == "unsupported":
+            return delay_of, f"unsupported control transfer at word {index}"
+        if kind == "exit":
+            return delay_of, f"control transfer at word {index} leaves the compared words"
+        if index in delay_of:
+            return delay_of, "a control transfer occupies a delay slot"
+        if kind in ("jump", "jr", "jalr") and low_index != index + 1:
+            is_return = kind == "jr" and ((words[index] >> 21) & 0x1F) == 31
+            if index < low_index or not (_cfg_is_call(words[index]) or is_return):
+                return delay_of, f"the LO16 lies beyond the {kind} at word {index}"
+        if index + 1 >= len(words):
+            return delay_of, f"control transfer at word {index} has no in-range delay slot"
+        delay_of[index + 1] = index
+        if kind in ("branch", "branch-likely") and low_index != index + 1:
+            target = _cfg_branch_target(index, words[index])
+            if not 0 <= target < len(words):
+                return delay_of, f"branch at word {index} leaves the compared words"
+    for index, word in enumerate(words):
+        if _cfg_control_kind(word) in ("branch", "branch-likely"):
+            if _cfg_branch_target(index, word) in delay_of:
+                # Entering a delay instruction normally is not equivalent to
+                # executing it with its owner's pending branch destination.
+                return delay_of, f"branch at word {index} targets a delay slot"
+    return delay_of, None
+
+
+def _cfg_successors(
+    index: int, words: tuple[int, ...], delay_of: dict[int, int]
+) -> list[int]:
+    """Return in-region successors for the local CFG.
+
+    A delay-slot node inherits the branch's taken/not-taken successors.  A
+    branch-likely additionally has a direct edge over its delay slot for the
+    not-taken path.
+    """
+    count = len(words)
+    if index in delay_of:
+        branch = delay_of[index]
+        kind = _cfg_control_kind(words[branch])
+        if _cfg_is_call(words[branch]):
+            # The call's delay slot precedes callee execution. A later return
+            # can reenter the LO via a backedge; transfer() marks its GPR state
+            # unknown rather than silently dropping this path.
+            return [branch + 2] if branch + 2 < count else []
+        if kind in ("jump", "jr", "jalr", "exit", "unsupported") or kind is None:
+            return []
+        target = _cfg_branch_target(branch, words[branch])
+        fall_through = branch + 2
+        if kind == "branch-likely":
+            return [target] if 0 <= target < count else []
+        relation = _cfg_branch_relation(words[branch])
+        if relation == "always":
+            return [target] if 0 <= target < count else []
+        if relation == "never":
+            return [fall_through] if 0 <= fall_through < count else []
+        successors = []
+        if 0 <= target < count:
+            successors.append(target)
+        if 0 <= fall_through < count and fall_through != target:
+            successors.append(fall_through)
+        return successors
+
+    kind = _cfg_control_kind(words[index])
+    if kind is None:
+        return [index + 1] if index + 1 < count else []
+    if kind == "branch-likely":
+        successors = []
+        if index + 1 < count:
+            successors.append(index + 1)
+        if index + 2 < count:
+            successors.append(index + 2)
+        return successors
+    if kind in ("branch", "jump", "jr", "jalr"):
+        return [index + 1] if index + 1 < count else []
+    return []
+
+
+def _cfg_register_flow(
+    low: RelocationSite,
+    low_index: int,
+    sites: dict[int, RelocationSite],
+    words: tuple[int, ...] | None,
+) -> tuple[str, int | None, str] | None:
+    """Prove a HI16 reaching a LO16 base register across mutually exclusive paths.
+
+    ``None`` means the local CFG could not model the window and the legacy
+    straight-line analyzer may supply independent evidence. Once analyzed,
+    ambiguous reaching definitions must return ``uncertain`` rather than be
+    upgraded by that less expressive fallback. Only the LO16 source register
+    is tracked, preserving branch-delay and branch-likely semantics.
+    """
+    if words is None or not 0 <= low_index < len(words):
+        return None
+    source = _lo_source_register(words[low_index])
+    if source is None:
+        return None
+    if source == 0:
+        return None
+    delay_of, problem = _cfg_precheck(words, low_index)
+    if problem is not None:
+        return None
+
+    def transfer(
+        state: frozenset[tuple[str, int]], index: int
+    ) -> frozenset[tuple[str, int]]:
+        if index in delay_of and _cfg_is_call(words[delay_of[index]]):
+            return frozenset({("unknown", index)})
+        word = words[index]
+        _control, _unconditional, writes = _instruction_effect(word)
+        if writes is None:
+            return frozenset({("unknown", index)})
+        if source not in writes:
+            return state
+        if (word >> 26) == 0x0F and index in sites and sites[index].type == R_MIPS_HI16:
+            return frozenset({("hi", index)})
+        return frozenset({("other", index)})
+
+    states: dict[int, frozenset[tuple[str, int]]] = {0: frozenset({("entry", 0)})}
+    work = [0]
+    steps = 0
+    while work:
+        index = work.pop()
+        out = transfer(states[index], index)
+        for successor in _cfg_successors(index, words, delay_of):
+            if not 0 <= successor < len(words):
+                continue
+            previous = states.get(successor)
+            merged = out if previous is None else previous | out
+            if merged != previous:
+                states[successor] = merged
+                work.append(successor)
+                steps += 1
+                if steps > 10000:
+                    return "uncertain", None, "CFG reaching-definition analysis did not converge"
+
+    reaching = states.get(low_index)
+    if not reaching:
+        return "uncertain", None, "the LO16 is unreachable in the modeled CFG"
+    hi_definitions = sorted(index for kind, index in reaching if kind == "hi")
+    other_definitions = sorted(index for kind, index in reaching if kind == "other")
+    if len(reaching) == 1 and len(hi_definitions) == 1:
+        hi_index = hi_definitions[0]
+        site = sites.get(hi_index)
+        if site is not None and site.type == R_MIPS_HI16:
+            return (
+                "match",
+                hi_index,
+                "a unique relocated LUI reaches the LO16 base register "
+                "along every modeled CFG path",
+            )
+    if len(other_definitions) == len(reaching):
+        if len(reaching) == 1:
+            return (
+                "definite-none",
+                None,
+                f"word {other_definitions[0]} redefines the LO16 base register",
+            )
+        return (
+            "definite-none",
+            None,
+            "all modeled paths redefine the LO16 base register "
+            f"(words {', '.join(str(index) for index in other_definitions)})",
+        )
+    return "uncertain", None, "multiple or unproven CFG reaching definitions"
+
+
 def _register_flow_pair(
     low: RelocationSite,
     low_index: int,
     sites: dict[int, RelocationSite],
     words: tuple[int, ...] | None,
 ) -> tuple[str, int | None, str]:
-    """Find the unique straight-line ``lui`` reaching a supported LO16 use.
+    """Find the unique ``lui`` reaching a supported LO16 use.
 
-    This intentionally is not a CFG/SSA pass. Any conditional transfer or
-    instruction with unknown register effects stops the proof. An unconditional
-    control transfer immediately before the LO is treated as its delay-slot
-    predecessor; its link-register write is still respected.
+    A small CFG handles redefinitions that live on mutually exclusive branch
+    paths.  If the CFG cannot model the window, the original straight-line
+    scan remains the fallback.  An unconditional control transfer immediately
+    before the LO is treated as its delay-slot predecessor.
     """
+    cfg_result = _cfg_register_flow(low, low_index, sites, words)
+    if cfg_result is not None:
+        return cfg_result
+
     if words is None:
         return "unavailable", None, "instruction words were not supplied"
     if not 0 <= low_index < len(words):

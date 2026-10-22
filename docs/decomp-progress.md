@@ -5176,3 +5176,400 @@ Ordem sugerida para a próxima rodada: `0x21F8` → `0x1F10` → `0x2F4` →
 identidade de dados → decoding de container. Nenhuma dessas funções foi
 descrita como concluída; as certificações novas são apenas as 2 words de
 `0x1C18`.
+
+---
+
+## SETO-DECOMP-026 — Maximum Matching Offensive
+
+### 1. Base, artefatos e escopo
+
+- HEAD inicial e merge-base: `96b941fdd6a4a07cc8128abe14ea61133557e2e0`
+  (merge da PR #24). Branch: `feat/seto-decomp-026-matching-offensive`.
+- HEAD final de implementação: `15eb59fbac5a71fbc19eadf29b66430ddeea0a53`.
+  Atualizações posteriores de gates/proveniência são somente documentação na
+  [PR #25](https://github.com/LViniciusk/Seto/pull/25), sem merge automático.
+- PRX original: `libtutoriallist.prx`, SHA-256
+  `2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`;
+  `.text` em `[0, 0x25B0)`.
+- Toolchain e flags inalterados: mwccpsp 3.0.1.219 via wibo, `-O4,p
+  -sdatathreshold 0`, include `decomp/include`.
+- Nenhum flag, binário original, regra de comparação ou identidade de dados
+  foi alterado para promover funções. As mudanças de produção são o
+  pareamento HI16/LO16 e formas de C equivalentes em `0x1F10`, `0x21F8`, `0x2F4` e `0x8F0`.
+
+### 2. Pareamento HI16/LO16 com CFG local (0x2C8)
+
+O pareamento anterior era estritamente linear: qualquer transferência
+condicional entre o `lui` e o `lhu`/`addiu` fazia o par cair em
+`relocation-order` ou em “controle de fluxo incerto”. Em `0x2C8`, a word 7
+(`addiu v0,zero,-1`) redefine o registrador-base do LO16 em um caminho, mas os
+quatro sítios HI16/LO16 estão em caminhos mutuamente exclusivos:
+
+- o `beql` leva ao LO16 e seu delay slot instala a base HI16;
+- o caminho não tomado redefine o mesmo registrador no delay slot de um `beq`
+  incondicional que salta o LO16.
+
+Foi adicionado um CFG intraprocedural mínimo em `src/seto/matching.py`
+(`_cfg_*`), com análise de definições alcançantes apenas para o registrador
+fonte do LO16. O CFG:
+
+- entende branches, branch-likely, jumps, `jr`/`jalr`, delay slots e
+  redefinições explícitas;
+- só devolve prova positiva quando um único `lui` realocado alcança o LO16 em
+  todos os caminhos modelados;
+- devolve `definite-none` para uma redefinição inequívoca;
+- devolve `None` (fallback linear) quando há chamada antes do LO, instrução desconhecida,
+  alvo fora da região ou fluxo que não pode ser modelado.
+
+Controles sintéticos novos: prova através de um branch condicional; prova
+através de delay slots mutuamente exclusivos (a forma de `0x2C8`); rejeição
+de uma redefinição que cai no LO16; e separação entre um alvo diferente em par
+provado pelo CFG (vira `NONMATCHING`) e um par apenas order-only (continua
+`INCONCLUSIVE`). `tests/test_matching.py`: **77 casos aprovados** na suíte final.
+
+A revisão de strictness acrescentou controles para backedges após o LO, retorno
+de `jal`/`jalr` e entrada normal em um delay slot. A propriedade dos delay slots
+agora cobre a janela inteira; chamadas posteriores ao LO propagam registradores
+desconhecidos após seu delay slot, sem apagar o possível caminho de retorno.
+Branches que entram em delay slots caem no fallback conservador, pois essa
+entrada não herda o destino pendente do branch dono. Também foi corrigida a
+classificação de SPECIAL `0x18`: é `mult`, não `eret`. Nenhuma dessas provas
+confere identidade a dados; os resultados reais de `0x2C8`/callbacks se mantêm.
+As quatro variantes de REGIMM branch-and-link são chamadas condicionais:
+novos controles reproduziram falsas provas quando eram tratadas como branches
+locais. Elas agora usam o fallback conservador, sem ignorar o retorno do callee.
+
+Resultado real de `0x2C8` (duas compilações independentes, objeto idêntico):
+
+| Antes | Depois |
+|---|---|
+| `NONMATCHING` 7/11, 1 diferença, 1 relocation issue, 4 limitações | **`INCONCLUSIVE` 7/11, 0 diferenças, 0 relocation issues, 2 limitações** |
+
+As duas limitações restantes são exatamente:
+
+```text
+word 0: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)
+word 5: HI16/LO16 data identity cannot be proven (original: unresolved; candidate: unresolved)
+```
+
+As quatro words de HI16/LO16 ficam fora de `matching_words`, por isso o
+resultado é 7/11 e não 11/11. **`INCONCLUSIVE` é o resultado correto**: o
+símbolo provisório do painel em 0x6190 não tem identidade cross-artifact
+independente. Nenhuma identidade foi fabricada para transformar o caso em
+`MATCHED`.
+
+### 3. `0x1C58`: pares provados, avisos removidos
+
+O mesmo CFG provou o par HI da word 6 / LO da word 9, antes apenas order-only. O
+resultado real permanece `INCONCLUSIVE` 28/44, com 8 pares de dados, 3
+chamadas diretas resolvidas e **0 avisos de pareamento** (antes: 2). As 8
+limitações de identidade de dados continuam, e nenhuma foi promovida. O caso
+ativo em `tests/integration/test_libtutoriallist_callbacks_real.py` passou de
+`(44, 28, 8, 3, 2)` para `(44, 28, 8, 3, 0)`.
+
+### 4. `0x1F10`: tamanho exato recuperado, alocação da cauda ainda aberta
+
+A expressão do teste de saída do loop interno foi escrita como
+`j > trailing[group]` (equivalente a `trailing[group] < j`). Isso reproduz o
+único merge de `sum + extent` depois do loop, em vez de duplicar a soma no
+delay slot do `break`, e elimina a word extra:
+
+| Antes | Depois |
+|---|---|
+| `NONMATCHING` 70/187, 81 diferenças, 3 relocation issues, 21 limitações, 748 bytes | **`NONMATCHING` 73/186, 76 diferenças, 2 relocation issues, 21 limitações, 744 bytes** |
+
+O candidato agora tem exatamente as 186 words / 744 bytes originais. A
+primeira diferença continua na word 96: o original usa `andi t2,...` e o
+candidato `andi t0,...`; o compilador colore `group` em `t0` em vez de `t2`,
+o que gira os registradores da cauda e mantém 76 diferenças. Cerca de 30
+formas de fonte foram testadas com o compilador real (ordem da soma, acesso
+direto ao bitfield, acessor explícito, `else-first`, ponteiros locais,
+`while`, tipos de `j`/`group`, ordem de declaração, escopos aninhados,
+`register`, blocos com inicializadores). Nenhuma fechou a word 96; a melhor
+alternativa continuou em 73/186. Não foi inserido código morto, padding,
+`volatile` ou assembly para forçar a alocação.
+
+As 21 limitações são de identidade HI16/LO16 ou de pareamento order-only; as
+duas relocation issues restantes (`word 106` e `word 109`) são consequência
+direta da rotação de registradores, não de uma associação de dados inventada.
+
+### 5. `0x21F8`: o loop da janela passa a coincidir
+
+O quinto ramo (`input[3] & 0x40`) foi reescrito para cachear
+`leading[group]` antes do loop e usar o accessor compartilhado dentro dele:
+
+```c
+lead = func_00006190_panel.leading[group];
+for (j = 0; j < 8; j++) {
+    entry = libtutoriallist_panel_key(group, lead + j);
+    if (func_00006190_panel.trailing[group] < j)
+        break;
+    sum += func_00006190_panel.extents[entry];
+}
+```
+
+Isso é semanticamente idêntico: o loop não contém chamadas nem escritas no
+painel, e `leading[group]` não muda durante a execução. O original também
+carrega `leading` uma vez antes do loop (`v1` em 0x248c). A sequência de
+instruções do loop agora coincide com a original, exceto pelo `sum + extent`
+duplicado no delay slot do `break`:
+
+| Antes | Depois |
+|---|---|
+| `NONMATCHING` 119/241, 78 diferenças, 11 relocation issues, 21 limitações, 964 bytes | **`NONMATCHING` 127/240, 66 diferenças, 9 relocation issues, 23 limitações, 960 bytes** |
+
+O candidato ainda tem **2 words extras** (240 versus 238): (1) o accessor
+`libtutoriallist_panel_key` recebe `unsigned char group`, o que gera um `andi
+0xff` redundante antes da indexação; (2) o compilador agenda `sum + extent` no
+delay slot do `break` e o repete depois do loop, em vez de carregar o extent no
+delay slot e compartilhar um único `sum + extent` na saída, como no original.
+As primeiras diferenças (words 32, 70, 103, 119, 138, 143, 149, 151) são
+deslocamentos de branch induzidos por essas 2 words; a primeira divergência
+**substancial** é a word 157 (`lui`/`andi` no agendamento do quinto ramo).
+Formas alternativas (índice sem accessor, accessor com `int group`, `while`,
+`goto`, soma pós-loop em `sum`/`extent`, ordem da soma e do break) foram
+compiladas; nenhuma removeu a duplicação sem perder a alocação do loop.
+
+### 6. Alvos grandes restantes
+
+| Função | Original / candidato | Resultado | Primeira diferença |
+|---|---:|---|---:|
+| `0x2F4` | 253 / 253 | `NONMATCHING` 134/253, 99 diferenças, 20 relocation issues, 4 limitações | word 81 |
+| `0x8F0` | 333 / 342 | `NONMATCHING` 52/342, 284 diferenças, 68 relocation issues, 1 limitação | word 15 |
+| `0x1764` | 182 / 182 | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues | word 10 |
+
+Em `0x2F4`, somente a consulta da linha visível passou ao accessor compartilhado:
+**93/253 → 134/253**, **137 → 99 diferenças**, **35 → 20 relocation issues**,
+996 → 1 012 bytes. Duas compilações independentes produziram o mesmo objeto.
+As conversões/reloads do accessor corrigem o tamanho e os deslocamentos iniciais,
+mas isso não prova igualdade do CFG. As cópias originais em `0x4B0`, `0x560` e
+`0x634` são inalcançáveis pelo CFG intraprocedural: ambos os predecessores saltam
+suas instruções. Elas continuam ausentes; nenhum código morto foi inserido.
+Accessors alternativos e os dois pares de acumuladores/cursores não melhoraram
+o candidato. A primeira divergência agora é a word 81, não as words 32/34.
+
+Em `0x8F0`, antecipar `top = y + 15` para antes da configuração coloca a soma
+no delay slot original: **50/342 → 52/342**, 286 → 284 diferenças e 70 → 68
+relocation issues, com objeto determinístico em duas compilações. O spill de
+`height` na word 15 permanece. A análise distinguiu os temporários que o
+candidato mantém vivos (`x+6`, `atlas+11`, `width-20`, `height-27`) das somas
+recomputadas no original. Reuso entre fases, escopos, indução por índice,
+inicialização do contador e expressões encadeadas não recuperaram `height=s2`.
+Reusar `height` como contador removeu seu spill, mas mudou-o para `s3` e
+introduziu outros spills; essa variante não foi adotada.
+
+Nenhuma dessas funções foi promovida nem teve a semântica alterada nesta
+rodada. `0x1764` permanece congelada após mais de 120 variantes refutadas em
+025; só deve ser revisitada com uma hipótese estrutural nova.
+
+### 7. Métricas globais
+
+A reclassificação de `0x2C8` move 11 words de `NONMATCHING` para
+`INCONCLUSIVE` sem alterar o total reconstruído:
+
+| Métrica | 025 | 026 |
+|---|---:|---:|
+| Funções com C reconstruído | 40 / 2 917 words | **40 / 2 917 words** |
+| `MATCHED` estrito | 16 / 912 words | **16 / 912 words** |
+| `INCONCLUSIVE` com zero diferenças | 18 / 802 words | **19 / 813 words** |
+| `NONMATCHING` | 6 / 1 203 words | **5 / 1 192 words** |
+| Funções sem diferença de instrução | 34 | **35** |
+| Words reconstruídas não certificadas | 2 005 | **2 005** |
+| Objetos de dados identificados separadamente | 0 | **0** |
+| Fragmentos sem C | 2 / 4 words | **2 / 4 words** |
+
+A soma continua exata: **912 certificadas + 813 zero-diferença não
+certificadas + 1 192 nonmatching + 4 não reconstruídas = 2 921 words
+identificadas**. Não houve nova certificação estrita; a contagem permanece
+**16 MATCHED / 912 words**. O ganho de `0x2C8` é de classificação correta e de
+comparador, não de certificação.
+
+A melhoria de `0x21F8` é interna a uma função que permanece `NONMATCHING`: ela
+não altera as contagens globais de status nem o total de words (a função
+continua contribuindo com 238 words originais), mas reduz as diferenças
+daquela função de 78 para 66 e aumenta as words coincidentes de 119 para 127.
+O quadro de status/words acima permanece o mesmo; o progresso é medido dentro
+da função, não por uma promoção artificial.
+
+### 8. Hashes de fonte e objeto
+
+| Intervalo | Fonte | Fonte SHA-256 | Objeto SHA-256 |
+|---|---|---|---|
+| `0x2C8–0x2F4` | `func_000002C8.c` | `f344cdfcb576fa4df6b6f701ef2740ed09d04063139bdb834b7166eaddc8237e` | `91ec22544572f806cc699186edb15a6bd2088184559f9115c5314c49997d7061` |
+| `0x1C58–0x1D08` | `func_00001C58.c` | `e99748be52320e19591f93ae0d50dea33159967b870b9e3f44556c1b19ea5e13` | `807134dfd1ee244300d69df3be325b1aa64127c9a432f8418d14fa04689124d7` |
+| `0x1F10–0x21F8` | `func_00001F10.c` | `0ff65a4f12d2e84e99a163b6abf10dc760abe022ad9662b30761f0948c5cf890` | `3f4f3789ed471bfd69c491106bc982712e11e3b30e39820aa61c70ad33b4f613` |
+| `0x21F8–0x25B0` | `func_000021F8.c` | `b59a92d80c06de4e656449e7fec59ca30e555c93958a5bb7352e77eb42479300` | `9eb6aee66d6ed6c1dcabb0a7cf6576bfc78a76993ddc79f0eae3f37f003e6aca` |
+| `0x2F4–0x6E8` | `func_000002F4.c` | `a80470ddc1f0653e6a3c3555be5d01670b6ebbd3d710e5e221eecd1319c9da42` | `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c` |
+| `0x8F0–0xE24` | `func_000008F0.c` | `53d38ec10f50b75c1afa396689b942dd2ed64eac06ff80649e191a8adf53dd0c` | `591face818cb8f1958f17c43821228029887908f3d317ce41df6e176c40f91dc` |
+
+O objeto de `0x2C8` é o mesmo medido em 025; o hash de fonte registrado
+na tabela de 025 para essa função (`288f2124...`) não corresponde ao arquivo
+atual (`f344cdfc...`), mas o objeto reproduzido permanece `91ec2254...`.
+O registro anterior de hash de fonte está desatualizado, não o objeto. O
+objeto de `0x1C58` também é o mesmo de 025. `0x1F10` mudou de 748 para 744
+bytes; as duas compilações independentes do teste 025 produziram o mesmo
+`3f4f3789...`. `0x21F8` mudou de 964 para 960 bytes; as duas compilações
+independentes do teste 025 produziram o mesmo `9eb6aee6...`.
+
+### 9. Validação executada
+
+| Gate | Ambiente | Resultado |
+|---|---|---|
+| `pytest -q -rs` (suíte completa) | Windows, `PYTHONPATH=src` | **773 passed, 42 skipped** |
+| `pytest -q -rs` com opt-ins de tutorial ativos | WSL2 | **800 passed, 15 skipped** (735,91 s) |
+| `pytest -m integration -q -rs` com opt-ins de tutorial ativos | WSL2 | **49 passed, 9 skipped, 753 deselected** (448,97 s) |
+| Opt-ins reais 018–025 + callbacks | WSL2 | **9 casos aprovados**, incluídos na suíte acima |
+| Runtime real mwccpsp / `libhtml_view` | WSL2 | **16 casos aprovados**, incluídos na suíte acima |
+| `compileall -q src scripts tests` | Windows e WSL2 | clean |
+| `git diff --check` | Windows | clean |
+
+Os skips continuam sendo requisitos de plataforma/ferramentas ausentes ou
+opt-ins inativos, incluindo três casos YAML sem PyYAML no WSL2; nenhum skip
+foi convertido em aprovação. Os 9 opt-ins reais
+incluem `0x2C8` (`INCONCLUSIVE` 7/11, 0 diferenças), `0x1F10` (73/186, 744
+bytes), `0x21F8` (127/240, 960 bytes), `0x2F4` (134/253, 1 012 bytes) e `0x8F0`
+(52/342, 1 368 bytes), todos compilados duas vezes com objetos determinísticos.
+Os oito checks hospedados do commit de implementação `15eb59f` também passaram
+(Ubuntu/Windows, Python 3.11/3.12, eventos push e pull request).
+
+### 10. Bloqueios restantes e ordem de ataque
+
+1. **`0x1F10` (word 96):** a alocação de `group` em `t0` versus `t2` continua
+   sendo o bloqueio principal. A cauda já tem o tamanho exato e o merge de
+   saída correto; falta uma forma de fonte que mude a coloração sem código
+   artificial.
+2. **`0x21F8` (127/240):** o loop do quinto ramo já coincide com o original;
+   restam duas words extras — o `andi 0xff` do accessor (`unsigned char
+   group`) e o `sum + extent` duplicado no delay slot do `break`. A primeira
+   divergência substancial é a word 157; os deslocamentos de branch anteriores
+   são consequência das 2 words.
+3. **`0x2F4` (134/253):** tamanho exato, mas o CFG ainda difere. Primeira
+   divergência na word 81; faltam as cópias do scheduler em 0x4B0/0x560/0x634,
+   enquanto o accessor emite conversões/reloads diferentes. Não inserir padding.
+4. **`0x8F0` (52/342):** spill de `height` e nove words extras; o grafo de
+   interferência global precisa de uma representação de fonte que preserve o
+   `s2` original.
+5. **`0x1764` (42/182):** congelada; só revisitar com uma hipótese nova de
+   alocação global.
+6. **Identidade de dados:** 0x6190, 0x6238, 0x6248, 0x6250, 0x6204,
+   `.data+0x34`, `.data+0x80` e os pares de `libhtml_view` continuam sem
+   identidade cross-artifact. Nenhum objeto de dados foi promovido.
+7. **Fragmentos e containers:** `0x0`/`0x84` continuam sem evidência
+   independente de entrypoint; `EBOOT.BIN` (`~PSP`) e `libadler.prx` (`~SCE`)
+   continuam bloqueados por formato de container.
+
+Nenhuma dessas funções foi descrita como concluída. O resultado principal da
+026 é a correção principiada do pareamento HI16/LO16, a reclassificação
+honesta de `0x2C8`, a remoção dos avisos de `0x1C58`, a recuperação do loop de
+`0x21F8`, o tamanho exato de `0x1F10`, as melhorias parciais de `0x2F4`/`0x8F0`
+e os controles adicionais de strictness do CFG. A PR #25 permanece aberta,
+sem merge; os hashes do HEAD e dos commits estão publicados na própria PR.
+
+## SETO-DECOMP-026-R2 — Maximum Recovery Campaign
+
+Início: `f68c86e23d76b59c576930c4db32da4aa54fa623`, mesma branch e PR #25.
+O PRX original foi revalidado com SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+
+### Correção obrigatória de ambiguidade do CFG
+
+Um CFG já analisado não volta ao scan linear quando encontra múltiplas
+definições HI16, HI16 misturado com definição comum, valor de entrada ou
+clobber de chamada. Esses casos retornam `uncertain`; `definite-none` exige
+que **todas** as definições alcançantes sejam comuns, e `match` exige um único
+HI16. Construções não suportadas ainda podem recorrer ao scan anterior;
+evidência independente de símbolo ELF continua prevalecendo.
+
+RED: quatro novos casos reproduziram a promoção indevida ou a falsa exclusão
+de um HI16. GREEN: **83 testes de matching aprovados**, incluindo controles
+de múltiplas definições comuns e símbolo ELF. Destinos de dados diferentes
+não viram uma divergência definitiva por meio de um par ambíguo.
+
+Os testes reais 025 e callbacks passaram (**2 passed**, 108,09 s), preservando
+`0x2C8` em `INCONCLUSIVE` 7/11, zero diferenças/issues, e `0x1C58` em
+`INCONCLUSIVE` 28/44, zero avisos de pareamento. Os cinco alvos `NONMATCHING`
+mantiveram os resultados de partida. Nenhuma certificação foi acrescentada.
+
+### `0x21F8`: duas words extras eliminadas
+
+O `group` local passou a `unsigned char`, compatível com o nibble carregado.
+O loop agora carrega o extent em `next` antes de `j > trailing[group]`, como
+o `lhu` original no delay slot do break. Juntas, as mudanças removem o mask
+do accessor e a soma de saída duplicada, sem alterar imports ou side effects.
+
+| Antes R2 | Depois | Diferença restante |
+|---|---|---|
+| 127/240, 960 bytes, 66 diferenças, 9 relocation issues, 23 limitações | **187/238, 952 bytes, 3 diferenças, 0 relocation issues, 26 limitações** | words 165/166: ordem dos loads; word 168: ordem dos operandos da soma |
+
+A etapa intermediária 159/238 passou no teste real 025 (73,68 s). Inicializar
+`position` com `trailing`, cachear `leading` e somá-lo a `position` recuperou
+depois o mapa original de registradores e todos os pares HI16/LO16: **187/238**.
+Duas compilações integrais independentes (ensaio e fonte final) produziram o
+mesmo objeto. Só diferem `lhu` em 0x248C/0x2490 e a ordem dos operandos do
+`addu` em 0x2498. Continua `NONMATCHING`; não houve certificação artificial.
+Fonte SHA-256: `7e2fb7ef84a076ce3e46c3fb710ab1021347ca0e88a3e25b913833fdfa876343`.
+Objeto SHA-256: `14d25c2ec2caf36ccd6de7cfa12d714f24434a377027e71625d99a4576bde0dc`.
+
+### `0x1F10`: contrato estreito/amplo do `group` recuperado
+
+O original guarda o nibble `group` como valor amplo (`andi t2,a1,0xf`) e o
+converte para byte somente na leitura de `count[]` (`andi v1,t2,0xff` em
+0x20C8); o acesso a `leading`/`trailing`/`entries` usa o valor amplo. A fonte
+passou a usar `int group` com dois helpers locais, um para `count[]` (parâmetro
+`unsigned char`) e outro para a linha (parâmetro `int`), preservando exatamente
+esse contrato. O valor de `leading` é carregado uma vez por iteração externa e
+usado no loop interno, como o registrador original em a3.
+
+| Antes R2 | Depois | Diferença restante |
+|---|---|---|
+| 73/186, 744 bytes, 76 diferenças, 2 relocation issues, 21 limitações | **89/186, 744 bytes, 60 diferenças, 1 relocation issue, 22 limitações** | word 96: permutação de registradores (grupo t4/t2, posição t2/t4 e rotação dependente) |
+
+A cauda é isomórfica ao original instrução a instrução; não há diferença de
+tamanho, CFG, imports ou operandos de memória. Foram testadas mais de 40 variantes
+equivalentes de ordem de expressão, ordem de declaração, locais de valor,
+`count`/`index` explícitos, ponteiros persistentes e invertidos, sem remover a
+permutação. Duas compilações integrais independentes produziram o mesmo objeto.
+Continua `NONMATCHING`; nenhuma identidade de dados foi promovida.
+Fonte SHA-256: `ea6b98ab326eb0464775cd62081664d9a6dc4976aae75ae1784d0644742c612b`.
+Objeto SHA-256: `0bbd97b264dad8b7bf9ae6cfa619791a765a2148c9f59fccb786616229fbb086`.
+
+### Resultados consolidados da R2
+
+HEAD inicial `f68c86e23d76b59c576930c4db32da4aa54fa623`; HEAD de código
+`b977cc0054ef6c208ea435817fde467fb2451744`, mais o commit de documentação.
+Nenhuma certificação estrita mudou: continuam **16 `MATCHED` / 912 words**,
+**19 `INCONCLUSIVE` / 813**, **5 `NONMATCHING` / 1.192** e dois fragmentos / 4
+words; **35 funções com zero diferenças**. As melhorias são estritamente dentro
+de `NONMATCHING`.
+
+| Função | Antes R2 | Depois R2 | Primeira diferença restante |
+|---|---|---|---|
+| `0x2C8` | `INCONCLUSIVE` 7/11 | **`INCONCLUSIVE` 7/11, 0 diferenças** | duas identidades de dados |
+| `0x1C58` | `INCONCLUSIVE` 28/44 | **`INCONCLUSIVE` 28/44, 0 avisos** | oito pares de dados |
+| `0x1F10` | 73/186, 76 dif., 2 reloc., 744 B | **89/186, 60 dif., 1 reloc., 744 B** | word 96: permutação de registradores |
+| `0x21F8` | 127/240, 66 dif., 9 reloc., 960 B | **187/238, 3 dif., 0 reloc., 952 B** | words 165/166 e 168 |
+| `0x2F4` | 134/253, 99 dif., 20 reloc., 1.012 B | **134/253, 99 dif., 20 reloc., 1.012 B** | word 81; cópias inalcançáveis do scheduler |
+| `0x8F0` | 52/342, 284 dif., 68 reloc. | **52/342, 284 dif., 68 reloc.** | word 15: spill de `height` |
+
+Objetos reproduzidos (SHA-256): `0x2C8`
+`91ec22544572f806cc699186edb15a6bd2088184559f9115c5314c49997d7061`;
+`0x1C58` `807134dfd1ee244300d69df3be325b1aa64127c9a432f8418d14fa04689124d7`;
+`0x1F10` `0bbd97b264dad8b7bf9ae6cfa619791a765a2148c9f59fccb786616229fbb086`;
+`0x21F8` `14d25c2ec2caf36ccd6de7cfa12d714f24434a377027e71625d99a4576bde0dc`;
+`0x2F4` `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c`;
+`0x8F0` `591face818cb8f1958f17c43821228029887908f3d317ce41df6e176c40f91dc`.
+Cada objeto aceito foi produzido por duas compilações oficiais independentes.
+
+Validação executada: Windows **779 passed, 42 skipped**; WSL com opt-ins reais
+**806 passed, 15 skipped**; integração WSL **49 passed, 9 skipped, 763
+deselected**; matching **83 passed**; `compileall` limpo em Windows e WSL2;
+`git diff --check` limpo. Nenhum skip foi convertido em aprovação e nenhuma
+regra do matcher foi enfraquecida. Os CHECKs hospedados da rodada anterior
+permanecem verdes; os novos commits foram enviados para a mesma PR #25, que
+segue aberta e não deve ser mesclada automaticamente.
+
+Bloqueios restantes: identidades de dados de `0x2C8`/`0x1C58` e dos pares de
+`libhtml_view`; permutação de registradores em `0x1F10`; três instruções de
+ordem em `0x21F8`; cópias inalcançáveis de `0x2F4` (não inserir dead code);
+pressão de registradores de `0x8F0`; `0x1764` congelada; fragmentos sem
+entrypoint; containers `~PSP`/`~SCE`.

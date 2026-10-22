@@ -1,13 +1,12 @@
 """Opt-in WSL2/Metrowerks evidence for SETO-DECOMP-025.
 
 The six CLI cases use ``scripts/match_function.py`` and the public comparator,
-including an explicit ``--size`` for the split 0x1C18/0x1C20 functions.  The four
-large functions have candidates whose complete symbols are not exactly the old
-linear-inventory window (0x2F4 is smaller; 0x8F0, 0x1F10 and 0x21F8 are larger),
-so they are compiled through the same official compiler/flag path and compared
-with the production ``seto.matching.compare`` API over the complete candidate
-symbol and the explicit original interval.  No matcher rule is changed and an
-ERROR/BLOCKED outcome is never accepted as a comparison.
+including an explicit ``--size`` for the split 0x1C18/0x1C20 functions. Four
+large functions use the production ``seto.matching.compare`` API over complete
+candidate symbols and explicit original intervals, preserving size mismatches
+where present. 0x2F4, 0x1F10 and 0x21F8 now have exact sizes; 0x8F0 remains
+larger. Compilation uses the same official compiler/flag path; ERROR/BLOCKED
+is never accepted as a comparison.
 """
 
 from __future__ import annotations
@@ -53,8 +52,8 @@ CLI_CASES = {
         "relocations": 0, "limitations": 3, "symbol_size": 72,
     }),
     0x2C8: (11, None, {
-        "status": "NONMATCHING", "matching": 7, "differences": 1,
-        "relocations": 1, "limitations": 4, "symbol_size": 44,
+        "status": "INCONCLUSIVE", "matching": 7, "differences": 0,
+        "relocations": 0, "limitations": 2, "symbol_size": 44,
     }),
     0x1C18: (2, 8, {
         "status": "MATCHED", "matching": 2, "differences": 0,
@@ -69,24 +68,25 @@ CLI_CASES = {
 # address: (original words, expected result) for complete-symbol comparisons.
 WHOLE_CASES = {
     0x2F4: (253, {
-        "status": "NONMATCHING", "matching": 93, "total": 253,
-        "differences": 137, "relocations": 35, "limitations": 2,
-        "symbol_size": 996, "first_word": 32,
+        "status": "NONMATCHING", "matching": 134, "total": 253,
+        "differences": 99, "relocations": 20, "limitations": 4,
+        "symbol_size": 1012, "first_word": 81,
+        "first_reason": "relocated word differs outside the relocation field",
     }),
     0x8F0: (333, {
-        "status": "NONMATCHING", "matching": 50, "total": 342,
-        "differences": 286, "relocations": 70, "limitations": 1,
+        "status": "NONMATCHING", "matching": 52, "total": 342,
+        "differences": 284, "relocations": 68, "limitations": 1,
         "symbol_size": 1368, "first_word": 15,
     }),
     0x1F10: (186, {
-        "status": "NONMATCHING", "matching": 70, "total": 187,
-        "differences": 81, "relocations": 3, "limitations": 21,
-        "symbol_size": 748, "first_word": 96,
+        "status": "NONMATCHING", "matching": 89, "total": 186,
+        "differences": 60, "relocations": 1, "limitations": 22,
+        "symbol_size": 744, "first_word": 96,
     }),
     0x21F8: (238, {
-        "status": "NONMATCHING", "matching": 119, "total": 241,
-        "differences": 78, "relocations": 11, "limitations": 21,
-        "symbol_size": 964, "first_word": 32,
+        "status": "NONMATCHING", "matching": 187, "total": 238,
+        "differences": 3, "relocations": 0, "limitations": 26,
+        "symbol_size": 952, "first_word": 165,
     }),
 }
 
@@ -310,28 +310,12 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             assert first["equivalence"] == ""
             assert first["verified_decompilation"] is False
         if address == 0x2C8:
-            assert first["differences"] == [
-                {
-                    "address": 0x2DC,
-                    "candidate": "0x3c020000",
-                    "original": "0x3c020000",
-                    "reason": (
-                        "HI16/LO16 association differs "
-                        "(original: unresolved HI16; candidate: LO16 at word 8)"
-                    ),
-                    "word_index": 5,
-                }
-            ]
-            assert first["relocation_issues"] == [
-                "word 5 (0x2dc): HI16/LO16 association differs "
-                "(original: unresolved HI16; candidate: LO16 at word 8)"
-            ]
+            assert first["differences"] == []
+            assert first["relocation_issues"] == []
             assert first["limitations"] == [
-                "word 8: no relocated HI16 reaches the LO16 source register "
-                "(word 7 redefines the LO16 base register)",
-                "word 8: LO16 relocation has no associated HI16",
-                "word 5: HI16 relocation has no LO16 to resolve it",
                 "word 0: HI16/LO16 data identity cannot be proven "
+                "(original: unresolved; candidate: unresolved)",
+                "word 5: HI16/LO16 data identity cannot be proven "
                 "(original: unresolved; candidate: unresolved)",
             ]
         cli_results.append(first)
@@ -368,7 +352,7 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
         assert first["candidate_size"] == expected["symbol_size"]
         assert first["differences"][0]["word_index"] == expected["first_word"]
         if first["difference_count"]:
-            assert first["differences"][0]["reason"] == "word differs"
+            assert first["differences"][0]["reason"] == expected.get("first_reason", "word differs")
         whole_results.append(first)
 
     results = {
