@@ -1,15 +1,12 @@
 /* [0x21F8,0x25B0), input/window update. The imported context is dereferenced
  * without null guards in the original. Table/group bounds are caller obligations.
  *
- * RESULT: NONMATCHING 127/240 compared words (238 original + 2 extra), 66
- * differences, 9 relocation issues, 23 limitations; 960-byte candidate versus
- * 952-byte original. Caching leading[group] and using the shared accessor
- * makes the fifth-branch loop match the original instruction sequence, apart
- * from the duplicated post-loop `sum + extent` in the break delay slot; the
- * accessor's unsigned-char parameter also adds one mask word. Words 0-31 match
- * exactly; word 32 is a size-induced branch displacement, and the first
- * substantive divergence is word 157 (`lui`/`andi` scheduling in the fifth
- * branch).
+ * RESULT: NONMATCHING 159/238, 31 differences, 2 relocation issues, 25
+ * limitations; both symbols are 952 bytes. The byte-sized caller group removes
+ * the accessor conversion. Loading the extent before `j > trailing[group]`
+ * recovers the shared exit sum and original load-in-delay-slot scheduling.
+ * First divergence: word 157, where LUI/ANDI order and the group/leading
+ * register lifetimes still differ. No size-induced branch differences remain.
  */
 #include "libtutoriallist_stubs.h"
 #include "libtutoriallist_panel.h"
@@ -18,7 +15,7 @@ void func_000021F8(void)
 {
     int *input = func_00003A38();
     int pressed = input[1];
-    int group;
+    unsigned char group;
     int position;
     int count;
     int key;
@@ -67,6 +64,7 @@ void func_000021F8(void)
         }
     } else if ((input[3] & 0x40) != 0) {
         int lead;
+        int next;
         group = func_00006190_panel.flags.group;
         position = func_00006190_panel.leading[group] + func_00006190_panel.trailing[group];
         count = func_00006190_panel.count[group];
@@ -80,9 +78,10 @@ void func_000021F8(void)
             lead = func_00006190_panel.leading[group];
             for (j = 0; j < 8; j++) {
                 entry = libtutoriallist_panel_key(group, lead + j);
-                if (func_00006190_panel.trailing[group] < j)
+                next = func_00006190_panel.extents[entry];
+                if (j > func_00006190_panel.trailing[group])
                     break;
-                sum += func_00006190_panel.extents[entry];
+                sum += next;
             }
             if (sum + extent > 8)
                 func_00006190_panel.leading[group]++;
