@@ -166,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--function", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--section", default=".text")
+    parser.add_argument(
+        "--size",
+        type=lambda value: int(value, 0),
+        default=None,
+        help="explicit original interval size in bytes (for split/recovered ranges)",
+    )
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--compiler", type=Path, default=None, help="override the compiler path")
     parser.add_argument("--loader", action="append", default=[], help="e.g. --loader wibo")
@@ -292,6 +298,7 @@ def build_match_argv(
     symbol: str | None,
     config: Path | None,
     data_map: Path | None = None,
+    size: int | None = None,
 ) -> list[str]:
     """Build the ``python -m seto match ... --json`` command line.
 
@@ -313,6 +320,8 @@ def build_match_argv(
         "--candidate",
         str(candidate),
     ]
+    if size is not None:
+        argv += ["--size", str(size)]
     if symbol:
         argv += ["--candidate-symbol", symbol]
     if data_map is not None:
@@ -353,6 +362,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     if not arguments.prx.is_file():
         print(f"error: module not found: {arguments.prx}", file=sys.stderr)
+        return EXIT_ERROR
+    if arguments.size is not None and (arguments.size <= 0 or arguments.size % 4):
+        print("error: --size must be a positive multiple of 4 bytes", file=sys.stderr)
         return EXIT_ERROR
 
     symbol = None if arguments.no_symbol else (arguments.symbol or function_name(arguments.function))
@@ -400,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         symbol=symbol,
         config=arguments.config,
         data_map=arguments.data_map,
+        size=arguments.size,
     )
 
     print("comparing:", file=sys.stderr)

@@ -140,6 +140,21 @@ def test_config_is_omitted_when_not_given(script, tmp_path) -> None:
     assert "--data-map" not in argv
 
 
+def test_an_explicit_function_size_is_forwarded(script, tmp_path) -> None:
+    argv = script.build_match_argv(
+        python="python",
+        prx=tmp_path / "m.prx",
+        section=".text",
+        function=0x1C18,
+        candidate=tmp_path / "m.o",
+        symbol="func_00001C18",
+        config=None,
+        size=8,
+    )
+    assert argv[argv.index("--size") + 1] == "8"
+    assert argv[-1] == "--json"
+
+
 def test_a_data_map_is_forwarded_to_seto_match(script, tmp_path) -> None:
     data_map = tmp_path / "data-map.json"
     argv = script.build_match_argv(
