@@ -5573,3 +5573,89 @@ Bloqueios restantes: identidades de dados de `0x2C8`/`0x1C58` e dos pares de
 ordem em `0x21F8`; cópias inalcançáveis de `0x2F4` (não inserir dead code);
 pressão de registradores de `0x8F0`; `0x1764` congelada; fragmentos sem
 entrypoint; containers `~PSP`/`~SCE`.
+
+---
+
+## SETO-DECOMP-027 — Final Codegen Recovery
+
+Base: `05b71ef8ca8cda4027af888cf02a876496cfc312` (main após a 026), branch
+`feat/seto-decomp-027-codegen`. PRX original revalidado com SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+
+| Function | Before | After | Codegen discovery | Remaining blocker |
+|---|---|---|---|---|
+| `0x21F8` | `NONMATCHING` 187/238, 3 dif., 0 reloc., 26 lim., 952 B | **`INCONCLUSIVE` 190/238, 0 dif., 0 reloc., 26 lim., 952 B** | A expressão única `position = leading[group] + trailing[group];` seguida de `lead = leading[group];` restaura a carga de `leading` antes de `trailing` e o `addu` `leading+trailing`; a forma dividida `position = trailing[...]; lead = leading[...]; position += lead;` carrega `trailing` primeiro e soma `trailing+leading`. | 26 limitações de identidade HI16/LO16; permanece `INCONCLUSIVE`, sem certificação `MATCHED`. |
+| `0x1F10` | `NONMATCHING` 89/186, 60 dif., 1 reloc., 22 lim., 744 B | 89/186 inalterado (nenhuma variante aceita) | Refutadas hoje: expressão `trailing[group] + leading[group]` com `lead` atribuído e `lead` antes de `position` com soma explícita (`lead + position`) produzem 80/187 e 748 B (rotação extra do loop); a cópia coalescível do byte de flags (`selected_group_copy`) coloca `group` em t2 nas words 96–98, mas colapsa as bases em a0/v1 nas words 99–100 (73/186). Variantes R2 que referenciavam `lead` sem atribuí-lo eram C inválido e não contam. | Permutação global de alocação a partir da word 96: `group` t4 vs t2, `position` t2 vs t4 e rotação dependente; a cauda é isomórfica, sem diferença de tamanho, CFG ou memória. |
+| `0x2F4` | `NONMATCHING` 134/253, 99 dif., 20 reloc., 4 lim., 1.012 B | inalterado | A word 81 é o registrador da base do painel (candidato `lui v1`, original `lui a0`), seguida da reordenação do scheduler em torno do call `0x8F0`; depois vêm as cópias inalcançáveis do scheduler em `0x4B0`/`0x560`/`0x634`. | Não inserir dead code para reproduzir cópias inalcançáveis; base do painel e ordem de zeroing/count do primeiro bloco. |
+| `0x8F0` | `NONMATCHING` 52/342, 284 dif., 68 reloc., 1 lim., 1.368 B vs 1.332 B | inalterado | O candidato retém `x+6`, `atlas+11`, `width-20` e `height-27` entre chamadas (um callee-saved a mais), forçando o spill de `height` em `0x4C(sp)`; o original recalcula essas expressões nos pontos de uso. | Spill de `height` na word 15 e as 9 words extras; sem nova explicação de dependência para reduzir a pressão. |
+| `0x1764` | `NONMATCHING` 42/182, 140 dif., 32 reloc., 728 B | inalterado | Confirmada hoje a permutação de prólogo já a partir da word 10. | Congelada; mais de 120 variantes já refutadas nas rodadas anteriores. |
+
+### `0x21F8` — zero diferenças de instrução
+
+O conserto decisivo veio da descoberta da 027: o original trata a soma como
+**uma única expressão** com `leading` à esquerda, não como duas etapas com
+`+=`. A forma dividida anterior (`position = trailing[...]; lead =
+leading[...]; position += lead;`) era estruturalmente errada: ela fixa a carga
+de `trailing` primeiro e força `addu` com `trailing+leading`. Com a expressão
+única mais o cache `lead = leading[group];`, a word 103 vira
+`addu t4, a3, v1` (`leading+trailing`) e as words 165/166 passam a carregar
+`leading` antes de `trailing`, exatamente como o original.
+
+A função permanece `INCONCLUSIVE` (não `MATCHED`) porque 26 pares HI16/LO16
+continuam sem identidade de dados comprovável; nenhuma regra do matcher foi
+enfraquecida e nenhuma identidade foi inventada.
+
+Evidência de duas compilações oficiais independentes (`wibo` +
+`mwccpsp_3.0.1_219`, `-O4,p -sdatathreshold 0`): objeto SHA-256
+`599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7` idêntico nas
+duas. Fonte (`decomp/src/libtutoriallist/func_000021F8.c`) SHA-256
+`de5cd15f0742ea30683b0fd84cfb98e9ace27c34e08cc4ac19906299080966b9`; teste
+025 (`tests/integration/test_libtutoriallist_025_real.py`) SHA-256
+`cf62fbc3268b38da45a27809945e6a613458903f19955727c7db37e9127f8991`; commit
+`7ce38901f16583774b39f0e6f92badf9ffa65630`.
+
+### `0x1F10` — variantes novas refutadas
+
+Além das mais de 40 variantes da R2, a 027 testou as formas que faltavam com
+`lead` realmente atribuído: `position = trailing[group] + leading[group]` e
+`lead = leading[group]; position = trailing[group]; position = lead +
+position;`. Ambas produzem 80/187, 748 B e giram o loop (o `bne` vira `bnel`
+com a primeira instrução do corpo no delay slot), ficando piores que o split
+atual. A cópia coalescível do flags em `selected_group_copy` mostra que o
+alocador *pode* escolher t2 para `group` (words 96–98 idênticas), mas então
+reutiliza as bases a0/v1 em vez de t0/t1 nas words 99–100. Ou seja, a escolha
+t2/t4 é consequência da prioridade global do alocador, não de ordem textual de
+expressão ou declaração. Nenhuma fonte foi promovida.
+
+### `0x2F4` e `0x8F0` — bloqueios confirmados
+
+Em `0x2F4` a primeira divergência de hoje continua na word 81 (base do painel
+em `v1` em vez de `a0`) e o restante da diferença é dominado pela rotação de
+endereços das cópias inalcançáveis do scheduler; em `0x8F0` a word 15 mostra o
+spill de `height` porque o candidato mantém um valor derivado a mais vivo entre
+chamadas. Ambos permanecem sem fonte aceita; nenhum dead code ou padding foi
+introduzido.
+
+### Validação, hashes e cobertura
+
+- Windows: `python -m pytest -q -rs` → **779 passed, 42 skipped**;
+  `compileall` e `git diff --check` limpos.
+- WSL2: suíte de integração com todos os opt-ins reais
+  (019–023, 025, callbacks, real) → **14 passed, 24 skipped**, incluindo
+  `test_libtutoriallist_025_real.py` que recompila duas vezes e agora afirma
+  `INCONCLUSIVE 190/238`, 0 diferenças, 0 relocações, 26 limitações e 952 B
+  para `0x21F8`. A suíte foi executada a partir de uma cópia WSL-nativa do
+  mesmo commit porque o guard anti-symlink rejeita a junção `private/` do
+  worktree; fontes e PRX idênticos ao commit.
+- Cobertura estrita preservada: **16 `MATCHED` / 912 words**; nenhuma
+  certificação nova, nenhuma promovida a `MATCHED` sem evidência independente.
+  `0x21F8` deixa de ser um `NONMATCHING` com 3 diferenças e passa a
+  zero diferenças (`INCONCLUSIVE` por identidade), elevando de 35 para **36**
+  as funções com zero diferenças; os cinco `NONMATCHING` da R2 caem para
+  quatro, todos listados acima.
+- Bloqueios restantes, por retorno provável: (1) prioridade global do alocador
+  em `0x1F10` (t2/t4); (2) pressão de callee-saved em `0x8F0`
+  (`x+6`/`atlas+11`/`width-20`/`height-27`); (3) cópias inalcançáveis do
+  scheduler e base do painel em `0x2F4`; (4) `0x1764` congelada; (5) pares de
+  identidade `0x2C8`/`0x1C58`, fragmentos sem entrypoint e containers
+  `~PSP`/`~SCE`.
