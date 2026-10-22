@@ -53,8 +53,8 @@ CLI_CASES = {
         "relocations": 0, "limitations": 3, "symbol_size": 72,
     }),
     0x2C8: (11, None, {
-        "status": "NONMATCHING", "matching": 7, "differences": 1,
-        "relocations": 1, "limitations": 4, "symbol_size": 44,
+        "status": "INCONCLUSIVE", "matching": 7, "differences": 0,
+        "relocations": 0, "limitations": 2, "symbol_size": 44,
     }),
     0x1C18: (2, 8, {
         "status": "MATCHED", "matching": 2, "differences": 0,
@@ -310,28 +310,12 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             assert first["equivalence"] == ""
             assert first["verified_decompilation"] is False
         if address == 0x2C8:
-            assert first["differences"] == [
-                {
-                    "address": 0x2DC,
-                    "candidate": "0x3c020000",
-                    "original": "0x3c020000",
-                    "reason": (
-                        "HI16/LO16 association differs "
-                        "(original: unresolved HI16; candidate: LO16 at word 8)"
-                    ),
-                    "word_index": 5,
-                }
-            ]
-            assert first["relocation_issues"] == [
-                "word 5 (0x2dc): HI16/LO16 association differs "
-                "(original: unresolved HI16; candidate: LO16 at word 8)"
-            ]
+            assert first["differences"] == []
+            assert first["relocation_issues"] == []
             assert first["limitations"] == [
-                "word 8: no relocated HI16 reaches the LO16 source register "
-                "(word 7 redefines the LO16 base register)",
-                "word 8: LO16 relocation has no associated HI16",
-                "word 5: HI16 relocation has no LO16 to resolve it",
                 "word 0: HI16/LO16 data identity cannot be proven "
+                "(original: unresolved; candidate: unresolved)",
+                "word 5: HI16/LO16 data identity cannot be proven "
                 "(original: unresolved; candidate: unresolved)",
             ]
         cli_results.append(first)

@@ -573,14 +573,68 @@ def test_register_flow_observes_unconditional_control_delay_slots(words, low_ind
     assert pairing.evidence[hi_index] == "register-flow"
 
 
-def test_conditional_control_flow_keeps_order_pairing_inconclusive() -> None:
+def test_cfg_proves_a_hi16_across_a_conditional_branch() -> None:
     words = (_lui(4), 0x10800000, 0, _i_type(9, 4, 4, 0x4830))  # beq, delay slot, LO
     relocations = [rel(0, R_MIPS_HI16, addend=0), rel(12, R_MIPS_LO16, addend=0x4830)]
     pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
     assert pairing.hi_to_lo == {0: 3}
-    assert pairing.evidence[0] == "relocation-order"
-    assert any("control flow crosses" in item for item in pairing.limitations)
-    assert any("relocation order" in item for item in pairing.limitations)
+    assert pairing.evidence[0] == "register-flow"
+    assert not any("control flow crosses" in item for item in pairing.limitations)
+    assert not any("relocation order" in item for item in pairing.limitations)
+
+
+def test_cfg_proves_a_hi16_across_mutually_exclusive_delay_slots() -> None:
+    # The 0x2c8 shape: the branch-likely target is the LO16, its delay slot
+    # installs the HI16 base, while the fall-through path redefines the same
+    # register in the delay slot of an unconditional branch that skips the LO.
+    words = (
+        _lui(2),
+        _i_type(0x24, 2, 2, 0x6194),
+        0x000216C0,
+        0x000217C2,
+        0x50400003,  # beql v0,zero,0x2e8
+        _lui(2),
+        0x10000002,  # beq zero,zero,0x2ec
+        _i_type(9, 0, 2, -1),
+        _i_type(0x25, 2, 2, 0x6196),
+        0x03E00008,
+        NOP,
+    )
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=0),
+        rel(4, R_MIPS_LO16, addend=0x6194),
+        rel(20, R_MIPS_HI16, addend=0),
+        rel(32, R_MIPS_LO16, addend=0x6196),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 1, 5: 8}
+    assert pairing.evidence == {0: "register-flow", 5: "register-flow"}
+    assert not pairing.limitations
+
+
+def test_cfg_rejects_a_redefinition_that_falls_through_to_the_lo() -> None:
+    words = (
+        _lui(2),
+        _i_type(0x24, 2, 2, 0x6194),
+        0x000216C0,
+        0x000217C2,
+        0x50400003,
+        _lui(2),
+        NOP,
+        _i_type(9, 0, 2, -1),
+        _i_type(0x25, 2, 2, 0x6196),
+        0x03E00008,
+        NOP,
+    )
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=0),
+        rel(4, R_MIPS_LO16, addend=0x6194),
+        rel(20, R_MIPS_HI16, addend=0),
+        rel(32, R_MIPS_LO16, addend=0x6196),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 1}
+    assert any("redefines the LO16 base register" in item for item in pairing.limitations)
 
 
 def test_register_flow_does_not_attach_one_lo_to_another_registers_hi() -> None:
@@ -989,13 +1043,35 @@ def test_a_target_difference_on_a_register_proven_pair_is_nonmatching() -> None:
     assert "data target differs" in result.differences[0].reason
 
 
-def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
-    # A conditional branch makes the limited register-flow scan ambiguous; the
-    # order fallback must not turn different resolved destinations into a proven
-    # code/data divergence.
+def test_a_target_difference_on_a_cfg_proven_pair_is_nonmatching() -> None:
+    # The CFG proves the LUI reaches the LO16 on both sides of the conditional
+    # branch, so a proven destination difference is a real code/data divergence.
     result = compare(
         _code(0x3C040001, 0x10800000, 0, 0x24840002),
         _code(0x3C040000, 0x10800000, 0, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1),
+            rel(12, R_MIPS_LO16, addend=0x2),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0),
+            rel(12, R_MIPS_LO16, addend=0x3),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
+    assert result.status == NONMATCHING
+    assert "data target differs" in result.differences[0].reason
+
+
+def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
+    # A call before the LO16 cannot be modeled by the local CFG; the order
+    # fallback must not turn different resolved destinations into a proven
+    # code/data divergence.
+    result = compare(
+        _code(0x3C040001, 0x0C000000, 0, 0x24840002),
+        _code(0x3C040000, 0x0C000000, 0, 0x24840003),
         name="f",
         original_relocations=[
             rel(0, R_MIPS_HI16, addend=0x1),

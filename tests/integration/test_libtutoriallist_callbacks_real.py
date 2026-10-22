@@ -18,7 +18,7 @@ EXPECTED_SHA256 = "2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268
 CASES = {
     # words, counted words, data pairs, resolved direct calls, pairing warnings
     0x1B0C: (25, 15, 5, 2, 0),
-    0x1C58: (44, 28, 8, 3, 2),
+    0x1C58: (44, 28, 8, 3, 0),
     0x1E84: (4, 4, 0, 0, 0),
 }
 
