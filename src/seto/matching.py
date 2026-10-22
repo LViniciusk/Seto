@@ -613,11 +613,11 @@ def _cfg_register_flow(
 ) -> tuple[str, int | None, str] | None:
     """Prove a HI16 reaching a LO16 base register across mutually exclusive paths.
 
-    Only positive proofs and unambiguous explicit redefinitions are returned.
     ``None`` means the local CFG could not model the window and the legacy
-    straight-line analyzer must decide the result.  The analysis tracks only
-    the LO16 source register, which keeps the lattice small while preserving
-    branch-delay and branch-likely semantics.
+    straight-line analyzer may supply independent evidence. Once analyzed,
+    ambiguous reaching definitions must return ``uncertain`` rather than be
+    upgraded by that less expressive fallback. Only the LO16 source register
+    is tracked, preserving branch-delay and branch-likely semantics.
     """
     if words is None or not 0 <= low_index < len(words):
         return None
@@ -661,13 +661,11 @@ def _cfg_register_flow(
                 work.append(successor)
                 steps += 1
                 if steps > 10000:
-                    return None
+                    return "uncertain", None, "CFG reaching-definition analysis did not converge"
 
     reaching = states.get(low_index)
     if not reaching:
-        return None
-    if any(kind == "unknown" for kind, _index in reaching):
-        return None
+        return "uncertain", None, "the LO16 is unreachable in the modeled CFG"
     hi_definitions = sorted(index for kind, index in reaching if kind == "hi")
     other_definitions = sorted(index for kind, index in reaching if kind == "other")
     if len(reaching) == 1 and len(hi_definitions) == 1:
@@ -680,7 +678,7 @@ def _cfg_register_flow(
                 "a unique relocated LUI reaches the LO16 base register "
                 "along every modeled CFG path",
             )
-    if other_definitions and not any(kind == "entry" for kind, _index in reaching):
+    if len(other_definitions) == len(reaching):
         if len(reaching) == 1:
             return (
                 "definite-none",
@@ -690,10 +688,10 @@ def _cfg_register_flow(
         return (
             "definite-none",
             None,
-            f"word {other_definitions[0]} redefines the LO16 base register "
-            "on a reachable path",
+            "all modeled paths redefine the LO16 base register "
+            f"(words {', '.join(str(index) for index in other_definitions)})",
         )
-    return None
+    return "uncertain", None, "multiple or unproven CFG reaching definitions"
 
 
 def _register_flow_pair(

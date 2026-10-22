@@ -597,6 +597,71 @@ def test_cfg_keeps_mult_as_a_fallthrough_instruction() -> None:
     assert pairing.evidence[0] == "register-flow"
 
 
+@pytest.mark.parametrize(("words", "highs", "low"), [
+    (
+        (_lui(4), _i_type(5, 5, 0, 2), NOP, _lui(4), _i_type(0x23, 4, 6)),
+        (0, 3), 4,
+    ),
+    (
+        (_lui(4), _i_type(4, 5, 0, 2), NOP, _i_type(9, 0, 4), _i_type(0x23, 4, 6)),
+        (0,), 4,
+    ),
+    (
+        (_i_type(4, 5, 0, 3), NOP, _lui(4), NOP, _i_type(0x23, 4, 6)),
+        (2,), 4,
+    ),
+    (
+        (_lui(4), _i_type(0x23, 4, 6), 0x0C000000, NOP,
+         _i_type(4, 0, 0, -4), NOP, 0x03E00008, NOP),
+        (0,), 1,
+    ),
+], ids=["two-his", "hi-and-other", "hi-and-entry", "hi-and-call-clobber"])
+def test_cfg_ambiguity_cannot_fall_back_to_a_linear_proof(words, highs, low) -> None:
+    relocations = [rel(index * 4, R_MIPS_HI16) for index in highs]
+    relocations.append(rel(low * 4, R_MIPS_LO16))
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {index: low for index in highs}
+    assert pairing.evidence == {index: "relocation-order" for index in highs}
+    assert any("pairing is uncertain" in item for item in pairing.limitations)
+
+    # Even a resolver-proven destination difference must not be turned into a
+    # definite divergence using a pair whose reaching association is ambiguous.
+    code = _code(*words)
+    result = compare(
+        code, code, name="ambiguous",
+        original_relocations=relocations,
+        candidate_relocations=relocations,
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
+    assert result.status == INCONCLUSIVE
+    assert result.difference_count == 0
+
+
+def test_cfg_all_ordinary_definitions_conclusively_exclude_a_hi16() -> None:
+    words = (
+        _lui(4), _i_type(4, 5, 0, 3), _i_type(9, 0, 4, 1),
+        _i_type(9, 0, 4, 2), NOP, _i_type(0x23, 4, 6),
+    )
+    relocations = [rel(0, R_MIPS_HI16), rel(20, R_MIPS_LO16)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {}
+    assert any("no relocated HI16 reaches" in item for item in pairing.limitations)
+
+
+def test_cfg_ambiguity_does_not_discard_independent_elf_symbol_pairing() -> None:
+    words = (_lui(4), _i_type(5, 5, 0, 2), NOP, _lui(4), _i_type(0x23, 4, 6))
+    relocations = [
+        rel(0, R_MIPS_HI16, symbol="table"),
+        rel(12, R_MIPS_HI16, symbol="table"),
+        rel(16, R_MIPS_LO16, symbol="table"),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 4, 3: 4}
+    assert pairing.evidence == {0: "symbol", 3: "symbol"}
+    assert not pairing.limitations
+
+
 @pytest.mark.parametrize("after_lo", [
     (
         _i_type(9, 0, 4, 0),  # redefinition on the loop backedge
@@ -705,7 +770,7 @@ def test_cfg_proves_a_hi16_across_mutually_exclusive_delay_slots() -> None:
     assert not pairing.limitations
 
 
-def test_cfg_rejects_a_redefinition_that_falls_through_to_the_lo() -> None:
+def test_cfg_keeps_mixed_hi16_and_fallthrough_redefinition_uncertain() -> None:
     words = (
         _lui(2),
         _i_type(0x24, 2, 2, 0x6194),
@@ -726,8 +791,9 @@ def test_cfg_rejects_a_redefinition_that_falls_through_to_the_lo() -> None:
         rel(32, R_MIPS_LO16, addend=0x6196),
     ]
     pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
-    assert pairing.hi_to_lo == {0: 1}
-    assert any("redefines the LO16 base register" in item for item in pairing.limitations)
+    assert pairing.hi_to_lo == {0: 1, 5: 8}
+    assert pairing.evidence == {0: "register-flow", 5: "relocation-order"}
+    assert any("multiple or unproven CFG reaching definitions" in item for item in pairing.limitations)
 
 
 def test_register_flow_does_not_attach_one_lo_to_another_registers_hi() -> None:
