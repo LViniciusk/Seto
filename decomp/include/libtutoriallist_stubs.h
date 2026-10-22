@@ -13,7 +13,7 @@ extern void func_000042A0(int arg0, int arg1, int arg2, const short *arg3);
 /* libehsys, NID 0xB89D38DC, stub 0x42A0 */
 
 /* func_000006E8: usage-derived setup/render calls; signatures are provisional. */
-extern void func_00002610(int *arg0, int arg1, int arg2);
+extern void func_00002610(void *arg0, int arg1, int arg2);
 /* libehsys, NID 0x10F3BB61, stub 0x2610 */
 extern int *func_000037E0(void);
 /* libehsys, NID 0xB2B9FEFA, stub 0x37E0 */
@@ -76,12 +76,36 @@ extern int func_00003790(int arg0, void *arg1, int arg2);
 extern void func_00003780(int arg0, int arg1);
 /* libehsys, NID 0x4B0DABFA, stub 0x3780; return value unused at 0x1DF4 */
 
+/* func_00001B0C / func_00001C58: usage-derived callback registration calls. */
+extern void func_00002638(
+    void *entries, int count, int stride,
+    int (*compare)(const unsigned short *, const unsigned short *)
+);
+/* libehsys, NID 0x1B00FB95, stub 0x2638; return value unused */
+extern int func_000036A0(int arg0, const char *path);
+/* libehsys, NID 0xD2A768F4, stub 0x36A0 */
+extern int func_00003A00(int arg0, int arg1);
+/* libehsys, NID 0x41AABF28, stub 0x3A00 */
+extern void func_00003668(
+    int arg0, const char *path, int arg2, int arg3,
+    int (*callback)(int, int), int arg5
+);
+/* libehsys, NID 0x8288EEBC, stub 0x3668; six Allegrex register arguments,
+ * callback in t0, arg5 in t1; return value unused at 0x1C58. */
+
 /*
- * Provisional shared-byte symbol for the references that combine to module
- * offset 0x6250. The original address is in a zero-filled PT_LOAD tail, not a
- * named section; this declaration does not establish candidate object identity.
+ * Provisional byte-sized bitfields for module offset 0x6250. With the official
+ * Metrowerks compiler, unsigned-char fields reproduce the original lbu/sb,
+ * seven-bit extraction/insertion and low-bit assignment sequences. Field names
+ * describe only the observed bits, not established subsystem semantics. This
+ * declaration does not establish cross-artifact identity for the zero-fill byte.
  */
-extern unsigned char func_00006250_state;
+typedef struct LibtutoriallistState {
+    unsigned char active : 1;
+    unsigned char count : 7;
+} LibtutoriallistState;
+
+extern LibtutoriallistState func_00006250_state;
 
 /*
  * Local (non-imported) entry points shared by this module's reconstructions.
@@ -89,6 +113,9 @@ extern unsigned char func_00006250_state;
  * in sync with their definitions so callers cannot drift to another key width.
  */
 extern int func_00001D08(unsigned short key);
+extern int func_00001C58(void);
+extern int func_00001DF4(int arg0, int arg1);
+extern int func_00001E84(const unsigned short *arg0, const unsigned short *arg1);
 extern int func_00001E94(
     unsigned short key,
     const unsigned short *values,
