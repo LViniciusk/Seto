@@ -5278,20 +5278,56 @@ As 21 limitações são de identidade HI16/LO16 ou de pareamento order-only; as
 duas relocation issues restantes (`word 106` e `word 109`) são consequência
 direta da rotação de registradores, não de uma associação de dados inventada.
 
-### 5. Alvos grandes não alterados
+### 5. `0x21F8`: o loop da janela passa a coincidir
+
+O quinto ramo (`input[3] & 0x40`) foi reescrito para cachear
+`leading[group]` antes do loop e usar o accessor compartilhado dentro dele:
+
+```c
+lead = func_00006190_panel.leading[group];
+for (j = 0; j < 8; j++) {
+    entry = libtutoriallist_panel_key(group, lead + j);
+    if (func_00006190_panel.trailing[group] < j)
+        break;
+    sum += func_00006190_panel.extents[entry];
+}
+```
+
+Isso é semanticamente idêntico: o loop não contém chamadas nem escritas no
+painel, e `leading[group]` não muda durante a execução. O original também
+carrega `leading` uma vez antes do loop (`v1` em 0x248c). A sequência de
+instruções do loop agora coincide com a original, exceto pelo `sum + extent`
+duplicado no delay slot do `break`:
+
+| Antes | Depois |
+|---|---|
+| `NONMATCHING` 119/241, 78 diferenças, 11 relocation issues, 21 limitações, 964 bytes | **`NONMATCHING` 127/240, 66 diferenças, 9 relocation issues, 23 limitações, 960 bytes** |
+
+O candidato ainda tem **2 words extras** (240 versus 238): (1) o accessor
+`libtutoriallist_panel_key` recebe `unsigned char group`, o que gera um `andi
+0xff` redundante antes da indexação; (2) o compilador agenda `sum + extent` no
+delay slot do `break` e o repete depois do loop, em vez de carregar o extent no
+delay slot e compartilhar um único `sum + extent` na saída, como no original.
+As primeiras diferenças (words 32, 70, 103, 119, 138, 143, 149, 151) são
+deslocamentos de branch induzidos por essas 2 words; a primeira divergência
+**substancial** é a word 157 (`lui`/`andi` no agendamento do quinto ramo).
+Formas alternativas (índice sem accessor, accessor com `int group`, `while`,
+`goto`, soma pós-loop em `sum`/`extent`, ordem da soma e do break) foram
+compiladas; nenhuma removeu a duplicação sem perder a alocação do loop.
+
+### 6. Alvos grandes restantes
 
 | Função | Original / candidato | Resultado | Primeira diferença |
 |---|---:|---|---:|
-| `0x21F8` | 238 / 241 | `NONMATCHING` 119/241, 78 diferenças, 11 relocation issues, 21 limitações | word 32 |
 | `0x2F4` | 253 / 249 | `NONMATCHING` 93/253, 137 diferenças, 35 relocation issues, 2 limitações | word 32 |
 | `0x8F0` | 333 / 342 | `NONMATCHING` 50/342, 286 diferenças, 70 relocation issues, 1 limitação | word 15 |
 | `0x1764` | 182 / 182 | `NONMATCHING` 42/182, 140 diferenças, 32 relocation issues | word 0 |
 
-Nenhuma dessas funções foi promovida nem teve a semântica alterada nesta
+Nenhuma dessas três funções foi promovida nem teve a semântica alterada nesta
 rodada. `0x1764` permanece congelada após mais de 120 variantes refutadas em
 025; só deve ser revisitada com uma hipótese estrutural nova.
 
-### 6. Métricas globais
+### 7. Métricas globais
 
 A reclassificação de `0x2C8` move 11 words de `NONMATCHING` para
 `INCONCLUSIVE` sem alterar o total reconstruído:
@@ -5313,13 +5349,21 @@ identificadas**. Não houve nova certificação estrita; a contagem permanece
 **16 MATCHED / 912 words**. O ganho de `0x2C8` é de classificação correta e de
 comparador, não de certificação.
 
-### 7. Hashes de fonte e objeto
+A melhoria de `0x21F8` é interna a uma função que permanece `NONMATCHING`: ela
+não altera as contagens globais de status nem o total de words (a função
+continua contribuindo com 238 words originais), mas reduz as diferenças
+daquela função de 78 para 66 e aumenta as words coincidentes de 119 para 127.
+O quadro de status/words acima permanece o mesmo; o progresso é medido dentro
+da função, não por uma promoção artificial.
+
+### 8. Hashes de fonte e objeto
 
 | Intervalo | Fonte | Fonte SHA-256 | Objeto SHA-256 |
 |---|---|---|---|
 | `0x2C8–0x2F4` | `func_000002C8.c` | `f344cdfcb576fa4df6b6f701ef2740ed09d04063139bdb834b7166eaddc8237e` | `91ec22544572f806cc699186edb15a6bd2088184559f9115c5314c49997d7061` |
 | `0x1C58–0x1D08` | `func_00001C58.c` | `e99748be52320e19591f93ae0d50dea33159967b870b9e3f44556c1b19ea5e13` | `807134dfd1ee244300d69df3be325b1aa64127c9a432f8418d14fa04689124d7` |
 | `0x1F10–0x21F8` | `func_00001F10.c` | `0ff65a4f12d2e84e99a163b6abf10dc760abe022ad9662b30761f0948c5cf890` | `3f4f3789ed471bfd69c491106bc982712e11e3b30e39820aa61c70ad33b4f613` |
+| `0x21F8–0x25B0` | `func_000021F8.c` | `b59a92d80c06de4e656449e7fec59ca30e555c93958a5bb7352e77eb42479300` | `9eb6aee66d6ed6c1dcabb0a7cf6576bfc78a76993ddc79f0eae3f37f003e6aca` |
 
 O objeto de `0x2C8` é o mesmo certificado em 025; o hash de fonte registrado
 na tabela de 025 para essa função (`288f2124...`) não corresponde ao arquivo
@@ -5327,33 +5371,37 @@ atual (`f344cdfc...`), mas o objeto permanece `91ec2254...`, ou seja, a
 diferença é apenas de bytes de fonte/comentário, não de código gerado. O
 objeto de `0x1C58` também é o mesmo de 025. `0x1F10` mudou de 748 para 744
 bytes; as duas compilações independentes do teste 025 produziram o mesmo
-`3f4f3789...`.
+`3f4f3789...`. `0x21F8` mudou de 964 para 960 bytes; as duas compilações
+independentes do teste 025 produziram o mesmo `9eb6aee6...`.
 
-### 8. Validação executada
+### 9. Validação executada
 
 | Gate | Ambiente | Resultado |
 |---|---|---|
 | `pytest -q -rs` (suíte completa) | Windows, `PYTHONPATH=src` | **764 passed, 42 skipped** |
 | `pytest -m integration -q -rs` | WSL2 | **41 passed, 17 skipped, 748 deselected** |
-| Opt-ins reais 018–025 + callbacks | WSL2 | **9 passed** (166,17 s) |
+| Opt-ins reais 018–025 + callbacks | WSL2 | **9 passed** (298,21 s) |
 | `test_toolchain_runtime.py -k real_mwccpsp` | WSL2 | **16 passed, 3 deselected** |
 | `compileall -q src scripts tests` | Windows | clean |
 | `git diff --check` | Windows | clean |
 
 Os skips continuam sendo requisitos de plataforma/ferramentas ausentes ou
 opt-ins inativos; nenhum skip foi convertido em aprovação. Os 9 opt-ins reais
-incluem `0x2C8` (`INCONCLUSIVE` 7/11, 0 diferenças) e `0x1F10` (73/186, 744
-bytes), ambos compilados duas vezes com objetos determinísticos.
+incluem `0x2C8` (`INCONCLUSIVE` 7/11, 0 diferenças), `0x1F10` (73/186, 744
+bytes) e `0x21F8` (127/240, 960 bytes), todos compilados duas vezes com objetos
+determinísticos.
 
-### 9. Bloqueios restantes e ordem de ataque
+### 10. Bloqueios restantes e ordem de ataque
 
 1. **`0x1F10` (word 96):** a alocação de `group` em `t0` versus `t2` continua
    sendo o bloqueio principal. A cauda já tem o tamanho exato e o merge de
    saída correto; falta uma forma de fonte que mude a coloração sem código
    artificial.
-2. **`0x21F8` (119/241):** rotação de registradores e 3 words extras; o
-   dispatch de input e a janela de atualização precisam de um CFG/registradores
-   equivalente.
+2. **`0x21F8` (127/240):** o loop do quinto ramo já coincide com o original;
+   restam duas words extras — o `andi 0xff` do accessor (`unsigned char
+   group`) e o `sum + extent` duplicado no delay slot do `break`. A primeira
+   divergência substancial é a word 157; os deslocamentos de branch anteriores
+   são consequência das 2 words.
 3. **`0x2F4` (93/253):** quatro words ausentes, branch displacements e o
    `lhu` duplicado em 0x4B0; é necessário reconstruir o CFG do renderer, não
    inserir código morto.
@@ -5371,5 +5419,5 @@ bytes), ambos compilados duas vezes com objetos determinísticos.
 
 Nenhuma dessas funções foi descrita como concluída. O resultado principal da
 026 é a correção principiada do pareamento HI16/LO16, a reclassificação
-honesta de `0x2C8`, a remoção dos avisos de `0x1C58` e a recuperação do
-tamanho exato de `0x1F10`.
+honesta de `0x2C8`, a remoção dos avisos de `0x1C58`, a recuperação do loop de
+`0x21F8` e a recuperação do tamanho exato de `0x1F10`.

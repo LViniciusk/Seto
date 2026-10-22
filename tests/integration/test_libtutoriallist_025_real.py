@@ -84,9 +84,9 @@ WHOLE_CASES = {
         "symbol_size": 744, "first_word": 96,
     }),
     0x21F8: (238, {
-        "status": "NONMATCHING", "matching": 119, "total": 241,
-        "differences": 78, "relocations": 11, "limitations": 21,
-        "symbol_size": 964, "first_word": 32,
+        "status": "NONMATCHING", "matching": 127, "total": 240,
+        "differences": 66, "relocations": 9, "limitations": 23,
+        "symbol_size": 960, "first_word": 32,
     }),
 }
 
