@@ -443,9 +443,11 @@ def pair_hi16_lo16(
 
 
 _CFG_BRANCH_LIKELY_OPS = frozenset((0x14, 0x15, 0x16, 0x17))
-_CFG_REGIMM_BRANCHES = frozenset((0x00, 0x01, 0x10, 0x11))
-_CFG_REGIMM_LIKELY = frozenset((0x02, 0x03, 0x12, 0x13))
-_CFG_EXIT_FUNCTS = frozenset((0x0C, 0x0D, 0x18))
+# Link variants are conditional calls, not ordinary intraprocedural edges.
+# Leave them unsupported rather than discarding a possible callee return.
+_CFG_REGIMM_BRANCHES = frozenset((0x00, 0x01))
+_CFG_REGIMM_LIKELY = frozenset((0x02, 0x03))
+_CFG_EXIT_FUNCTS = frozenset((0x0C, 0x0D))
 
 
 def _cfg_control_kind(word: int) -> str | None:
@@ -459,7 +461,7 @@ def _cfg_control_kind(word: int) -> str | None:
             return "jr"
         if funct == 9:  # jalr
             return "jalr"
-        if funct in _CFG_EXIT_FUNCTS:  # syscall/break/eret
+        if funct in _CFG_EXIT_FUNCTS:  # syscall/break (SPECIAL 0x18 is mult)
             return "exit"
         return None
     if op in (2, 3):  # j/jal
@@ -501,6 +503,13 @@ def _cfg_branch_target(index: int, word: int) -> int:
     return index + 1 + immediate
 
 
+def _cfg_is_call(word: int) -> bool:
+    op = (word >> 26) & 0x3F
+    return op == 3 or (
+        op == 0 and (word & 0x3F) == 9 and ((word >> 11) & 0x1F) != 0
+    )
+
+
 def _cfg_precheck(
     words: tuple[int, ...], low_index: int
 ) -> tuple[dict[int, int], str | None]:
@@ -511,7 +520,9 @@ def _cfg_precheck(
     evidence and the CFG must not override it.
     """
     delay_of: dict[int, int] = {}
-    for index in range(low_index):
+    # Successors can run beyond the LO and loop back to it. Delay-slot owners
+    # must therefore cover the whole window, not only its prefix.
+    for index in range(len(words)):
         kind = _cfg_control_kind(words[index])
         if kind is None:
             if _instruction_effect(words[index])[2] is None:
@@ -524,7 +535,9 @@ def _cfg_precheck(
         if index in delay_of:
             return delay_of, "a control transfer occupies a delay slot"
         if kind in ("jump", "jr", "jalr") and low_index != index + 1:
-            return delay_of, f"the LO16 lies beyond the {kind} at word {index}"
+            is_return = kind == "jr" and ((words[index] >> 21) & 0x1F) == 31
+            if index < low_index or not (_cfg_is_call(words[index]) or is_return):
+                return delay_of, f"the LO16 lies beyond the {kind} at word {index}"
         if index + 1 >= len(words):
             return delay_of, f"control transfer at word {index} has no in-range delay slot"
         delay_of[index + 1] = index
@@ -532,6 +545,12 @@ def _cfg_precheck(
             target = _cfg_branch_target(index, words[index])
             if not 0 <= target < len(words):
                 return delay_of, f"branch at word {index} leaves the compared words"
+    for index, word in enumerate(words):
+        if _cfg_control_kind(word) in ("branch", "branch-likely"):
+            if _cfg_branch_target(index, word) in delay_of:
+                # Entering a delay instruction normally is not equivalent to
+                # executing it with its owner's pending branch destination.
+                return delay_of, f"branch at word {index} targets a delay slot"
     return delay_of, None
 
 
@@ -548,6 +567,11 @@ def _cfg_successors(
     if index in delay_of:
         branch = delay_of[index]
         kind = _cfg_control_kind(words[branch])
+        if _cfg_is_call(words[branch]):
+            # The call's delay slot precedes callee execution. A later return
+            # can reenter the LO via a backedge; transfer() marks its GPR state
+            # unknown rather than silently dropping this path.
+            return [branch + 2] if branch + 2 < count else []
         if kind in ("jump", "jr", "jalr", "exit", "unsupported") or kind is None:
             return []
         target = _cfg_branch_target(branch, words[branch])
@@ -609,6 +633,8 @@ def _cfg_register_flow(
     def transfer(
         state: frozenset[tuple[str, int]], index: int
     ) -> frozenset[tuple[str, int]]:
+        if index in delay_of and _cfg_is_call(words[delay_of[index]]):
+            return frozenset({("unknown", index)})
         word = words[index]
         _control, _unconditional, writes = _instruction_effect(word)
         if writes is None:
