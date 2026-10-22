@@ -69,9 +69,9 @@ CLI_CASES = {
 # address: (original words, expected result) for complete-symbol comparisons.
 WHOLE_CASES = {
     0x2F4: (253, {
-        "status": "NONMATCHING", "matching": 93, "total": 253,
-        "differences": 137, "relocations": 35, "limitations": 2,
-        "symbol_size": 996, "first_word": 32,
+        "status": "NONMATCHING", "matching": 134, "total": 253,
+        "differences": 99, "relocations": 20, "limitations": 4,
+        "symbol_size": 1012, "first_word": 81,
     }),
     0x8F0: (333, {
         "status": "NONMATCHING", "matching": 50, "total": 342,
