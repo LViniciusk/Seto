@@ -5142,8 +5142,8 @@ objetos e relatórios completos estão em `build/seto025/final/` e
 | `git diff --check` | Windows Git | clean |
 
 Os skips restantes são requisitos de plataforma (WSL2), ausência das
-ferramentas GNU MIPSel e opt-ins inativos. Eles não foram convertidos em
-aprovação. O teste 025 é opt-in e aparece como skip nas suítes sem a variável
+ferramentas GNU MIPSel, três testes YAML sem PyYAML, ISO/Splat e Ghidra/REA
+não configurados, e opt-ins inativos. Nenhum skip foi convertido em aprovação. O teste 025 é opt-in e aparece como skip nas suítes sem a variável
 `SETO_LIBTUTORIALLIST_025_REAL=1`.
 
 ### 13. Bloqueios restantes e próximos alvos
