@@ -5,11 +5,13 @@
  * Table indices, imported pointers, and signed geometry retain original input
  * obligations; no speculative guards or data definitions are introduced.
  *
- * RESULT: NONMATCHING 93/253, 137 differences, 35 relocation issues, two
- * HI16/LO16 limitations; 996-byte candidate versus 1012-byte original. Words
- * 32/34 are branch-displacement effects of the four-word-shorter body. The
- * first substantive divergence is word 81 (`lui v1` vs `lui a0`) in the
- * flags/list-loop setup.
+ * RESULT: NONMATCHING 134/253, 99 differences, 20 relocation issues, four
+ * HI16/LO16 limitations; both symbols are 1012 bytes. The visible-row lookup
+ * uses the shared accessor, removing the former size-induced differences at
+ * words 32/34. First divergence: word 81 (candidate `lui v1`, original
+ * `lui a0`) in the flags/list-loop setup. Size equality does not imply CFG
+ * equality: the original's unreachable scheduler copies at 0x4B0, 0x560 and
+ * 0x634 are not reproduced, and the accessor adds conversions/reloads.
  */
 #include "libtutoriallist_stubs.h"
 #include "libtutoriallist_panel.h"
@@ -74,10 +76,7 @@ void func_000002F4(void)
         position = func_00006190_panel.leading[group] + line;
         if (position >= func_00006190_panel.count[group])
             break;
-        if (position >= func_00006190_panel.count[group])
-            key = 24;
-        else
-            key = func_00006190_panel.entries[group][position];
+        key = libtutoriallist_panel_key(group, position);
         renderer = func_00000E24(renderer, 81, (row * 3) * 8 + 60, key);
         row += func_00006190_panel.extents[key];
         line++;

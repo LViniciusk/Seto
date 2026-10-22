@@ -573,14 +573,227 @@ def test_register_flow_observes_unconditional_control_delay_slots(words, low_ind
     assert pairing.evidence[hi_index] == "register-flow"
 
 
-def test_conditional_control_flow_keeps_order_pairing_inconclusive() -> None:
-    words = (_lui(4), 0x10800000, 0, _i_type(9, 4, 4, 0x4830))  # beq, delay slot, LO
+def test_cfg_proves_a_hi16_across_a_conditional_branch() -> None:
+    words = (_lui(4), 0x10800001, 0, _i_type(9, 4, 4, 0x4830))  # beq, delay slot, LO
     relocations = [rel(0, R_MIPS_HI16, addend=0), rel(12, R_MIPS_LO16, addend=0x4830)]
     pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
     assert pairing.hi_to_lo == {0: 3}
-    assert pairing.evidence[0] == "relocation-order"
-    assert any("control flow crosses" in item for item in pairing.limitations)
-    assert any("relocation order" in item for item in pairing.limitations)
+    assert pairing.evidence[0] == "register-flow"
+    assert not any("control flow crosses" in item for item in pairing.limitations)
+    assert not any("relocation order" in item for item in pairing.limitations)
+
+
+def test_cfg_keeps_mult_as_a_fallthrough_instruction() -> None:
+    words = (
+        _lui(4),
+        _i_type(4, 5, 0, 2),
+        NOP,
+        (2 << 21) | (3 << 16) | 0x18,  # mult v0,v1: writes HI/LO, not a GPR
+        _i_type(9, 4, 6, 0x4830),
+    )
+    relocations = [rel(0, R_MIPS_HI16, addend=0), rel(16, R_MIPS_LO16, addend=0x4830)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 4}
+    assert pairing.evidence[0] == "register-flow"
+
+
+@pytest.mark.parametrize(("words", "highs", "low"), [
+    (
+        (_lui(4), _i_type(5, 5, 0, 2), NOP, _lui(4), _i_type(0x23, 4, 6)),
+        (0, 3), 4,
+    ),
+    (
+        (_lui(4), _i_type(4, 5, 0, 2), NOP, _i_type(9, 0, 4), _i_type(0x23, 4, 6)),
+        (0,), 4,
+    ),
+    (
+        (_i_type(4, 5, 0, 3), NOP, _lui(4), NOP, _i_type(0x23, 4, 6)),
+        (2,), 4,
+    ),
+    (
+        (_lui(4), _i_type(0x23, 4, 6), 0x0C000000, NOP,
+         _i_type(4, 0, 0, -4), NOP, 0x03E00008, NOP),
+        (0,), 1,
+    ),
+], ids=["two-his", "hi-and-other", "hi-and-entry", "hi-and-call-clobber"])
+def test_cfg_ambiguity_cannot_fall_back_to_a_linear_proof(words, highs, low) -> None:
+    relocations = [rel(index * 4, R_MIPS_HI16) for index in highs]
+    relocations.append(rel(low * 4, R_MIPS_LO16))
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {index: low for index in highs}
+    assert pairing.evidence == {index: "relocation-order" for index in highs}
+    assert any("pairing is uncertain" in item for item in pairing.limitations)
+
+    # Even a resolver-proven destination difference must not be turned into a
+    # definite divergence using a pair whose reaching association is ambiguous.
+    code = _code(*words)
+    result = compare(
+        code, code, name="ambiguous",
+        original_relocations=relocations,
+        candidate_relocations=relocations,
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
+    assert result.status == INCONCLUSIVE
+    assert result.difference_count == 0
+
+
+def test_cfg_all_ordinary_definitions_conclusively_exclude_a_hi16() -> None:
+    words = (
+        _lui(4), _i_type(4, 5, 0, 3), _i_type(9, 0, 4, 1),
+        _i_type(9, 0, 4, 2), NOP, _i_type(0x23, 4, 6),
+    )
+    relocations = [rel(0, R_MIPS_HI16), rel(20, R_MIPS_LO16)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {}
+    assert any("no relocated HI16 reaches" in item for item in pairing.limitations)
+
+
+def test_cfg_ambiguity_does_not_discard_independent_elf_symbol_pairing() -> None:
+    words = (_lui(4), _i_type(5, 5, 0, 2), NOP, _lui(4), _i_type(0x23, 4, 6))
+    relocations = [
+        rel(0, R_MIPS_HI16, symbol="table"),
+        rel(12, R_MIPS_HI16, symbol="table"),
+        rel(16, R_MIPS_LO16, symbol="table"),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 4, 3: 4}
+    assert pairing.evidence == {0: "symbol", 3: "symbol"}
+    assert not pairing.limitations
+
+
+@pytest.mark.parametrize("after_lo", [
+    (
+        _i_type(9, 0, 4, 0),  # redefinition on the loop backedge
+        _i_type(4, 7, 0, -3),
+        NOP,
+        0x03E00008,
+        NOP,
+    ),
+    (
+        0x0C000000,  # a returning call may clobber a0 before the backedge
+        NOP,
+        _i_type(4, 0, 0, -4),
+        NOP,
+        0x03E00008,
+        NOP,
+    ),
+    (
+        0x0320F809,  # jalr ra,t9 also returns after its delay slot
+        NOP,
+        _i_type(4, 0, 0, -4),
+        NOP,
+        0x03E00008,
+        NOP,
+    ),
+], ids=["redefinition-backedge", "call-return-backedge", "jalr-return-backedge"])
+def test_cfg_does_not_ignore_backedges_after_the_lo(after_lo) -> None:
+    words = (
+        _lui(4),
+        _i_type(4, 5, 0, 2),
+        NOP,
+        NOP,
+        _i_type(9, 4, 6, 0x4830),
+        *after_lo,
+    )
+    relocations = [rel(0, R_MIPS_HI16, addend=0), rel(16, R_MIPS_LO16, addend=0x4830)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.evidence.get(0) != "register-flow"
+    assert pairing.limitations
+
+
+def test_cfg_does_not_treat_a_branch_target_as_an_owned_delay_slot() -> None:
+    # Taken branch 1 enters word 4 normally, so word 5 redefines a0. Only a
+    # word-4 execution inherited from branch 3 may skip word 5 and reach LO 6.
+    words = (
+        _lui(4),
+        _i_type(4, 5, 0, 2),
+        NOP,
+        _i_type(4, 0, 0, 2),
+        NOP,
+        _i_type(9, 0, 4, 0),
+        _i_type(9, 4, 6, 0x4830),
+        0x03E00008,
+        NOP,
+    )
+    relocations = [rel(0, R_MIPS_HI16, addend=0), rel(24, R_MIPS_LO16, addend=0x4830)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.evidence.get(0) != "register-flow"
+    assert pairing.limitations
+
+
+@pytest.mark.parametrize("rt", [0x10, 0x11, 0x12, 0x13])
+def test_cfg_does_not_treat_a_conditional_call_as_a_local_branch(rt) -> None:
+    # The link return address is LO 3. The callee path can redefine a0 at 4
+    # then return to that LO; treating its jr as a function exit loses a path.
+    words = (
+        _lui(4),
+        _i_type(1, 5, rt, 2),  # bltzal/bgezal and their likely forms
+        NOP,
+        _i_type(9, 4, 6, 0x4830),
+        _i_type(9, 0, 4, 0),
+        0x03E00008,
+        NOP,
+    )
+    relocations = [rel(0, R_MIPS_HI16, addend=0), rel(12, R_MIPS_LO16, addend=0x4830)]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.evidence.get(0) != "register-flow"
+    assert pairing.limitations
+
+
+def test_cfg_proves_a_hi16_across_mutually_exclusive_delay_slots() -> None:
+    # The 0x2c8 shape: the branch-likely target is the LO16, its delay slot
+    # installs the HI16 base, while the fall-through path redefines the same
+    # register in the delay slot of an unconditional branch that skips the LO.
+    words = (
+        _lui(2),
+        _i_type(0x24, 2, 2, 0x6194),
+        0x000216C0,
+        0x000217C2,
+        0x50400003,  # beql v0,zero,0x2e8
+        _lui(2),
+        0x10000002,  # beq zero,zero,0x2ec
+        _i_type(9, 0, 2, -1),
+        _i_type(0x25, 2, 2, 0x6196),
+        0x03E00008,
+        NOP,
+    )
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=0),
+        rel(4, R_MIPS_LO16, addend=0x6194),
+        rel(20, R_MIPS_HI16, addend=0),
+        rel(32, R_MIPS_LO16, addend=0x6196),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 1, 5: 8}
+    assert pairing.evidence == {0: "register-flow", 5: "register-flow"}
+    assert not pairing.limitations
+
+
+def test_cfg_keeps_mixed_hi16_and_fallthrough_redefinition_uncertain() -> None:
+    words = (
+        _lui(2),
+        _i_type(0x24, 2, 2, 0x6194),
+        0x000216C0,
+        0x000217C2,
+        0x50400003,
+        _lui(2),
+        NOP,
+        _i_type(9, 0, 2, -1),
+        _i_type(0x25, 2, 2, 0x6196),
+        0x03E00008,
+        NOP,
+    )
+    relocations = [
+        rel(0, R_MIPS_HI16, addend=0),
+        rel(4, R_MIPS_LO16, addend=0x6194),
+        rel(20, R_MIPS_HI16, addend=0),
+        rel(32, R_MIPS_LO16, addend=0x6196),
+    ]
+    pairing = pair_hi16_lo16(relocation_sites(relocations, 0).sites, words)
+    assert pairing.hi_to_lo == {0: 1, 5: 8}
+    assert pairing.evidence == {0: "register-flow", 5: "relocation-order"}
+    assert any("multiple or unproven CFG reaching definitions" in item for item in pairing.limitations)
 
 
 def test_register_flow_does_not_attach_one_lo_to_another_registers_hi() -> None:
@@ -989,13 +1202,35 @@ def test_a_target_difference_on_a_register_proven_pair_is_nonmatching() -> None:
     assert "data target differs" in result.differences[0].reason
 
 
+def test_a_target_difference_on_a_cfg_proven_pair_is_nonmatching() -> None:
+    # The CFG proves the LUI reaches the LO16 on both sides of the conditional
+    # branch, so a proven destination difference is a real code/data divergence.
+    result = compare(
+        _code(0x3C040001, 0x10800001, 0, 0x24840002),
+        _code(0x3C040000, 0x10800001, 0, 0x24840003),
+        name="f",
+        original_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x1),
+            rel(12, R_MIPS_LO16, addend=0x2),
+        ],
+        candidate_relocations=[
+            rel(0, R_MIPS_HI16, addend=0x0),
+            rel(12, R_MIPS_LO16, addend=0x3),
+        ],
+        original_data_resolver=_identity(DataTarget(".data", 0x20)),
+        candidate_data_resolver=_identity(DataTarget(".data", 0x24)),
+    )
+    assert result.status == NONMATCHING
+    assert "data target differs" in result.differences[0].reason
+
+
 def test_a_target_difference_on_an_order_only_pair_stays_inconclusive() -> None:
-    # A conditional branch makes the limited register-flow scan ambiguous; the
-    # order fallback must not turn different resolved destinations into a proven
+    # A call before the LO16 cannot be modeled by the local CFG; the order
+    # fallback must not turn different resolved destinations into a proven
     # code/data divergence.
     result = compare(
-        _code(0x3C040001, 0x10800000, 0, 0x24840002),
-        _code(0x3C040000, 0x10800000, 0, 0x24840003),
+        _code(0x3C040001, 0x0C000000, 0, 0x24840002),
+        _code(0x3C040000, 0x0C000000, 0, 0x24840003),
         name="f",
         original_relocations=[
             rel(0, R_MIPS_HI16, addend=0x1),
