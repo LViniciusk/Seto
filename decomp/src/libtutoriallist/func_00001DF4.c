@@ -13,19 +13,16 @@
  * named sections. The shared provisional candidate symbol therefore does not
  * establish cross-artifact identity.
  *
- * The explicit 0/1 return form compiles to the complete 144-byte interval and
- * is compared below. Its current result is NONMATCHING 19/36; differences are
- * confined to the final shared-state update/return block and include three
- * relocation-pairing issues. The compact `return enabled` form was four bytes
- * short, so it produced ERROR rather than comparison evidence.
+ * Unsigned-char bitfield assignments reproduce the complete 144-byte symbol,
+ * including the register OR (rather than ori) and common return/epilogue.
+ * Result: INCONCLUSIVE 28/36, zero instruction differences/relocation issues;
+ * all four data pairs still lack cross-artifact identity.
  */
 
 #include "libtutoriallist_stubs.h"
 
 int func_00001DF4(int arg0, int arg1)
 {
-    unsigned int state;
-    unsigned int count;
     int enabled;
 
     enabled = arg1 > 0;
@@ -33,16 +30,9 @@ int func_00001DF4(int arg0, int arg1)
         if (arg0 != 0)
             func_00003780(0, arg0);
 
-        state = func_00006250_state;
-        count = ((unsigned int)state << 24) >> 25;
-        func_00006250_state = (state & ~0xfe) | (((count + 1) & 0x7f) << 1);
+        func_00006250_state.count++;
     }
 
-    state = func_00006250_state;
-    state &= ~1;
-    state |= 1;
-    func_00006250_state = state;
-    if (enabled == 0)
-        return 0;
-    return 1;
+    func_00006250_state.active = 1;
+    return enabled;
 }
