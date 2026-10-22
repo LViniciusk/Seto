@@ -5532,3 +5532,44 @@ permutação. Duas compilações integrais independentes produziram o mesmo obje
 Continua `NONMATCHING`; nenhuma identidade de dados foi promovida.
 Fonte SHA-256: `ea6b98ab326eb0464775cd62081664d9a6dc4976aae75ae1784d0644742c612b`.
 Objeto SHA-256: `0bbd97b264dad8b7bf9ae6cfa619791a765a2148c9f59fccb786616229fbb086`.
+
+### Resultados consolidados da R2
+
+HEAD inicial `f68c86e23d76b59c576930c4db32da4aa54fa623`; HEAD de código
+`b977cc0054ef6c208ea435817fde467fb2451744`, mais o commit de documentação.
+Nenhuma certificação estrita mudou: continuam **16 `MATCHED` / 912 words**,
+**19 `INCONCLUSIVE` / 813**, **5 `NONMATCHING` / 1.192** e dois fragmentos / 4
+words; **35 funções com zero diferenças**. As melhorias são estritamente dentro
+de `NONMATCHING`.
+
+| Função | Antes R2 | Depois R2 | Primeira diferença restante |
+|---|---|---|---|
+| `0x2C8` | `INCONCLUSIVE` 7/11 | **`INCONCLUSIVE` 7/11, 0 diferenças** | duas identidades de dados |
+| `0x1C58` | `INCONCLUSIVE` 28/44 | **`INCONCLUSIVE` 28/44, 0 avisos** | oito pares de dados |
+| `0x1F10` | 73/186, 76 dif., 2 reloc., 744 B | **89/186, 60 dif., 1 reloc., 744 B** | word 96: permutação de registradores |
+| `0x21F8` | 127/240, 66 dif., 9 reloc., 960 B | **187/238, 3 dif., 0 reloc., 952 B** | words 165/166 e 168 |
+| `0x2F4` | 134/253, 99 dif., 20 reloc., 1.012 B | **134/253, 99 dif., 20 reloc., 1.012 B** | word 81; cópias inalcançáveis do scheduler |
+| `0x8F0` | 52/342, 284 dif., 68 reloc. | **52/342, 284 dif., 68 reloc.** | word 15: spill de `height` |
+
+Objetos reproduzidos (SHA-256): `0x2C8`
+`91ec22544572f806cc699186edb15a6bd2088184559f9115c5314c49997d7061`;
+`0x1C58` `807134dfd1ee244300d69df3be325b1aa64127c9a432f8418d14fa04689124d7`;
+`0x1F10` `0bbd97b264dad8b7bf9ae6cfa619791a765a2148c9f59fccb786616229fbb086`;
+`0x21F8` `14d25c2ec2caf36ccd6de7cfa12d714f24434a377027e71625d99a4576bde0dc`;
+`0x2F4` `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c`;
+`0x8F0` `591face818cb8f1958f17c43821228029887908f3d317ce41df6e176c40f91dc`.
+Cada objeto aceito foi produzido por duas compilações oficiais independentes.
+
+Validação executada: Windows **779 passed, 42 skipped**; WSL com opt-ins reais
+**806 passed, 15 skipped**; integração WSL **49 passed, 9 skipped, 763
+deselected**; matching **83 passed**; `compileall` limpo em Windows e WSL2;
+`git diff --check` limpo. Nenhum skip foi convertido em aprovação e nenhuma
+regra do matcher foi enfraquecida. Os CHECKs hospedados da rodada anterior
+permanecem verdes; os novos commits foram enviados para a mesma PR #25, que
+segue aberta e não deve ser mesclada automaticamente.
+
+Bloqueios restantes: identidades de dados de `0x2C8`/`0x1C58` e dos pares de
+`libhtml_view`; permutação de registradores em `0x1F10`; três instruções de
+ordem em `0x21F8`; cópias inalcançáveis de `0x2F4` (não inserir dead code);
+pressão de registradores de `0x8F0`; `0x1764` congelada; fragmentos sem
+entrypoint; containers `~PSP`/`~SCE`.
