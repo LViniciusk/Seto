@@ -5489,3 +5489,19 @@ Os testes reais 025 e callbacks passaram (**2 passed**, 108,09 s), preservando
 `0x2C8` em `INCONCLUSIVE` 7/11, zero diferenças/issues, e `0x1C58` em
 `INCONCLUSIVE` 28/44, zero avisos de pareamento. Os cinco alvos `NONMATCHING`
 mantiveram os resultados de partida. Nenhuma certificação foi acrescentada.
+
+### `0x21F8`: duas words extras eliminadas
+
+O `group` local passou a `unsigned char`, compatível com o nibble carregado.
+O loop agora carrega o extent em `next` antes de `j > trailing[group]`, como
+o `lhu` original no delay slot do break. Juntas, as mudanças removem o mask
+do accessor e a soma de saída duplicada, sem alterar imports ou side effects.
+
+| Antes R2 | Depois | Diferença restante |
+|---|---|---|
+| 127/240, 960 bytes, 66 diferenças, 9 relocation issues, 23 limitações | **159/238, 952 bytes, 31 diferenças, 2 relocation issues, 25 limitações** | word 157: ordem LUI/ANDI e rotação `group`/`leading` |
+
+O teste real 025 passou (73,68 s), incluindo duas compilações independentes e
+objetos idênticos. Continua `NONMATCHING`; tamanho exato não é certificação.
+Fonte SHA-256: `7fa83ccc659925da7ed7681dcfa2edd5e5026d903dce5888aba64219b320a258`.
+Objeto SHA-256: `8fd8c1379ca02ac0091162779b382bc0e4182c00fbfa10b8d32535a2b06c3b39`.

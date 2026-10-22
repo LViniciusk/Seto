@@ -4,7 +4,7 @@ The six CLI cases use ``scripts/match_function.py`` and the public comparator,
 including an explicit ``--size`` for the split 0x1C18/0x1C20 functions. Four
 large functions use the production ``seto.matching.compare`` API over complete
 candidate symbols and explicit original intervals, preserving size mismatches
-where present. 0x2F4 and 0x1F10 now have exact sizes; 0x8F0 and 0x21F8 remain
+where present. 0x2F4, 0x1F10 and 0x21F8 now have exact sizes; 0x8F0 remains
 larger. Compilation uses the same official compiler/flag path; ERROR/BLOCKED
 is never accepted as a comparison.
 """
@@ -84,9 +84,11 @@ WHOLE_CASES = {
         "symbol_size": 744, "first_word": 96,
     }),
     0x21F8: (238, {
-        "status": "NONMATCHING", "matching": 127, "total": 240,
-        "differences": 66, "relocations": 9, "limitations": 23,
-        "symbol_size": 960, "first_word": 32,
+        "status": "NONMATCHING", "matching": 159, "total": 238,
+        "differences": 31, "relocations": 2, "limitations": 25,
+        "symbol_size": 952, "first_word": 157,
+        "first_reason": "HI16/LO16 association differs "
+        "(original: no relocation; candidate: LO16 at word 161)",
     }),
 }
 
