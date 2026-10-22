@@ -3,10 +3,12 @@
  * callers must supply valid table indices and a nonzero metric denominator.
  * Provisional storage/import types are shared with the input/render functions.
  *
- * RESULT: NONMATCHING 70/187 compared words (186 original + 1 extra), 81
- * differences, 3 relocation issues, 21 limitations; 748-byte candidate versus
- * 744-byte original. Words 0-95 match exactly; word 96 (`andi t0` vs `andi t2`)
- * starts the tail's register rotation, with `group` in t0 instead of t2.
+ * RESULT: NONMATCHING 73/186 compared words, 76 differences, 2 relocation
+ * issues, 21 limitations; 744-byte candidate versus 744-byte original. Words
+ * 0-95 match exactly; word 96 (`andi t0` vs `andi t2`) starts the tail's
+ * register rotation, with `group` in t0 instead of t2. Writing the inner
+ * break test as `j > trailing[group]` reproduces the original's single
+ * post-loop sum/exit merge and removes the former extra word.
  */
 #include "libtutoriallist_stubs.h"
 #include "libtutoriallist_panel.h"
@@ -59,7 +61,7 @@ void func_00001F10(void)
         for (j = 0; j < 8; j++) {
             key = libtutoriallist_panel_key(group, func_00006190_panel.leading[group] + j);
             next = func_00006190_panel.extents[key];
-            if (func_00006190_panel.trailing[group] < j)
+            if (j > func_00006190_panel.trailing[group])
                 break;
             sum += next;
         }
