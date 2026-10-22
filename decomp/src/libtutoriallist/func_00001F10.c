@@ -3,15 +3,34 @@
  * callers must supply valid table indices and a nonzero metric denominator.
  * Provisional storage/import types are shared with the input/render functions.
  *
- * RESULT: NONMATCHING 73/186 compared words, 76 differences, 2 relocation
- * issues, 21 limitations; 744-byte candidate versus 744-byte original. Words
- * 0-95 match exactly; word 96 (`andi t0` vs `andi t2`) starts the tail's
- * register rotation, with `group` in t0 instead of t2. Writing the inner
- * break test as `j > trailing[group]` reproduces the original's single
- * post-loop sum/exit merge and removes the former extra word.
+ * RESULT: NONMATCHING 89/186 compared words, 60 differences, 1 relocation
+ * issue, 22 limitations; 744-byte candidate versus 744-byte original. Words
+ * 0-95 match exactly. The original keeps the 4-bit group as a wide value and
+ * narrows it only for the count lookup (0x20C8), so the local helpers below
+ * take `int` for row addressing and `unsigned char` for the count array. The
+ * remaining tail is a pure register permutation: group is t4 instead of t2,
+ * position t2 instead of t4, plus the dependent pointer/value rotation. No
+ * source-order, declaration-order, value-local or pointer variant tested
+ * removed it; `j > trailing[group]` still reproduces the single post-loop
+ * sum/exit merge.
  */
 #include "libtutoriallist_stubs.h"
 #include "libtutoriallist_panel.h"
+
+/* File-local views of the shared lookups. The original keeps the nibble group
+ * wide for row indexing and converts it to a byte only for count[].
+ */
+static inline int panel_count_byte(unsigned char group)
+{
+    return func_00006190_panel.count[group];
+}
+
+static inline int panel_key_wide(int group, int index)
+{
+    if (index >= panel_count_byte(group))
+        return 24;
+    return func_00006190_panel.entries[group][index];
+}
 
 void func_00001F10(void)
 {
@@ -19,7 +38,8 @@ void func_00001F10(void)
     int selected = 0;
     int metric;
     int i;
-    unsigned char group;
+    int group;
+    int lead;
     int position;
     int next;
     int sum;
@@ -51,15 +71,17 @@ void func_00001F10(void)
     func_00006190_panel.extents[24] = 1;
     func_00006190_panel.flags.group = selected_group;
     group = func_00006190_panel.flags.group;
-    position = func_00006190_panel.leading[group] + func_00006190_panel.trailing[group];
+    position = func_00006190_panel.trailing[group];
+    lead = func_00006190_panel.leading[group];
+    position += lead;
     while (selected != position) {
-        if (position >= func_00006190_panel.count[group] - 1)
+        if (position >= panel_count_byte(group) - 1)
             break;
-        next = libtutoriallist_panel_key(group, position + 1);
+        next = panel_key_wide(group, position + 1);
         extent = func_00006190_panel.extents[next];
         sum = 0;
         for (j = 0; j < 8; j++) {
-            key = libtutoriallist_panel_key(group, func_00006190_panel.leading[group] + j);
+            key = panel_key_wide(group, lead + j);
             next = func_00006190_panel.extents[key];
             if (j > func_00006190_panel.trailing[group])
                 break;
@@ -70,6 +92,8 @@ void func_00001F10(void)
         else
             func_00006190_panel.trailing[group]++;
         group = func_00006190_panel.flags.group;
-        position = func_00006190_panel.leading[group] + func_00006190_panel.trailing[group];
+        position = func_00006190_panel.trailing[group];
+        lead = func_00006190_panel.leading[group];
+        position += lead;
     }
 }

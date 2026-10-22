@@ -5509,3 +5509,26 @@ mesmo objeto. Só diferem `lhu` em 0x248C/0x2490 e a ordem dos operandos do
 `addu` em 0x2498. Continua `NONMATCHING`; não houve certificação artificial.
 Fonte SHA-256: `7e2fb7ef84a076ce3e46c3fb710ab1021347ca0e88a3e25b913833fdfa876343`.
 Objeto SHA-256: `14d25c2ec2caf36ccd6de7cfa12d714f24434a377027e71625d99a4576bde0dc`.
+
+### `0x1F10`: contrato estreito/amplo do `group` recuperado
+
+O original guarda o nibble `group` como valor amplo (`andi t2,a1,0xf`) e o
+converte para byte somente na leitura de `count[]` (`andi v1,t2,0xff` em
+0x20C8); o acesso a `leading`/`trailing`/`entries` usa o valor amplo. A fonte
+passou a usar `int group` com dois helpers locais, um para `count[]` (parâmetro
+`unsigned char`) e outro para a linha (parâmetro `int`), preservando exatamente
+esse contrato. O valor de `leading` é carregado uma vez por iteração externa e
+usado no loop interno, como o registrador original em a3.
+
+| Antes R2 | Depois | Diferença restante |
+|---|---|---|
+| 73/186, 744 bytes, 76 diferenças, 2 relocation issues, 21 limitações | **89/186, 744 bytes, 60 diferenças, 1 relocation issue, 22 limitações** | word 96: permutação de registradores (grupo t4/t2, posição t2/t4 e rotação dependente) |
+
+A cauda é isomórfica ao original instrução a instrução; não há diferença de
+tamanho, CFG, imports ou operandos de memória. Foram testadas 24 variantes
+equivalentes de ordem de expressão, ordem de declaração, locais de valor,
+`count`/`index` explícitos, ponteiros persistentes e invertidos, sem remover a
+permutação. Duas compilações integrais independentes produziram o mesmo objeto.
+Continua `NONMATCHING`; nenhuma identidade de dados foi promovida.
+Fonte SHA-256: `ea6b98ab326eb0464775cd62081664d9a6dc4976aae75ae1784d0644742c612b`.
+Objeto SHA-256: `0bbd97b264dad8b7bf9ae6cfa619791a765a2148c9f59fccb786616229fbb086`.
