@@ -12,9 +12,12 @@
  * increment and the narrow base (a1) for this check as separate values.
  * The declaration pressure that reproduces the original homes is: group t2,
  * position t4, j t3, sum t4 (sum declared before j), with group declared
- * before lead. The surviving 11 words are the dependent swap of the wide
- * `&trailing` (original t1, candidate a3) with `lead` (original a3, candidate
- * t1); the narrow base, panel base, group, position, j and sum now match.
+ * before lead. Explicitly materializing both trailing and lead before
+ * `position = lead + trailing;` recovers the original addition operand order
+ * (addu dst, lead, trailing) at words 103 and 175. The surviving 11 words are
+ * the dependent swap of the wide `&trailing` (original t1, candidate a3) with
+ * `lead` (original a3, candidate t1); the narrow base, panel base, group,
+ * position, j, sum and addu operand order now match.
  * After the CSE correction, leading-first ordering, single-expression loads,
  * reversed lead+position forms and panel-field widths all produced 187 words
  * (one extra instruction) or worse; moving lead/position declarations did not
@@ -51,6 +54,7 @@ void func_00001F10(void)
     int position;
     int group;
     int lead;
+    int trailing;
     int i;
     int metric;
 
@@ -78,9 +82,9 @@ void func_00001F10(void)
     func_00006190_panel.extents[24] = 1;
     func_00006190_panel.flags.group = selected_group;
     group = func_00006190_panel.flags.group;
-    position = func_00006190_panel.trailing[group];
+    trailing = func_00006190_panel.trailing[group];
     lead = func_00006190_panel.leading[group];
-    position += lead;
+    position = lead + trailing;
     while (selected != position) {
         if (position >= panel_count_byte(group) - 1)
             break;
@@ -99,8 +103,8 @@ void func_00001F10(void)
         else
             func_00006190_panel.trailing[group]++;
         group = func_00006190_panel.flags.group;
-        position = func_00006190_panel.trailing[group];
+        trailing = func_00006190_panel.trailing[group];
         lead = func_00006190_panel.leading[group];
-        position += lead;
+        position = lead + trailing;
     }
 }

@@ -5866,3 +5866,64 @@ preservada, não relaxada).
   `NONMATCHING` com 11 diferenças. Nenhum padding, NOP, branch morto, código
   morto, `volatile` injustificado, asm inline, UB, cast que mude semântica,
   identidade de dados fabricada ou alias artificial foi introduzido.
+
+## SETO-DECOMP-030 — Register Allocation & Scheduler Recovery Analysis
+
+Esta rodada investigou a fundo os mecanismos de alocação de registradores e scheduling do compilador oficial Metrowerks (`mwccpsp_3.0.1_219`, `-O4,p -sdatathreshold 0`), com foco em `0x1F10` (Priority A), `0x2F4` (Priority B) e `0x1764` (Priority C).
+
+### Tabela de Progresso e Evidência
+
+| Função | Antes | Depois | Mecanismo investigado / recuperado | Bloqueador remanescente |
+|---|---|---|---|---|
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 744 B) | NONMATCHING (137/186, 11 diffs, 744 B) | Recuperada ordem de operandos `addu` (`lead + trailing`) nas words 103 e 175; liveness e alocação isolados para swap puro `a3`/`t1` | Heurística de alocação de temporários CSE no pool de registradores voláteis (`lead` em `t1` vs `a3`; `&trailing` em `a3` vs `t1`) |
+| `0x2F4` | NONMATCHING (134/253, 99 diffs, 1012 B) | NONMATCHING (134/253, 99 diffs, 1012 B) | Diagnóstico da word 81 (`lui a0` vs `lui v1`): hoisting de `&count` no delay slot de `lbu` | Prioridade do scheduler do MWCC entre store de spill (`sw v0`) e antecipação de endereço constante |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | NONMATCHING (42/182, 140 diffs, 728 B) | Congelado conforme TASK.md; sem novas evidências de alocador | Conflito simultâneo entre mapa de saved registers e schedule de delay slot |
+| `0x8F0` | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | Preservado integralmente (baseline 029) | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (190/238, 0 diffs, 952 B) | INCONCLUSIVE (190/238, 0 diffs, 952 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+
+### Análise Aprofundada
+
+#### 1. Priority A (`func_00001F10.c`)
+- Na análise inicial (R1), levantou-se a hipótese de que todas as 11 diferenças decorreriam de um swap simétrico `a3`/`t1`. Essa conclusão revelou-se incompleta perante a descompilação de máquina:
+  - Nas words 103 e 175, o original emite `addu t4, a3, v1` (`rs = lead`, `rt = trailing`).
+  - O candidato anterior emitia `addu t4, v1, t1` gerado a partir de `position += lead;`. Mesmo mapeando `t1` para `a3`, a ordem dos operandos de adição permanecia invertida (`rs = trailing`, `rt = lead`).
+- **Recuperação Efetuada (R2)**:
+  - Testou-se a hipótese de materialização explícita de `trailing` e `lead` em `position = lead + trailing;`.
+  - O MWCC PSP gerou exatamente `addu t4, t1, v1` (`rs = lead`, `rt = trailing`) tanto na word 103 quanto na word 175.
+  - Isso **recupera com 100% de fidelidade a ordem dos operandos da instrução original**.
+  - Com essa correção, todas as 11 diferenças de instrução remanescentes (words 100, 101, 102, 103, 135, 143, 161, 167, 173, 174, 175) tornaram-se estritamente e comprovadamente o swap 1-para-1 de alocação de registradores entre `lead` (original `a3`, candidato `t1`) e o ponteiro temporário `&trailing[group]` (original `t1`, candidato `a3`).
+- **Linha do tempo de liveness comprovada**:
+  - `&trailing[group]` é definido na word 100 (`addu t1, a0, a1`), utilizado na 101 (`lhu v1, 0(t1)`), sobrevive a todo o loop interno, utilizado na 161 (`lhu v1, 0(t1)`) e 167 (`sh v1, 0(t1)`), e redefinido na continuação em 174 (`addiu t1, a1, 12`).
+  - `lead` é definido na word 102 (`lhu a3, 0(t0)`), utilizado na 103 (`addu t4, a3, v1`), 135 (`sll t2, a3, 1`) e 143 (`addu a1, a3, t3`), morrendo dentro do loop na word 143 antes de ser recarregado na 173 (`lhu a3, 8(a1)`).
+- **Hipóteses adicionais testadas e refutadas**:
+  - Inversão de declaração `leading`/`trailing`: quebra a ordem de carga e desestabiliza a word 99.
+  - Permutação de posição de declaração de `trailing`: mantem idênticas as 11 diferenças sem alterar a preferência de registrador do MWCC.
+  - Qualificador `register int lead;`: ignorado pelo otimizador de alocação global (`-O4,p`), gerando binário idêntico.
+- **Conclusão**: O código-fonte aceito incorpora `position = lead + trailing;`, recuperando a ordem de operandos de adição, preservando rigorosamente o tamanho exato de 744 B, 0 problemas de relocação e equivalência funcional completa.
+
+#### 2. Priority B (`func_000002F4.c`)
+- O desvio inicial na word 81 (`lui a0, ...` vs `lui v1, ...`) foi completamente dissecado.
+- Causa identificada: após a chamada `func_000008F0`, o original armazena imediatamente `renderer` no stack (`sw v0, 44(sp)`) preenchendo o load delay slot de `lbu a1, 24980(a0)` (flags), liberando `a0` para ser reutilizado na carga de `count`.
+- No candidato, o compilador antecipa o cálculo do endereço base constante de `&count` no delay slot, necessitando de um registrador adicional (`v1`) para a base de `flags` e postergando o store de `v0` para a word 89.
+- Hipóteses testadas em R2:
+  - Reordenação de inicialização de acumuladores (`total`, `preceding`, `leading`): o agendador do MWCC mantém o hoisting de endereços invariantes.
+  - Substituição da estrutura de loop por `while (i < count)`: produz representação intermediária equivalente, mantendo as 99 diffs e o desvio na word 81.
+  - Variável local explícita `count = func_00006190_panel.count[group]`: piorou as diferenças de 99 para 101.
+- Conclusão: a representação de 1012 B com lifetime stack-backed para `&renderer` permanece como o melhor baseline verificado. O objetivo de recuperação do scheduler em `0x2F4` permanece não resolvido a nível de fonte C sem constructs sintéticos ou inline asm inadmissíveis.
+
+#### 3. Priority C (`func_00001764.c`)
+- Mantida rigorosamente congelada conforme estipulado em TASK.md Section 3, visto que nenhuma nova mecânica de alocador foi evidenciada nas funções primárias aplicável a seu prólogo.
+- Preservados os intrinsics Allegrex max/min e o ABI de 9 argumentos de `func_000014E0`.
+
+### Validação e Cobertura
+- **Suíte de Testes Windows (`py -3.12 -m pytest -q`)**: 790 passed, 39 skipped em 197 s.
+- **Suíte de Testes WSL2 (`pytest -q tests/integration/test_libtutoriallist_025_real.py`)**: 1 passed (todas as 10 verificações de compilação limpas, incluindo asserção estrita dos opcodes `addu t4, t1, v1` nas words 103 e 175 de `0x1F10`).
+- **Opt-ins Reais WSL2 (019–023)**: 5 passed em 91 s.
+- **Opt-ins Reais Callbacks/Real WSL2**: 3 passed em 41 s.
+- **Integridade da Certificação**: Preservadas rigorosamente as **16 funções `MATCHED` / 912 certified words** e as **37 funções com zero diferenças de instrução**.
+- **SHA-256 dos Objetos Verificados**:
+  - `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (fonte `d024c56a52319e61298916e4f3717b864ab25d88c6ade4b20c2f8e8fd14a3f60`)
+  - `0x2F4`: `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c`
+  - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
