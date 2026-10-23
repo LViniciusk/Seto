@@ -2,11 +2,14 @@
  * original arithmetic. Coordinates/products/shifts must fit int; imports and
  * globals are usage-derived, with no invented data identity or null guards.
  *
- * RESULT: NONMATCHING 52/342 compared words (333 original + 9 extra candidate
- * words), 284 differences, 68 relocation issues, one HI16/LO16 limitation;
- * 1368-byte candidate versus 1332-byte original. First divergence is word 15:
- * the candidate spills `height` to 0x4c(sp), while the original keeps it in s2
- * through 0xb44 and later reuses s2 as the loop counter.
+ * RESULT: INCONCLUSIVE 327/333 compared words, zero instruction differences,
+ * zero relocation issues, three HI16/LO16 data-identity limitations;
+ * 1332-byte candidate equals the original size. The pre-loop and loop now
+ * match word-for-word: height remains in s2, and the loop homes are
+ * i=s2/icon=s1/left_tile=s3. The repeated derived offsets deliberately use
+ * distinct 32-bit arithmetic types (int / unsigned int / long) at their
+ * first, second and third occurrences, reproducing the original's
+ * rematerialization (CSE) boundaries without changing any 32-bit value.
  */
 #include "libtutoriallist_stubs.h"
 #include "libtutoriallist_panel.h"
@@ -15,16 +18,16 @@ void *func_000008F0(void *renderer, int x, int y, int width, int height)
 {
     int first;
     int second;
-    int atlas;
     int top;
+    int atlas;
     int bottom;
     int right;
+    int left_tile;
     int i;
-    int row;
     int icon;
+    int row;
     int half;
     int dim;
-    int left_tile;
     int right_tile;
 
     first = func_00001D08(0x1002);
@@ -46,17 +49,18 @@ void *func_000008F0(void *renderer, int x, int y, int width, int height)
     renderer = func_00003AE8(renderer, right, bottom, 0, 0x62, atlas + 26, 0, 0);
     renderer = func_00003AF0(renderer, 1, 6, width - 20, 6);
     renderer = func_00003AE8(renderer, x + 6, top, 0, 0x46, atlas, 0, 0);
-    renderer = func_00003AE8(renderer, x + 6, bottom, 0, 0x46, atlas + 11, 0, 0);
+    renderer = func_00003AE8(renderer, x + 6u, bottom, 0, 0x46, atlas + 11u, 0, 0);
     renderer = func_00003AF0(renderer, 6, 1, 6, height - 27);
     renderer = func_00003AE8(renderer, x, top + 6, 0, 0x40, atlas + 6, 0, 0);
-    renderer = func_00003AF0(renderer, 14, 1, 14, height - 27);
-    renderer = func_00003AE8(renderer, right, top + 6, 0, 0x62, atlas + 6, 0, 0);
-    renderer = func_00003AF0(renderer, 1, 1, width - 20, height - 27);
-    renderer = func_00003AE8(renderer, x + 6, top + 6, 0, 0x46, atlas + 6, 0, 0);
+    renderer = func_00003AF0(renderer, 14, 1, 14, height - 27u);
+    renderer = func_00003AE8(renderer, right, top + 6u, 0, 0x62, atlas + 6u, 0, 0);
+    renderer = func_00003AF0(renderer, 1, 1, width - 20u, height - 27L);
+    renderer = func_00003AE8(renderer, x + 6L, top + 6L, 0, 0x46, atlas + 6L, 0, 0);
     func_00004270(13, 13);
+    i = 0;
     row = 0;
     icon = 0;
-    for (i = 0; i < 2; i++) {
+    for (; i < 2; i++) {
         half = width / (2 - i);
         width -= half;
         dim = 0;

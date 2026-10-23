@@ -746,3 +746,180 @@ def test_candidate_input_guard_rejects_a_symlinked_source_directory(tmp_path: Pa
         triage._reject_repo_symlink_components(aliased, repo, "candidate source")
 
     assert candidate.read_text(encoding="utf-8") == "int unrelated(void) { return 0; }\n"
+
+
+def test_ensure_018_reports_rejects_symlink_in_prx_file(tmp_path: Path) -> None:
+    fake_repo = tmp_path / "repo"
+    prx_file = fake_repo / triage.MODULE_RELATIVE
+    prx_file.parent.mkdir(parents=True)
+    outside_file = tmp_path / "outside.prx"
+    outside_file.write_bytes(b"outside PRX content")
+    _create_symlink_or_skip(prx_file, outside_file)
+
+    with pytest.raises(triage.ProbeError, match="symlink component"):
+        triage.ensure_018_reports(fake_repo)
+
+    build_dir = fake_repo / "build" / "seto018"
+    assert not (build_dir / "baseline.json").exists()
+    assert not (build_dir / "triage.json").exists()
+
+
+def test_ensure_018_reports_rejects_symlink_in_ancestor_directory(tmp_path: Path) -> None:
+    fake_repo = tmp_path / "repo"
+    private_dir = fake_repo / "private"
+    private_dir.mkdir(parents=True)
+    target_dir = tmp_path / "target_original"
+    target_dir.mkdir(parents=True)
+    target_prx = target_dir / "PSP_GAME" / "USRDIR" / "gmodule" / "libtutoriallist.prx"
+    target_prx.parent.mkdir(parents=True)
+    target_prx.write_bytes(b"target content")
+    _create_symlink_or_skip(private_dir / "original", target_dir)
+
+    with pytest.raises(triage.ProbeError, match="symlink component"):
+        triage.ensure_018_reports(fake_repo)
+
+
+def test_ensure_018_reports_rejects_paths_escaping_allowed_private_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_repo = tmp_path / "repo"
+    outside_dir = fake_repo / "src"
+    outside_dir.mkdir(parents=True)
+    fake_prx = outside_dir / "libtutoriallist.prx"
+    fake_prx.write_bytes(b"unauthorized content")
+    monkeypatch.setattr(triage, "MODULE_RELATIVE", Path("src/libtutoriallist.prx"))
+
+    read_calls = []
+    original_sha256_file = triage.sha256_file
+
+    def spy_sha256_file(path: Path) -> str:
+        read_calls.append(path)
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(triage, "sha256_file", spy_sha256_file)
+
+    with pytest.raises(triage.ProbeError, match="escapes allowed tree"):
+        triage.ensure_018_reports(fake_repo)
+
+    # Path validation must occur before reading the file or producing reports.
+    assert len(read_calls) == 0
+    build_dir = fake_repo / "build" / "seto018"
+    assert not (build_dir / "baseline.json").exists()
+
+
+def test_ensure_018_reports_rejects_paths_escaping_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_repo = tmp_path / "repo"
+    fake_repo.mkdir(parents=True)
+    outside_file = tmp_path / "completely_outside.prx"
+    monkeypatch.setattr(triage, "MODULE_RELATIVE", outside_file)
+
+    with pytest.raises(triage.ProbeError, match="escapes the repository"):
+        triage.ensure_018_reports(fake_repo)
+
+
+def test_ensure_018_reports_accepts_legitimate_prx_and_verifies_sha256(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_repo = tmp_path / "repo"
+    prx_file = fake_repo / triage.MODULE_RELATIVE
+    prx_file.parent.mkdir(parents=True)
+
+    shared_nid = 0x12345678
+    code = (
+        word(jr())
+        + word(0)
+    )
+    image = build_import_module(
+        (StubSpec("libAlpha", (shared_nid,)),),
+        code=code,
+    )
+    prx_file.write_bytes(image.data)
+    synth_sha256 = hashlib.sha256(image.data).hexdigest()
+    monkeypatch.setattr(triage, "EXPECTED_MODULE_SHA256", synth_sha256)
+
+    # Provide valid Ghidra boundaries evidence report
+    parsed = elf.parse(image.data, "synthetic.prx")
+    baseline = triage.build_baseline(parsed, synth_sha256)
+    ghidra_report = _ghidra_report(baseline)
+    build_dir = fake_repo / "build" / "seto018"
+    ghidra_path = build_dir / triage.GHIDRA_EVIDENCE_NAME
+    triage.ensure_build_dir(build_dir, build_dir)
+    triage.write_build_text(ghidra_path, triage.canonical_json(ghidra_report), build_dir)
+
+    baseline_path, triage_path, returned_ghidra_path = triage.ensure_018_reports(fake_repo)
+
+    assert baseline_path.is_file()
+    assert triage_path.is_file()
+    assert returned_ghidra_path.is_file()
+    assert returned_ghidra_path == ghidra_path
+
+    saved_baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert saved_baseline["module"]["sha256"] == synth_sha256
+    saved_triage = json.loads(triage_path.read_text(encoding="utf-8"))
+    assert saved_triage["module"]["sha256"] == synth_sha256
+
+
+def test_ensure_018_reports_preserves_sha256_mismatch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_repo = tmp_path / "repo"
+    prx_file = fake_repo / triage.MODULE_RELATIVE
+    prx_file.parent.mkdir(parents=True)
+    prx_file.write_bytes(b"legitimate path but wrong sha256 bytes")
+
+    with pytest.raises(triage.ProbeError, match="libtutoriallist.prx SHA-256 differs"):
+        triage.ensure_018_reports(fake_repo)
+
+
+def test_ensure_018_reports_preserves_blocked_when_ghidra_evidence_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_repo = tmp_path / "repo"
+    prx_file = fake_repo / triage.MODULE_RELATIVE
+    prx_file.parent.mkdir(parents=True)
+
+    shared_nid = 0x12345678
+    code = word(jr()) + word(0)
+    image = build_import_module((StubSpec("libAlpha", (shared_nid,)),), code=code)
+    prx_file.write_bytes(image.data)
+    synth_sha256 = hashlib.sha256(image.data).hexdigest()
+    monkeypatch.setattr(triage, "EXPECTED_MODULE_SHA256", synth_sha256)
+
+    # Neither ghidra-boundaries.json nor ghidra-output.log is provided
+    with pytest.raises(triage.ProbeError, match="authorized Ghidra output log or evidence is unavailable") as exc_info:
+        triage.ensure_018_reports(fake_repo)
+
+    assert exc_info.value.status == "BLOCKED"
+
+
+def test_ensure_018_reports_preserves_fail_when_ghidra_evidence_incompatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_repo = tmp_path / "repo"
+    prx_file = fake_repo / triage.MODULE_RELATIVE
+    prx_file.parent.mkdir(parents=True)
+
+    shared_nid = 0x12345678
+    code = word(jr()) + word(0)
+    image = build_import_module((StubSpec("libAlpha", (shared_nid,)),), code=code)
+    prx_file.write_bytes(image.data)
+    synth_sha256 = hashlib.sha256(image.data).hexdigest()
+    monkeypatch.setattr(triage, "EXPECTED_MODULE_SHA256", synth_sha256)
+
+    # Provide incompatible Ghidra evidence report (different module_sha256)
+    parsed = elf.parse(image.data, "synthetic.prx")
+    baseline = triage.build_baseline(parsed, synth_sha256)
+    ghidra_report = _ghidra_report(baseline)
+    ghidra_report["module_sha256"] = "0" * 64
+
+    build_dir = fake_repo / "build" / "seto018"
+    ghidra_path = build_dir / triage.GHIDRA_EVIDENCE_NAME
+    triage.ensure_build_dir(build_dir, build_dir)
+    triage.write_build_text(ghidra_path, triage.canonical_json(ghidra_report), build_dir)
+
+    with pytest.raises(triage.ProbeError, match="Ghidra evidence belongs to another module SHA-256") as exc_info:
+        triage.ensure_018_reports(fake_repo)
+
+    assert exc_info.value.status == "FAIL"

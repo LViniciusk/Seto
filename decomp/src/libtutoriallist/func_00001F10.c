@@ -3,27 +3,29 @@
  * callers must supply valid table indices and a nonzero metric denominator.
  * Provisional storage/import types are shared with the input/render functions.
  *
- * RESULT: NONMATCHING 97/186 compared words, 52 differences, 1 relocation
- * issue, 22 limitations; 744-byte candidate versus 744-byte original. Words
- * 0-96 match exactly. The original keeps the 4-bit group as a wide value and
- * narrows it only for the count lookup (0x20C8), so the local helpers below
- * take `int` for row addressing and `unsigned char` for the count array.
- * Declaring the locals in reverse first-use order is the codegen lever that
- * fixes the original group/position homes (group t2, position t4); forward
- * order left them swapped (group t4, position t2) and produced 60 differences.
- * The remaining 52 words are the dependent permutation of the scaled group
- * (a1), the two bases (t0/t1), the panel base (a2) and lead (a3): the
- * candidate CSEs `2 * group` across the loop and keeps it in t1, so
- * `&trailing` moves to a3 and the panel base to a1. More declaration
- * permutations, statement reordering, explicit operand swaps and per-use
- * locals did not move that allocation; `j > trailing[group]` still
- * reproduces the single post-loop sum/exit merge.
+ * RESULT: NONMATCHING 137/186 compared words, 11 differences, 0 relocation
+ * issues, 23 limitations; 744-byte candidate versus 744-byte original. Words
+ * 0-99 match exactly. The inner trailing-bound check (0x2140) indexes
+ * `trailing` with the same byte-narrowed group as `count[]` (0x20C8), so MWCC
+ * reuses the loop-body count base (a1) instead of retaining the preheader's
+ * wide `2 * group`; the original keeps the wide `&trailing` (t1) for the tail
+ * increment and the narrow base (a1) for this check as separate values.
+ * The declaration pressure that reproduces the original homes is: group t2,
+ * position t4, j t3, sum t4 (sum declared before j), with group declared
+ * before lead. The surviving 11 words are the dependent swap of the wide
+ * `&trailing` (original t1, candidate a3) with `lead` (original a3, candidate
+ * t1); the narrow base, panel base, group, position, j and sum now match.
+ * After the CSE correction, leading-first ordering, single-expression loads,
+ * reversed lead+position forms and panel-field widths all produced 187 words
+ * (one extra instruction) or worse; moving lead/position declarations did not
+ * change the remaining pair.
  */
 #include "libtutoriallist_stubs.h"
 #include "libtutoriallist_panel.h"
 
 /* File-local views of the shared lookups. The original keeps the nibble group
- * wide for row indexing and converts it to a byte only for count[].
+ * wide for rows and the outer trailing/leading reloads, but narrows it to a
+ * byte for count[] and the inner trailing[] bound check.
  */
 static inline int panel_count_byte(unsigned char group)
 {
@@ -43,12 +45,12 @@ void func_00001F10(void)
     int selected = 0;
     int extent;
     int key;
-    int j;
     int sum;
+    int j;
     int next;
     int position;
-    int lead;
     int group;
+    int lead;
     int i;
     int metric;
 
@@ -88,7 +90,7 @@ void func_00001F10(void)
         for (j = 0; j < 8; j++) {
             key = panel_key_wide(group, lead + j);
             next = func_00006190_panel.extents[key];
-            if (j > func_00006190_panel.trailing[group])
+            if (j > func_00006190_panel.trailing[(unsigned char)group])
                 break;
             sum += next;
         }

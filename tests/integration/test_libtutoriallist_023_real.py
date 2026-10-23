@@ -88,13 +88,13 @@ def test_023_shared_state_identity_and_fresh_comparisons() -> None:
 
     config = REPO_ROOT / "config" / "wsl" / "seto.toml"
     build_root = triage.validated_build_root(REPO_ROOT, subdir="seto023")
-    evidence_dir = build_root / "baseline" / "018"
-    baseline_path = evidence_dir / "baseline.json"
-    triage_path = evidence_dir / "triage.json"
-    ghidra_path = evidence_dir / triage.GHIDRA_EVIDENCE_NAME
+    try:
+        baseline_path, triage_path, ghidra_path = triage.ensure_018_reports(REPO_ROOT)
+    except triage.ProbeError as exc:
+        pytest.fail(f"BLOCKED: {exc}")
     for path in (config, baseline_path, triage_path, ghidra_path):
         if not path.is_file() or path.is_symlink():
-            pytest.fail(f"BLOCKED: required 023 input is absent or unsafe: {path.name}")
+            pytest.fail(f"BLOCKED: required 018 input is absent or unsafe: {path.name}")
 
     module_sha = sha256_file(MODULE)
     assert module_sha == EXPECTED_SHA256
@@ -102,7 +102,7 @@ def test_023_shared_state_identity_and_fresh_comparisons() -> None:
     baseline = triage.build_baseline(module, module_sha)
     stored_baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     assert triage.canonical_json(stored_baseline) == triage.canonical_json(baseline)
-    ghidra = triage._load_ghidra_report(ghidra_path, build_root)
+    ghidra = triage._load_ghidra_report(ghidra_path, ghidra_path.parent)
     rebuilt_triage = triage.build_triage(baseline, ghidra)
     stored_triage = json.loads(triage_path.read_text(encoding="utf-8"))
     assert triage.canonical_json(stored_triage) == triage.canonical_json(rebuilt_triage)

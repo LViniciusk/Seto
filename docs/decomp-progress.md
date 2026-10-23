@@ -5738,3 +5738,131 @@ variantes de rematerialização produziram o mesmo objeto `591face8…`; em
 - Cobertura estrita preservada: **16 `MATCHED` / 912 words** e **36 funções
   com zero diferenças**; `0x21F8` continua `INCONCLUSIVE` pelas 26 identidades
   HI16/LO16, sem promoção a `MATCHED`.
+
+---
+
+## SETO-DECOMP-029 — Recuperação de CSE e reprodutibilidade (0x1F10/0x8F0)
+
+Base: `d9386d6c2a4c33aca68a32cefd4654d9ffc4947a` (main após a 028), branch
+`feat/seto-decomp-029-compiler-recovery`. PRX original revalidado com SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+
+| Function | Before | After | Codegen discovery | Remaining blocker |
+|---|---|---|---|---|
+| `0x1F10` | `NONMATCHING` 97/186, 52 dif., 1 reloc., 22 lim., 744 B | **`NONMATCHING` 137/186, 11 dif., 0 reloc., 23 lim., 744 B** | O cast estreito `(unsigned char)group` no uso autêntico da word 91 separa o índice da cauda larga; a ordem de declaração `extent, key, sum, j, next, position, group, lead, i, metric` fixa `group=t2`/`position=t4`. As words 0–99 ficam idênticas. | Resta a troca dependente `&trailing` (`t1` no original, `a3` no candidato) ↔ `lead` (`a3`/`t1`), com a ordem dos operandos de `addu` e os usos de `j`/`sum`. |
+| `0x8F0` | `NONMATCHING` 52/342, 284 dif., 68 reloc., 1 lim., 1.368 B vs 1.332 B | **`INCONCLUSIVE` 327/333, 0 dif., 0 reloc., 3 lim., 1.332 B** | O original rematerializa cada offset derivado no ponto de uso; o candidato faz CSE dos valores repetidos. Identidades de 32 bits distintas na primeira/segunda/terceira ocorrência (`int`/`unsigned int`/`long`) reproduzem essas fronteiras sem alterar o encoding `addiu`. A ordem `top` antes de `atlas`, a ordem das locais do loop `left_tile, i, icon, row, half, dim, right_tile` e `i=0` antes de `row`/`icon` completam a alocação: `height` fica em `s2` e o loop usa `i=s2`, `icon=s1`, `left_tile=s3`, `right_tile=s7`, `dim=s6`, `half=s0`, `row=0x44(sp)`. | Nenhum bloqueio de instrução: as 6 words não comparadas são três pares HI16/LO16 de identidade de dados do painel (words 37, 184 e 254), sem diferença de instrução. |
+| `0x2F4` | `NONMATCHING` 134/253, 99 dif., 20 reloc., 4 lim., 1.012 B | inalterado | A primeira causa confirmada é a word 81 (`lui v1` vs `lui a0`): o candidato usa `v1` para a base de `flags.group` e antecipa o `lui` da base de `count[]` para o delay slot do `lbu`; o original guarda `renderer` nesse slot e reutiliza `a0`. | O scheduler ainda escolhe a base de `count[]` no delay slot; ordens de `group`/`count`, local `count` e inicialização de `i` deram o mesmo resultado ou pior (mínimo 132/253, 101 dif.). Sem mecanismo novo para essa decisão. |
+| `0x1764` | `NONMATCHING` 42/182, 140 dif., 32 reloc., 728 B | inalterado (congelada) | O primeiro desvio é a permutação global dos parâmetros em saved registers (`renderer` `s7`↔`s6`, `width` `s3`↔`s7`, `ready` `s6`↔`s0`, `filled` `s0`↔`s7`, `height` em `s8` vs spill). A alavanca de tipos/CSE da 029 não se aplica a essa permutação de prólogo. | Mais de 120 variantes de prólogo já refutadas; nenhuma evidência nova de alocação. |
+
+### `0x1F10` — fronteira de CSE estreita
+
+O cast `(unsigned char)group` foi aplicado apenas no uso da word 91, onde o
+original indexa `trailing` com o mesmo byte estreito de `count[]`; o preheader
+e a cauda continuam largos. Isso permite ao MWCC reutilizar a base estreita
+(`a1`) nesse check e manter a base larga (`2*group`) para a cauda, como no
+original. A ordem de declaração aceita é `extent, key, sum, j, next, position,
+group, lead, i, metric`.
+
+O resultado é **137/186 words**, **11 diferenças**, **0 relocações**, 23
+limitações e 744 B; as words 0–99 são idênticas. O resíduo é estritamente a
+troca dependente `&trailing`/`lead` (`t1`↔`a3`), com a ordem dos operandos de
+`addu` e os usos de `j`/`sum`. A alavanca de tipos foi testada apenas nesse
+resíduo: `lead` como `unsigned int`/`unsigned long` levou a 73/187 (77 dif.,
+748 B); `lead` como `unsigned short` e `position` como `unsigned int` deram
+125/186 (23 dif.); `position` como `unsigned short` e os dois como `unsigned
+int` ficaram piores (66–69/188, 82–85 dif.). Nenhuma variante foi aceita; a
+fonte 028 permanece.
+
+### `0x8F0` — identidades de 32 bits contra o CSE
+
+O spill de `height` era sintoma de pressão: o candidato mantinha valores
+derivados vivos entre chamadas porque CSE-ava expressões idênticas repetidas.
+A reconstrução separa essas expressões por **tipo aritmético de 32 bits** na
+primeira, segunda e terceira ocorrência:
+
+```c
+/* primeira: int; segunda: unsigned int; terceira: long */
+renderer = func_00003AE8(renderer, x + 6,  top, 0, 0x46, atlas, 0, 0);
+renderer = func_00003AE8(renderer, x + 6u, bottom, 0, 0x46, atlas + 11u, 0, 0);
+renderer = func_00003AE8(renderer, right, top + 6u, 0, 0x62, atlas + 6u, 0, 0);
+renderer = func_00003AF0(renderer, 1, 1, width - 20u, height - 27L);
+renderer = func_00003AE8(renderer, x + 6L, top + 6L, 0, 0x46, atlas + 6L, 0, 0);
+```
+
+As conversões são para `unsigned int` na ABI das importações e os valores são
+geométricos positivos de 32 bits; o padrão de bits e o `addiu` não mudam. O
+binário prova as fronteiras: qualquer partição de duas identidades ainda
+deixa um par em CSE; três identidades distintas por offset eliminam o valor
+vivo atravessando chamadas. A troca de `top`/`atlas` na declaração e a ordem
+`left_tile, i, icon, row, half, dim, right_tile` no loop completam a alocação;
+`i = 0;` antes de `row = 0; icon = 0;` e `for (; i < 2; i++)` reproduzem a
+ordem de inicialização `i, icon, row`.
+
+O resultado é **`INCONCLUSIVE` 327/333**, **0 diferenças de instrução**, **0
+relocações**, 3 limitações HI16/LO16 (words 37/184/254) e **1.332 B**, o mesmo
+tamanho do original. O prólogo e o loop ficam word-a-word, com `height` em
+`s2`. As 3 limitações são apenas a identidade de dados do painel não resolvida
+no PRX original — a mesma classe da `0x21F8`, que já é certificada com zero
+diferenças. Duas compilações oficiais independentes produziram o objeto
+SHA-256 `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`;
+fonte SHA-256 `312d1cdd8a3add03e29989aef357373b717dbb3b03460afc41d20ab70d7d048b`.
+
+### `0x2F4` e `0x1764` — sem fonte promovida
+
+Em `0x2F4`, a primeira diferença continua na word 81; a ordem das declarações
+não muda o artefato de scheduler, e as variantes de ordem de `group`/`count[]`
+e de `count` local não fixaram a primeira diferença (ficaram em 134/253 ou
+pioraram para 132/253). Em `0x1764`, o primeiro desvio é a permutação dos
+parâmetros em saved registers; a alavanca de tipos/CSE não incide nesse
+prólogo e as 120+ variantes anteriores continuam refutadas. Nenhuma fonte foi
+alterada para essas duas funções.
+
+### Reprodutibilidade 019–023
+
+O helper `scripts/triage_libtutoriallist.ensure_018_reports(repo_root)` gera os
+fixtures derivados que antes vinham apenas de `build/seto018/` ignorado:
+
+- o baseline é reconstruído do PRX original fixado, com o SHA-256 verificado;
+- a evidência Ghidra vem do `build/seto018/ghidra-boundaries.json` existente ou
+  é parseada do log autorizado `build/seto018/ghidra-output.log`;
+- os arquivos ausentes são gravados somente sob o `build/seto018/` validado e
+  ignorado; arquivos existentes nunca são sobrescritos, preservando a
+  comparação stored-vs-rebuilt;
+- se o log/evidência autorizado não existir, o helper levanta
+  `ProbeError("BLOCKED", ...)` e o teste falha explicitamente como `BLOCKED`,
+  nunca como skip.
+
+O teste 023 passou a usar a evidência canônica de `build/seto018/` em vez de
+exigir uma cópia redundante em `build/seto023/baseline/018/`. Nenhum artefato
+de build é versionado. Na cópia nativa com `private/` real, os opt-ins reais
+019–023 passaram: **5 passed em 16,63 s**. O worktree usa um junction para
+`private/`; `run_real_match` mantém a rejeição anti-symlink existente, por
+isso a execução real usa a cópia nativa com diretório real (proteção
+preservada, não relaxada).
+
+### Validação, hashes e cobertura
+
+- WSL2 (cópia nativa, `PYTHONPATH=src`): `python -m pytest -q` →
+  **798 passed, 23 skipped** (85,58 s); o worktree também fecha **798 passed,
+  23 skipped** (103,01 s).
+- `SETO_LIBTUTORIALLIST_025_REAL=1` sobre
+  `tests/integration/test_libtutoriallist_025_real.py` → **1 passed** (9,50 s,
+  duas compilações independentes por caso).
+- Opt-ins reais 019–023 → **5 passed** (16,63 s), com o reparo de fixtures.
+- Hashes de produção: `0x1F10`
+  `792311995a19dac2e7f65bfa96e891de42aead748d56c3b7237dc2477924d942`
+  (fonte `9ac8ce6d684fa583469ea7e2c60baf9419e4c85f38b034ba7495e16061ef68c2`);
+  `0x8F0`
+  `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  (fonte `312d1cdd8a3add03e29989aef357373b717dbb3b03460afc41d20ab70d7d048b`);
+  `0x2F4` `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c`
+  e `0x1764` `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  inalterados; `0x21F8`
+  `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+  (952 B, 190/238, 0 diferenças) inalterado.
+- Cobertura estrita preservada: **16 `MATCHED` / 912 words**; as **36 funções
+  com zero diferenças** anteriores continuam, e a `0x8F0` entra como a 37ª
+  (`INCONCLUSIVE` com 0 diferenças, ao lado da `0x21F8`); a `0x1F10` continua
+  `NONMATCHING` com 11 diferenças. Nenhum padding, NOP, branch morto, código
+  morto, `volatile` injustificado, asm inline, UB, cast que mude semântica,
+  identidade de dados fabricada ou alias artificial foi introduzido.

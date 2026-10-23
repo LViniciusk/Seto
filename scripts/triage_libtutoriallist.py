@@ -1046,6 +1046,70 @@ def _load_ghidra_report(path: Path, build_root: Path) -> dict[str, object]:
     return value
 
 
+def ensure_018_reports(
+    repo_root: Path = REPO_ROOT, *, ghidra_log: Path | None = None
+) -> tuple[Path, Path, Path]:
+    """Materialize the canonical 018 evidence under the guarded build root.
+
+    Missing derived reports are regenerated from the pinned original PRX with
+    the same deterministic builders used by the CLI.  The Ghidra evidence is
+    taken from the existing report, or parsed from an authorized Ghidra log
+    placed under ``build/seto018/``.  Existing reports are never overwritten,
+    so callers can still compare stored evidence against a fresh rebuild.  A
+    missing log/evidence is an explicit BLOCKED condition, not a skip.
+    """
+    build_root = validated_build_root(repo_root, subdir="seto018")
+    ensure_build_dir(build_root, build_root)
+    baseline_path = build_root / "baseline.json"
+    triage_path = build_root / "triage.json"
+    ghidra_path = build_root / GHIDRA_EVIDENCE_NAME
+
+    prx_input = repo_root / MODULE_RELATIVE
+
+    _reject_repo_symlink_components(
+        prx_input, repo_root, "original PRX"
+    )
+
+    prx_path = repo_path(
+        prx_input,
+        repo_root=repo_root,
+        allowed_root=(repo_root / "private").resolve(),
+    )
+
+    actual_sha256 = sha256_file(prx_path)
+    verify_module_sha256(actual_sha256)
+    baseline = build_baseline(elf.parse(prx_path), actual_sha256)
+
+    if ghidra_path.is_file():
+        ghidra_report = _load_ghidra_report(ghidra_path, build_root)
+    else:
+        if ghidra_log is None:
+            log_input = build_root / "ghidra-output.log"
+        elif ghidra_log.is_absolute():
+            log_input = ghidra_log
+        else:
+            log_input = repo_root / ghidra_log
+        if not log_input.is_file():
+            raise ProbeError(
+                "BLOCKED", "authorized Ghidra output log or evidence is unavailable"
+            )
+        prepare_build_file(log_input, build_root)
+        try:
+            log_text = log_input.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ProbeError("FAIL", f"cannot read Ghidra output log: {exc}") from exc
+        ghidra_report = parse_ghidra_output(log_text, baseline)
+        validate_ghidra_evidence(ghidra_report, baseline)
+        write_build_text(ghidra_path, canonical_json(ghidra_report), build_root)
+
+    if not baseline_path.is_file():
+        write_build_text(baseline_path, canonical_json(baseline), build_root)
+    triage = build_triage(baseline, ghidra_report)
+    if not triage_path.is_file():
+        write_build_text(triage_path, canonical_json(triage), build_root)
+    return baseline_path, triage_path, ghidra_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage_libtutoriallist")
     parser.add_argument("--prx", type=Path, default=MODULE_RELATIVE)

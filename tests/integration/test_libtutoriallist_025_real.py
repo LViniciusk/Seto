@@ -4,8 +4,8 @@ The six CLI cases use ``scripts/match_function.py`` and the public comparator,
 including an explicit ``--size`` for the split 0x1C18/0x1C20 functions. Four
 large functions use the production ``seto.matching.compare`` API over complete
 candidate symbols and explicit original intervals, preserving size mismatches
-where present. 0x2F4, 0x1F10 and 0x21F8 now have exact sizes; 0x8F0 remains
-larger. Compilation uses the same official compiler/flag path; ERROR/BLOCKED
+where present. 0x2F4, 0x1F10, 0x21F8 and 0x8F0 now have exact sizes.
+Compilation uses the same official compiler/flag path; ERROR/BLOCKED
 is never accepted as a comparison.
 """
 
@@ -74,14 +74,14 @@ WHOLE_CASES = {
         "first_reason": "relocated word differs outside the relocation field",
     }),
     0x8F0: (333, {
-        "status": "NONMATCHING", "matching": 52, "total": 342,
-        "differences": 284, "relocations": 68, "limitations": 1,
-        "symbol_size": 1368, "first_word": 15,
+        "status": "INCONCLUSIVE", "matching": 327, "total": 333,
+        "differences": 0, "relocations": 0, "limitations": 3,
+        "symbol_size": 1332, "first_word": None,
     }),
     0x1F10: (186, {
-        "status": "NONMATCHING", "matching": 97, "total": 186,
-        "differences": 52, "relocations": 1, "limitations": 22,
-        "symbol_size": 744, "first_word": 97,
+        "status": "NONMATCHING", "matching": 137, "total": 186,
+        "differences": 11, "relocations": 0, "limitations": 23,
+        "symbol_size": 744, "first_word": 100,
     }),
     0x21F8: (238, {
         "status": "INCONCLUSIVE", "matching": 190, "total": 238,
