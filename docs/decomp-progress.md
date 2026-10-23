@@ -5927,3 +5927,52 @@ Esta rodada investigou a fundo os mecanismos de alocação de registradores e sc
   - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
   - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
   - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+
+## SETO-DECOMP-031 — Data Identity & Matching Completion
+
+Esta rodada investigou a viabilidade de evidências independentes de identidade de dados para `0x39C` e `0x414` (`libhtml_view.prx`) e realizou uma recuperação concreta de codegen e scheduling em `0x2F4` (`func_000002F4.c`).
+
+### Tabela de Progresso e Evidência
+
+| Target | Antes | Depois | Verified improvement | Remaining blocker |
+|---|---|---|---|---|
+| `0x2F4` | NONMATCHING (134/253, 99 diffs, 20 reloc, 1012 B) | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | Recuperado primeiro bloco do scheduler (words 81–92): `sw v0, 44(sp)` no load delay slot de `lbu a1`, eliminação de `lui v1`; primeira divergência avançou para word 93 | CFG de loop original com cópias inacessíveis do agendador (`0x4B0`, `0x560`, `0x634`) e desvio de branch em 93 |
+| `0x39C` | INCONCLUSIVE (28/30, 0 diffs, 120 B) | INCONCLUSIVE (28/30, 0 diffs, 120 B) | Investigação de proveniência de dados concluída; confirmado `ASSUMPTION_DEPENDENT` em links controlados | Ausência de metadados independentes de linker/símbolo para prova estrita de identidade cruzada |
+| `0x414` | INCONCLUSIVE (31/41, 0 diffs, 164 B) | INCONCLUSIVE (31/41, 0 diffs, 164 B) | Investigação de proveniência de dados concluída; confirmado `ASSUMPTION_DEPENDENT` para tabela e strings | Ausência de metadados independentes de linker/símbolo para símbolos `D_000047*` |
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 744 B) | NONMATCHING (137/186, 11 diffs, 744 B) | Preservada baseline recuperada em 030-R2 (`lead + trailing`, opcodes `addu` idênticos) | Swap de alocação `a3`/`t1` |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | NONMATCHING (42/182, 140 diffs, 728 B) | Congelado conforme TASK.md Section 4 | Rotação de registradores salvos e delay slot acoplado |
+| `0x8F0` | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (190/238, 0 diffs, 952 B) | INCONCLUSIVE (190/238, 0 diffs, 952 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+
+### Análise Aprofundada
+
+#### 1. Priority A — Identidade de Dados (`0x39C`, `0x414`)
+- Realizou-se uma auditoria completa através de `audit_data_identity.py` e das ferramentas de análise de relocação/proveniência.
+- Para `0x39C`, a tabela de saltos gerada pelo compilador em `.rodata` offset `0x0` contém destinos idênticos aos da tabela em `.data+0x8` do PRX original, mas a equivalência observada em links controlados decorre da imposição de layout (`0x4770`), tratando-se de evidência `ASSUMPTION_DEPENDENT`. Nenhum artefato independente de linker ou símbolo comprova a identidade do objeto fora do próprio executável analisado.
+- Para `0x414`, os rótulos de strings `D_000047A4`, `D_000047D0` e `D_00004800` são nomes provisórios derivados do endereço. Embora o linking integrado com `--defsym` reproduza os bytes exatos, não há mapa independente ou metadados de símbolo externos que estabeleçam identidade autêntica.
+- Em conformidade estrita com o portão de viabilidade de TASK.md Section 1.4, a investigação de promoção de identidade foi encerrada sem alterar a política estrita de certificação. O status de ambas as funções permanece legitimamente `INCONCLUSIVE`.
+
+#### 2. Priority B — Recuperação Concreta de Codegen em `0x2F4` (`func_000002F4.c`)
+- **Mecanismo Causal**: A discrepância na word 81 (`lui v1` vs `lui a0`) devia-se à disponibilidade prematura do registrador temporário `$v1`. Como a variável `i` só era inicializada no cabeçalho do `for`, `$v1` estava livre no ponto de leitura de `flags.group`, permitindo que o MWCC usasse `$v1` para `flags` e realizasse o hoisting da base invariante `&count` para o delay slot da carga `lbu`.
+- **Correção Aceita**: A inicialização explícita `i = 0;` antes da leitura de `flags.group` ativa a liveness de `i` em `$v1`. Sem `$v1` livre, o MWCC aloca `$a0` para a base de `flags`.
+- **Efeito no Agendamento**: Devido à dependência de base em `$a0`, o compilador não pode antecipar a carga de `count` para o delay slot. Em seu lugar, agenda o store de spill `sw v0, 44(sp)` na word 83 e `addu t2, zero, zero` (`total = 0`) na word 84, exatamente como no original.
+- **Resultado Comprovado**:
+  - Words 81 a 92 agora coincidem instrução por instrução com o binário original.
+  - Primeira divergência avançou da word 81 para a word 93 (`blez a0, 31` vs `blez a0, 33`).
+  - Palavras coincidentes subiram de 134 para 140/253 (+6).
+  - Diferenças de instrução caíram de 99 para 92 (-7).
+  - Problemas de relocação caíram de 20 para 17 (-3).
+  - Tamanho preservado em exatos 1012 bytes.
+
+### Validação e Cobertura
+- **Suíte de Testes Windows (`py -3.12 -m pytest -q`)**: 790 passed, 39 skipped.
+- **Suíte de Testes WSL2 (`pytest -q tests/integration/test_libtutoriallist_025_real.py`)**: 1 passed (10 compilações limpas, com novas expectativas para 0x2F4).
+- **Opt-ins Reais WSL2 (019–023, Callbacks, Módulo)**: 9 passed.
+- **Testes de Equivalência WSL2**: 8 passed.
+- **Integridade da Certificação**: Preservadas rigorosamente as **16 funções `MATCHED` / 912 certified words** e as **37 funções com zero diferenças de instrução**.
+- **SHA-256 dos Objetos Verificados**:
+  - `0x2F4`: `ca6fdd7cbedd08f88cbed50a23a67684bb67cf5cebe6af5fc60e5bf5839c434f` (fonte `f15a10c558d1326d4ad0f855dfa68186e3f1d630081b114eb2e9a233b2621d82`)
+  - `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (fonte `d024c56a52319e61298916e4f3717b864ab25d88c6ade4b20c2f8e8fd14a3f60`)
+  - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
