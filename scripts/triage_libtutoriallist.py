@@ -1064,7 +1064,18 @@ def ensure_018_reports(
     triage_path = build_root / "triage.json"
     ghidra_path = build_root / GHIDRA_EVIDENCE_NAME
 
-    prx_path = repo_root / MODULE_RELATIVE
+    prx_input = repo_root / MODULE_RELATIVE
+
+    _reject_repo_symlink_components(
+        prx_input, repo_root, "original PRX"
+    )
+
+    prx_path = repo_path(
+        prx_input,
+        repo_root=repo_root,
+        allowed_root=(repo_root / "private").resolve(),
+    )
+
     actual_sha256 = sha256_file(prx_path)
     verify_module_sha256(actual_sha256)
     baseline = build_baseline(elf.parse(prx_path), actual_sha256)
