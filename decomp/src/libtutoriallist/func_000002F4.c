@@ -21,14 +21,14 @@ void func_000002F4(void)
 {
     void *renderer;
     int total;
-    int preceding;
     int leading;
+    int preceding;
     int i;
     int group;
     int key;
     int extent;
-    int line;
     int row;
+    int line;
     int position;
 
     renderer = func_00003A68(0, 0);
@@ -53,8 +53,8 @@ void func_000002F4(void)
     renderer = func_000008F0(renderer, 75, 39, 331, 219);
 
     total = 0;
-    preceding = 0;
     leading = 0;
+    preceding = 0;
     i = 0;
     group = func_00006190_panel.flags.group;
     for (; i < func_00006190_panel.count[group]; i++) {

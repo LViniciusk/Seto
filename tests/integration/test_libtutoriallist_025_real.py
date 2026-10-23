@@ -353,6 +353,12 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             assert first["differences"][0]["word_index"] == expected["first_word"]
         if first["difference_count"]:
             assert first["differences"][0]["reason"] == expected.get("first_reason", "word differs")
+        if address == 0x2F4:
+            first_diff = first["differences"][0]
+            assert first_diff["word_index"] == 93
+            assert first_diff["candidate"] == "0x1880001f"
+            assert first_diff["original"] == "0x18800021"
+            assert first["candidate_size"] == 1012
         if address == 0x1F10:
             diff_words = {d["word_index"]: d for d in first["differences"]}
             assert diff_words[103]["candidate"] == "0x01236021"

@@ -5976,3 +5976,73 @@ Esta rodada investigou a viabilidade de evidências independentes de identidade 
   - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
   - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
   - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+
+## SETO-DECOMP-032 — Loop CFG & Branch Recovery
+
+Esta rodada realizou a dissecação aprofundada do fluxo de controle (CFG) e agendamento de desvios em `func_000002F4.c` (`0x2F4`, `libtutoriallist.prx`), diagnosticou a causa exata do deslocamento de branch na word 93 e recuperou a atribuição autêntica de registradores e cadeias def-use dos acumuladores e contadores de linha/linha visível.
+
+### Tabela de Progresso e Evidência
+
+| Target | Antes | Depois | Verified improvement | Remaining blocker |
+|---|---|---|---|---|
+| `0x2F4` | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | Diagnóstico causal completo do deslocamento da word 93 (`blez a0, 31` vs `33`); alinhamento dos registradores salvos `$s1` (line), `$s2` (row), `$s3` (preceding) e `$s4` (leading) com o binário original | Cópias inacessíveis de instruções geradas pelo agendador do compilador original em `0x4B0`, `0x560` e `0x634` |
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 744 B) | NONMATCHING (137/186, 11 diffs, 744 B) | Preservado integralmente conforme baseline 030-R2 | Swap de alocação `a3`/`t1` |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | NONMATCHING (42/182, 140 diffs, 728 B) | Preservado integralmente | Rotação de registradores salvos |
+| `0x8F0` | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (190/238, 0 diffs, 952 B) | INCONCLUSIVE (190/238, 0 diffs, 952 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+
+### Análise Aprofundada
+
+#### 1. Diagnóstico do Deslocamento de Branch na Word 93
+- **Destinos Decodificados**:
+  - Original (`w093` 0x468): `0x18800021 blez a0, 33` -> destino é `w127` (0x4F0: `addu a0, v0, zero`, setup da chamada `func_00001764`).
+  - Candidato (`w093` 0x468): `0x1880001f blez a0, 31` -> destino é `w125` (0x4E8: `addu a0, v0, zero`, setup da chamada `func_00001764`).
+- **Equivalência Semântica**:
+  - Ambas as instruções testam rigorosamente a mesma condição semântica (`if (count[group] <= 0) goto loop_exit;`) e miram o mesmo bloco básico de saída do loop.
+- **Isolamento da Diferença de Deslocamento**:
+  - A diferença de 2 instruções (+8 bytes no original) localiza-se integralmente entre as words 107 e 112 (bloco de lookup do sentinel `24` vs `entries[group][i]`).
+  - No original (6 instruções):
+    - `w107`: `bnel a0, zero, 4 [-> w112]`
+    - `w108`: `lhu a0, 20(t3)` (delay slot)
+    - `w109`: `beq zero, zero, 2 [-> w112]`
+    - `w110`: `addu a0, a1, zero` (delay slot, key = 24)
+    - `w111 (0x4B0)`: `lhu a0, 20(t3)` (cópia de instrução inacessível)
+    - `w112`: `sll a0, a0, 1` (ponto de convergência)
+  - No candidato (4 instruções):
+    - `w107`: `bnel a0, zero, 2 [-> w110]`
+    - `w108`: `lhu a0, 20(t3)` (delay slot)
+    - `w109`: `addu a0, a1, zero` (fallthrough, key = 24)
+    - `w110`: `sll a0, a0, 1` (ponto de convergência)
+  - Em `0x4B0` (word 111), `0x560` (word 155) e `0x634` (word 208), o compilador original duplicou instruções para os delay slots dos desvios `bnel`, deixando cópias mortas logo antes do rótulo de merge, sobre as quais o desvio incondicional `beq zero, zero` salta.
+  - Sob o compilador MWCC PSP disponível com `-O4,p`, o otimizador elimina naturalmente o salto incondicional redundante quando ambos os ramos convergem em uma atribuição imediata a `$a0`, gerando 4 instruções em vez de 6. Conforme estipulado em TASK.md Section 4, a introdução de código morto sintético ou desvios artificiais foi rejeitada para preservar a autenticidade do código-fonte.
+
+#### 2. Recuperação da Alocação de Registradores e Cadeias Def-Use
+- **Alinhamento dos Acumuladores (`$s3` e `$s4`)**:
+  - Ao declarar e inicializar `leading` antes de `preceding`, o MWCC aloca `$s4` para `leading` e `$s3` para `preceding`.
+  - Isso alinha perfeitamente as acumulações no loop (`w118: addu s3, s3, a0` para `preceding` e `w122: addu s4, s4, a0` para `leading`) e o setup da chamada `func_00001764` (`w131: addu t0, s4, zero` passando `leading` no quinto argumento), eliminando os desalinhamentos de registrador observados na rodada 031.
+- **Alinhamento dos Contadores (`$s1` e `$s2`)**:
+  - Ao declarar `row` antes de `line` e inicializar `line = 0; row = 0;`, o compilador aloca `$s1` para `line` e `$s2` para `row`, alinhando perfeitamente os stores iniciais (`w135: addu s1, zero, zero`, `w136: addu s2, zero, zero`) e o cálculo de índice de linha no loop visível (`w146: addu a1, a0, s1` e `w161: sll v1, s2, 1`).
+
+#### 3. Hipóteses do Compilador Testadas e Rejeitadas
+- **Hipótese A (Guarda de entrada positiva com loop `do-while`)**:
+  - A estrutura `if (count > 0) { do { ... } while (i < count); }` foi canonicamente convertida pelo otimizador do MWCC para a mesma representação intermediária que `for (; i < count; i++)`, gerando binário com hash idêntico e mesmo desvio na word 93.
+- **Hipótese B (Variantes do Lookup de Sentinela)**:
+  - Formas com operador ternário `(i >= count) ? 24 : entries[group][i]` geram binário idêntico.
+  - Formas com inversão de condição `if (i < count)` geram instruções `beql at, zero` com pior alinhamento (138/253 palavras coincidentes).
+  - Testes com lookup duplo sem `else` geram desvios adicionais e aumentam o símbolo para 1028 bytes.
+- **Hipótese C (Local `visible_end` e Hoisting)**:
+  - A expressão `leading[group] + trailing[group]` já é içada pelo compilador para o registrador `$a2` no preheader (word 105: `addu a2, a3, a0`), não exigindo variável local adicional.
+
+### Validação e Cobertura
+- **Suíte de Testes Windows (`py -3.12 -m pytest -q`)**: 790 passed, 39 skipped em 186 s.
+- **Suíte de Testes WSL2 (`pytest -q tests/integration/test_libtutoriallist_025_real.py`)**: 1 passed (10 compilações limpas, verificando estabilidade das 2 tentativas e asserções estritas de codegen para `0x2F4` na word 93: `candidate == 0x1880001f`, `original == 0x18800021`).
+- **Opt-ins Reais WSL2 (019–023, Callbacks)**: 6 passed em 107 s.
+- **Opt-ins Reais Módulo (`test_libtutoriallist_real.py`)**: 2 passed em 26 s.
+- **Testes de Equivalência WSL2 (Módulo Integrado e Link Equivalence)**: 4 passed em 130 s.
+- **Integridade da Certificação**: Preservadas rigorosamente as **16 funções `MATCHED` / 912 certified words** e as **37 funções com zero diferenças de instrução**.
+- **SHA-256 dos Objetos Verificados**:
+  - `0x2F4`: `ea3b735b1ea9e9d6a3fd1938d57c3fbd7194636da6a8b4eb2776880e129ec595` (fonte `3d34ff3db6d4f6bc3075b9bc5b34005b63013d3392461be03a5e8c4eb5e7f1dc`)
+  - `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (fonte `d024c56a52319e61298916e4f3717b864ab25d88c6ade4b20c2f8e8fd14a3f60`)
+  - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
