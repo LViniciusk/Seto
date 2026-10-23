@@ -5866,3 +5866,62 @@ preservada, não relaxada).
   `NONMATCHING` com 11 diferenças. Nenhum padding, NOP, branch morto, código
   morto, `volatile` injustificado, asm inline, UB, cast que mude semântica,
   identidade de dados fabricada ou alias artificial foi introduzido.
+
+## SETO-DECOMP-030 — Register Allocation & Scheduler Recovery Analysis
+
+Esta rodada investigou a fundo os mecanismos de alocação de registradores e scheduling do compilador oficial Metrowerks (`mwccpsp_3.0.1_219`, `-O4,p -sdatathreshold 0`), com foco em `0x1F10` (Priority A), `0x2F4` (Priority B) e `0x1764` (Priority C).
+
+### Tabela de Progresso e Evidência
+
+| Função | Antes | Depois | Mecanismo investigado / recuperado | Bloqueador remanescente |
+|---|---|---|---|---|
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 744 B) | NONMATCHING (137/186, 11 diffs, 744 B) | Linha do tempo de def-use/liveness completa; provada equivalência simétrica do swap `a3`/`t1` | Heurística de alocação de temporários CSE no pool de registradores voláteis (`a3` vs `t1`) |
+| `0x2F4` | NONMATCHING (134/253, 99 diffs, 1012 B) | NONMATCHING (134/253, 99 diffs, 1012 B) | Diagnóstico da word 81 (`lui a0` vs `lui v1`): hoisting de `&count` no delay slot de `lbu` | Prioridade do scheduler do MWCC entre store de spill (`sw v0`) e antecipação de endereço constante |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | NONMATCHING (42/182, 140 diffs, 728 B) | Reavaliação de alocação de parâmetros e delay slot de `0x1D08` | Conflito simultâneo entre mapa de saved registers e schedule de delay slot |
+| `0x8F0` | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | Preservado integralmente (baseline 029) | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (190/238, 0 diffs, 952 B) | INCONCLUSIVE (190/238, 0 diffs, 952 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+
+### Análise Aprofundada
+
+#### 1. Priority A (`func_00001F10.c`)
+- As 11 diferenças de instrução (words 100, 101, 102, 103, 135, 143, 161, 167, 173, 174, 175) foram decompostas e mapeadas instrução a instrução.
+- Todas as 11 decorrem do swap puro de alocação entre `&trailing[group]` (original `t1`, candidato `a3`) e `lead` (original `a3`, candidato `t1`).
+- Linha do tempo de liveness comprovada:
+  - `&trailing[group]` é definido na word 100 (`addu t1, a0, a1`), utilizado na 101 (`lhu v1, 0(t1)`), sobrevive a todo o loop interno, utilizado na 161 (`lhu v1, 0(t1)`) e 167 (`sh v1, 0(t1)`), e redefinido na continuação em 174 (`addiu t1, a1, 12`).
+  - `lead` é definido na word 102 (`lhu a3, 0(t0)`), utilizado na 103 (`addu t4, a3, v1`), 135 (`sll t2, a3, 1`) e 143 (`addu a1, a3, t3`), morrendo dentro do loop na word 143 antes de ser recarregado na 173 (`lhu a3, 8(a1)`).
+- Hipóteses testadas e refutadas com base em TDD no MWCC:
+  - Inversão de declaração `leading`/`trailing`: desfaz a ordem de load e quebra a word 99 (`0x00854021` vs `0x00654021`).
+  - Estrutura de continuação assimétrica: adiciona instrução extra (748 B) e quebra a word 171.
+  - Ponteiros explícitos (`unsigned short *trailing`): destroem o grafo de interferência, gerando 740 B e 88 diffs.
+  - Alteração de tipos/helpers (`panel_key_wide` com `unsigned char group`): desestabiliza a indexação do loop externo, gerando 57 diffs.
+- Conclusão: a fonte atual preserva rigorosamente os 744 B originais, 0 problemas de relocação e equivalência semântica total sem constructs sintéticos.
+
+#### 2. Priority B (`func_000002F4.c`)
+- O desvio inicial na word 81 (`lui a0, ...` vs `lui v1, ...`) foi completamente dissecado.
+- Causa identificada: após a chamada `func_000008F0`, o original armazena imediatamente `renderer` no stack (`sw v0, 44(sp)`) preenchendo o load delay slot de `lbu a1, 24980(a0)` (flags), liberando `a0` para ser reutilizado na carga de `count`.
+- No candidato, o compilador antecipa o cálculo do endereço base constante de `&count` no delay slot, necessitando de um registrador adicional (`v1`) para a base de `flags` e postergando o store de `v0` para a word 89.
+- Hipóteses testadas:
+  - Reordenação de inicialização de acumuladores (`total`, `preceding`, `leading`): o agendador do MWCC mantém o hoisting de endereços invariantes.
+  - Substituição da indexação manual no loop por `libtutoriallist_panel_key`: provocou expansão de tamanho para 1032 B e 156 diffs.
+  - Variável local `count`: piorou as diferenças de 99 para 101.
+- Conclusão: a representação de 1012 B com lifetime stack-backed para `&renderer` permanece como o melhor baseline verificado.
+
+#### 3. Priority C (`func_00001764.c`)
+- O principal obstáculo permanece a rotação de parâmetros nos registradores salvos (`s0`-`s7`):
+  - Original: `renderer=s7`, `width=s3`, `ready=s6`, `filled=s0`, `height` no stack.
+  - Candidato: `renderer=s6`, `width=s7`, `ready=s0`, `filled=s7`, `height` em saved register / spill distinto.
+- A computação de `full = width - 2` ocorre no delay slot da chamada `func_00001D08` no original. Inicializadores de etapa única que reproduzem esse delay slot forçam uma alocação divergente de parâmetros, enquanto estruturas de duas etapas que preservam os registradores movem a computação para depois do branch.
+- Mais de 120 variantes de fonte já demonstraram que o conflito entre o mapa de saved registers e o schedule do delay slot de chamada não pode ser resolvido por simples permutações de prólogo sem novos mecanismos de alocação comprovados. Preservam-se os intrinsics max/min do Allegrex e a ABI de 9 argumentos de `func_000014E0`.
+
+### Validação e Cobertura
+- **Suíte de Testes Windows (`py -3.12 -m pytest -q`)**: 790 passed, 39 skipped em 197 s.
+- **Suíte de Testes WSL2 (`pytest -q tests/integration/test_libtutoriallist_025_real.py`)**: 1 passed (todas as 10 verificações de compilação limpas).
+- **Opt-ins Reais WSL2 (019–023)**: 5 passed em 91 s.
+- **Opt-ins Reais Callbacks/Real WSL2**: 3 passed em 41 s.
+- **Integridade da Certificação**: Preservadas rigorosamente as **16 funções `MATCHED` / 912 certified words** e as **37 funções com zero diferenças de instrução**.
+- **SHA-256 dos Objetos Verificados**:
+  - `0x1F10`: `792311995a19dac2e7f65bfa96e891de42aead748d56c3b7237dc2477924d942` (fonte `9ac8ce6d684fa583469ea7e2c60baf9419e4c85f38b034ba7495e16061ef68c2`)
+  - `0x2F4`: `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c`
+  - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
