@@ -72,9 +72,10 @@ def test_020_reconstructions_match_freshly_and_preserve_the_search_baseline() ->
         pytest.fail("BLOCKED: the real Metrowerks integration must run under WSL2/Linux")
 
     config = REPO_ROOT / "config" / "wsl" / "seto.toml"
-    baseline_path = REPO_ROOT / "build" / "seto018" / "baseline.json"
-    triage_path = REPO_ROOT / "build" / "seto018" / "triage.json"
-    ghidra_path = REPO_ROOT / "build" / "seto018" / triage.GHIDRA_EVIDENCE_NAME
+    try:
+        baseline_path, triage_path, ghidra_path = triage.ensure_018_reports(REPO_ROOT)
+    except triage.ProbeError as exc:
+        pytest.fail(f"BLOCKED: {exc}")
     for path in (config, baseline_path, triage_path, ghidra_path):
         if not path.is_file() or path.is_symlink():
             pytest.fail(f"BLOCKED: required 018 input is absent or unsafe: {path.name}")
