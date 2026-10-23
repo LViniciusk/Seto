@@ -5659,3 +5659,82 @@ introduzido.
   scheduler e base do painel em `0x2F4`; (4) `0x1764` congelada; (5) pares de
   identidade `0x2C8`/`0x1C58`, fragmentos sem entrypoint e containers
   `~PSP`/`~SCE`.
+
+---
+
+## SETO-DECOMP-028 — Recuperação de codegen (0x1F10)
+
+Base: `a1a971cce8137762ab062b196d92b9aad15d53b1` (main após a 027), branch
+`feat/seto-decomp-028-codegen`. PRX original revalidado com SHA-256
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`.
+
+| Function | Before | After | Codegen discovery | Remaining blocker |
+|---|---|---|---|---|
+| `0x1F10` | `NONMATCHING` 89/186, 60 dif., 1 reloc., 22 lim., 744 B | **`NONMATCHING` 97/186, 52 dif., 1 reloc., 22 lim., 744 B** | Inverter a ordem das dez declarações locais sem inicializador coloca `group` em `t2` e `position` em `t4`, como no original; a ordem direta os deixava trocados (`group` `t4`, `position` `t2`). As words 0–96 ficam idênticas, com o mesmo tamanho e a mesma única relocação. | Restam 52 words: o candidato faz CSE de `2*group` entre o preheader e o corpo do loop e o mantém em `t1`; o original recalcula `2*group` por iteração (`a1` no preheader, `v1` na cauda), o que fixa `&trailing` em `t1`, a base do painel em `a2` e `lead` em `a3`. |
+| `0x2F4` | `NONMATCHING` 134/253, 99 dif., 20 reloc., 4 lim., 1.012 B | inalterado | A word 81 continua sendo a base do painel (`lui v1` vs `lui a0`) e as seguintes são a rotação do scheduler; as cópias inalcançáveis de `0x4B0`/`0x560`/`0x634` não foram inseridas. | Mesmo bloqueio: artefatos do scheduler e ordem de zeroing/count do primeiro bloco; trocas de declaração/expressão não mudaram o CFG. |
+| `0x8F0` | `NONMATCHING` 52/342, 284 dif., 68 reloc., 1 lim., 1.368 B vs 1.332 B | inalterado | A word 15 continua sendo o spill de `height` em `0x4C(sp)`. O candidato mantém `atlas+11` em `s7` e `x+6` em `s6` entre chamadas (CSE), enquanto o original recalcula cada argumento no ponto de uso; variáveis por uso (`tile`, `tile_top`/`tile_bottom`, `inner`), antecipação de `bottom` e 40 permutações de declaração deram o mesmo objeto ou pior. | Pressão de callee-saved; sem mecanismo novo para impedir o CSE sem introduzir código ou identidade fabricada. |
+| `0x1764` | `NONMATCHING` 42/182, 140 dif., 32 reloc., 728 B | inalterado | Congelada; nenhuma evidência nova de alocação. | Prólogo permutado; mais de 120 variantes já refutadas. |
+
+### `0x1F10` — ordem de declaração como alavanca de alocação
+
+A hipótese aceita é estritamente de codegen: as dez declarações locais sem
+inicializador foram invertidas (`extent, key, j, sum, next, position, lead,
+group, i, metric`). Isso não altera a semântica nem o tamanho; muda apenas a
+prioridade global de alocação. Com a ordem direta o candidato mantinha
+`group` em `t4` e `position` em `t2`; com a ordem invertida eles passam a
+`t2`/`t4`, e as words 0–96 ficam idênticas (antes, 0–95). O resultado é
+**97/186 words**, **52 diferenças** (antes 60), 1 relocação e 22 limitações,
+com 744 B.
+
+O que resta é uma única decisão de CSE do compilador: o candidato mantém
+`2*group` vivo do preheader até a base de `trailing` dentro do loop (`t1`),
+enquanto o original recalcula `2*group` no corpo (a base `panel + 2*group`
+fica em `a1` no preheader e é recalculada em `v1` na cauda). Consequência:
+`&trailing` vai para `a3` (original `t1`), a base do painel para `a1`
+(original `a2`) e `lead` para `t3` (original `a3`). Foram refutadas 30
+permutações aleatórias de declaração, as 90 movimentações simples de uma
+declaração a partir da ordem aceita, a troca explícita de operandos
+(`lead + position`, objeto idêntico) e a ordem `lead` antes de `position`
+(86/187, 748 B); a forma de expressão única com `lead` atribuído já havia sido
+refutada na 027 (80/187). Nenhuma mudou essa alocação ou reduziu as 52
+diferenças.
+
+Evidência de duas compilações oficiais independentes (`wibo` +
+`mwccpsp_3.0.1_219`, `-O4,p -sdatathreshold 0`): objeto SHA-256
+`e8b84d266e5b288d71d67188e2e98be839e3fe2bfba18705547c176053a1feb8` idêntico nas
+duas. Fonte SHA-256
+`b0e6985a3dc998efee467bdfc801041bfedb0d939ac384b7b0a2038361425459`;
+teste 025 SHA-256
+`65378c72bd279119ec8665639960e41318e2e48f5d715745599fe22938aad95a`.
+
+### `0x2F4`, `0x8F0` e `0x1764` — sem fonte promovida
+
+Em `0x2F4` a ordem de declaração não altera o artefato de duas words do
+scheduler; em `0x8F0` a busca de 40 permutações de declaração não moveu a
+primeira diferença além da word 15 (no máximo +1 word, não adotado), e as
+variantes de rematerialização produziram o mesmo objeto `591face8…`; em
+`0x1764` não surgiu nenhuma evidência nova. Nenhum padding, NOP, branch morto,
+`volatile` injustificado ou asm inline foi introduzido.
+
+### Validação, hashes e cobertura
+
+- WSL2 (cópia nativa, `PYTHONPATH=src`): `python -m pytest -q` →
+  **798 passed, 23 skipped**.
+- `SETO_LIBTUTORIALLIST_025_REAL=1` sobre
+  `tests/integration/test_libtutoriallist_025_real.py` → **1 passed** (duas
+  compilações independentes por caso); a suíte completa sem opt-in continua
+  verde. Os opt-ins 019–023/real ficam `BLOCKED` nesta árvore limpa porque
+  exigem artefatos `build/seto018`/`seto023/baseline/018` de rodadas
+  anteriores, ausentes no worktree; não são falhas de comparação.
+- Hashes de produção confirmados no gate 025: `0x1F10`
+  `e8b84d266e5b288d71d67188e2e98be839e3fe2bfba18705547c176053a1feb8`;
+  `0x2F4`
+  `eeb9bcccaaa2345bdad6b0c20680218d3389f613b827b083408c77649af4d25c`;
+  `0x8F0`
+  `591face818cb8f1958f17c43821228029887908f3d317ce41df6e176c40f91dc`;
+  `0x21F8`
+  `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+  (952 B, 190/238, 0 diferenças) — inalterado.
+- Cobertura estrita preservada: **16 `MATCHED` / 912 words** e **36 funções
+  com zero diferenças**; `0x21F8` continua `INCONCLUSIVE` pelas 26 identidades
+  HI16/LO16, sem promoção a `MATCHED`.
