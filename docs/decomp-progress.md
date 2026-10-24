@@ -6052,3 +6052,53 @@ Esta rodada realizou a dissecação aprofundada do fluxo de controle (CFG) e age
   - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
   - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
   - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+
+## SETO-DECOMP-033 — Final Register Allocation Recovery
+
+Rodada de análise de `func_00001F10.c` (`0x1F10`). Nenhuma alteração de C foi aceita; o baseline verificado foi preservado e o teste de regressão passou a aceitar melhorias genuínas futuras.
+
+### Tabela de progresso
+
+| Target | Antes | Depois | Accepted mechanism | Remaining blocker |
+|---|---|---|---|---|
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 0 reloc, 744 B) | NONMATCHING (137/186, 11 diffs, 0 reloc, 744 B) | Nenhum (baseline preservado) | Permutação `t1`/`a3` de 11 instruções, causa não determinada |
+| `0x2F4` | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | inalterado | — | — |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | inalterado | — | — |
+| `0x8F0` | INCONCLUSIVE (0 diffs, 1332 B) | inalterado | — | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (0 diffs, 952 B) | inalterado | — | Identidade de dados HI16/LO16 |
+
+### Evidência estabelecida
+
+- As 11 diferenças (words 100–103, 135, 143, 161, 167, 173–175) são exatamente uma permutação de registradores: no original `lead` está em `a3` e o endereço amplo `&trailing[group]` em `t1`; no candidato, o inverso. Opcodes, offsets, alvos de desvio, delay slots e a ordem de operandos `addu t4, lead, trailing` coincidem.
+- O `.comment` do PRX original identifica `MW MIPS C Compiler (2.4.1.01)`; o projeto compila com `mwccpsp 3.0.1 build 219`. `BLOCKED: historical compiler unavailable` — o compilador 2.4.1.01 não está disponível no ambiente configurado, portanto seu algoritmo de alocação não foi verificado.
+- Nenhuma das variantes de C testadas (abaixo) eliminou a permutação sem aumentar diferenças ou alterar o tamanho do símbolo.
+
+### Hipótese (não comprovada)
+
+A permutação pode resultar de diferenças de heurística de alocação entre 2.4.1.01 e 3.0.1 build 219. Isso é compatível com a evidência, mas não foi demonstrado: sem o compilador histórico não é possível distinguir essa hipótese de uma forma de código-fonte ainda não testada.
+
+### Experimentos rejeitados
+
+| Variante | Tamanho | Diffs | Resultado |
+|---|---|---|---|
+| Ponteiro explícito `unsigned short *p_trailing` | 740 B | 88 | REJEITADO |
+| Sem locais `lead`/`trailing` | 748 B | 73 | REJEITADO |
+| `unsigned short lead` | 744 B | 23 | REJEITADO |
+| `lead` carregado antes de `trailing` | 748 B | 27 | REJEITADO |
+| Sem cast `(unsigned char)` no limite interno | 744 B | 55 | REJEITADO |
+| `position = (lead = ...) + trailing` | 744 B | 11 | REJEITADO (operandos invertidos) |
+| Loop externo em forma `for` | 744 B | 11 | REJEITADO (objeto idêntico) |
+| Condição invertida `sum + extent <= 8` | 744 B | 14 | REJEITADO |
+| `position = trailing; position += lead` | 744 B | 11 | REJEITADO (operandos invertidos) |
+| `position = lead; position += trailing` | 744 B | 11 | REJEITADO (objeto idêntico) |
+| Forma de `0x21F8` (`position = leading + trailing; lead = leading`) | 748 B | 26 | REJEITADO |
+
+### Teste de regressão
+
+`WHOLE_CASES[0x1F10]` em `tests/integration/test_libtutoriallist_025_real.py` agora é um teto de baseline (`improvable`): diferenças podem diminuir e palavras coincidentes aumentar, mas tamanho (744 B), total (186), relocações (0) e limitações (23) continuam exatos. As diferenças restantes devem ser subconjunto das 11 conhecidas; words 103/175, se ainda divergentes, devem manter a forma `addu t4, <lead>, v1`. Com zero diferenças e limitações de identidade de dados o status exigido é `INCONCLUSIVE`, nunca `MATCHED` automático. As expectativas das demais funções não foram alteradas.
+
+### Validação
+
+- `py -3.12 -m pytest -q -rs` (Windows), integração real 025 em WSL2/Metrowerks, `compileall` e `git diff --check`: ver PR #32.
+- SHA-256 do objeto `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (inalterado).
+- Preservados: 16 funções `MATCHED` / 912 palavras certificadas e as 37 funções com zero diferenças de instrução.

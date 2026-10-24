@@ -78,6 +78,9 @@ WHOLE_CASES = {
         "symbol_size": 1332, "first_word": None,
     }),
     0x1F10: (186, {
+        # Baseline ceiling: genuine register recovery may lower differences and
+        # raise matching; size, total, relocations and limitations stay exact.
+        "improvable": True,
         "status": "NONMATCHING", "matching": 137, "total": 186,
         "differences": 11, "relocations": 0, "limitations": 23,
         "symbol_size": 744, "first_word": 100,
@@ -342,15 +345,29 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             "differences", "relocation_issues", "limitations",
         ):
             assert first[key] == second[key]
-        assert first["status"] == expected["status"]
-        assert first["matching_words"] == expected["matching"]
         assert first["total_words"] == expected["total"]
-        assert first["difference_count"] == expected["differences"]
         assert len(first["relocation_issues"]) == expected["relocations"]
         assert len(first["limitations"]) == expected["limitations"]
         assert first["candidate_size"] == expected["symbol_size"]
-        if expected["first_word"] is not None:
-            assert first["differences"][0]["word_index"] == expected["first_word"]
+        if expected.get("improvable"):
+            # Improvements may only remove differences, never add them.
+            assert first["difference_count"] <= expected["differences"]
+            assert first["matching_words"] >= expected["matching"]
+            if first["difference_count"]:
+                assert first["status"] == "NONMATCHING"
+                assert first["differences"][0]["word_index"] >= expected["first_word"]
+            else:
+                # Zero differences with unresolved data identity is INCONCLUSIVE,
+                # never automatically MATCHED.
+                assert first["status"] == (
+                    "INCONCLUSIVE" if first["limitations"] else "MATCHED"
+                )
+        else:
+            assert first["status"] == expected["status"]
+            assert first["matching_words"] == expected["matching"]
+            assert first["difference_count"] == expected["differences"]
+            if expected["first_word"] is not None:
+                assert first["differences"][0]["word_index"] == expected["first_word"]
         if first["difference_count"]:
             assert first["differences"][0]["reason"] == expected.get("first_reason", "word differs")
         if address == 0x2F4:
@@ -373,8 +390,20 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             assert diff_words[163]["candidate"] == "0x00721821"  # addu v1, v1, s2 (row * 3)
         if address == 0x1F10:
             diff_words = {d["word_index"]: d for d in first["differences"]}
-            assert diff_words[103]["candidate"] == "0x01236021"
-            assert diff_words[175]["candidate"] == "0x01236021"
+            # No new differences beyond the 11 known register-swap words.
+            known_1f10 = {100, 101, 102, 103, 135, 143, 161, 167, 173, 174, 175}
+            assert set(diff_words).issubset(known_1f10)
+            assert first["difference_count"] <= 11
+            # position = lead + trailing: a still-differing word 103/175 must keep
+            # the original shape addu t4, <lead>, v1 (trailing second), whichever
+            # register lead receives. Matching words are absent and accepted.
+            for word in (103, 175):
+                if word in diff_words:
+                    value = int(diff_words[word]["candidate"], 16)
+                    assert value >> 26 == 0 and value & 0x7FF == 0x21  # addu
+                    assert (value >> 11) & 0x1F == 12  # rd = t4 (position)
+                    assert (value >> 16) & 0x1F == 3  # rt = v1 (trailing)
+                    assert (value >> 21) & 0x1F not in (0, 3)  # rs = lead
         whole_results.append(first)
 
     results = {
