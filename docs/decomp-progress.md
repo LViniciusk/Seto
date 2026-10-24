@@ -5976,3 +5976,79 @@ Esta rodada investigou a viabilidade de evidências independentes de identidade 
   - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
   - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
   - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+
+## SETO-DECOMP-032 — Loop CFG & Branch Recovery
+
+Esta rodada realizou a dissecação aprofundada do fluxo de controle (CFG) e agendamento de desvios em `func_000002F4.c` (`0x2F4`, `libtutoriallist.prx`), diagnosticou a causa exata do deslocamento de branch na word 93 e recuperou a atribuição autêntica de registradores e cadeias def-use dos acumuladores e contadores de linha/linha visível.
+
+### Tabela de Progresso e Evidência
+
+| Target | Antes | Depois | Verified improvement | Remaining blocker |
+|---|---|---|---|---|
+| `0x2F4` | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | Diagnóstico causal do desvio da word 93 (`blez a0, 31` vs `33`); recuperação autêntica de registradores salvos `$s1` (line), `$s2` (row), `$s3` (preceding) e `$s4` (leading) comprovada por 8 asserções estritas | Bloco original com `beq zero, zero` adicional e cópia morta `0x4B0` (`lhu`) eliminados pelo otimizador MWCC `-O4,p` |
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 744 B) | NONMATCHING (137/186, 11 diffs, 744 B) | Preservado integralmente conforme baseline 030-R2 | Swap de alocação `a3`/`t1` |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | NONMATCHING (42/182, 140 diffs, 728 B) | Preservado integralmente | Rotação de registradores salvos |
+| `0x8F0` | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (190/238, 0 diffs, 952 B) | INCONCLUSIVE (190/238, 0 diffs, 952 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+
+### Análise Aprofundada
+
+#### 1. Diagnóstico do Deslocamento de Branch na Word 93
+- **Destinos Decodificados**:
+  - Original (`w093` 0x468): `0x18800021 blez a0, 33` -> destino é `w127` (0x4F0: `addu a0, v0, zero`, setup da chamada `func_00001764`).
+  - Candidato (`w093` 0x468): `0x1880001f blez a0, 31` -> destino é `w125` (0x4E8: `addu a0, v0, zero`, setup da chamada `func_00001764`).
+- **Equivalência Semântica**:
+  - Ambas as instruções testam rigorosamente a mesma condição semântica (`if (count[group] <= 0) goto loop_exit;`) e miram o mesmo bloco básico de saída do loop.
+- **Isolamento da Diferença de Deslocamento**:
+  - A diferença de 2 instruções (+8 bytes no original) localiza-se integralmente entre as words 107 e 112 (bloco de lookup do sentinela `24` vs `entries[group][i]`).
+  - No original (6 instruções):
+    - `w107`: `bnel a0, zero, 4 [-> w112]`
+    - `w108`: `lhu a0, 20(t3)` (delay slot)
+    - `w109`: `beq zero, zero, 2 [-> w112]` (desvio incondicional adicional)
+    - `w110`: `addu a0, a1, zero` (delay slot, key = 24)
+    - `w111 (0x4B0)`: `lhu a0, 20(t3)` (cópia de instrução inacessível)
+    - `w112`: `sll a0, a0, 1` (ponto de convergência)
+  - No candidato (4 instruções):
+    - `w107`: `bnel a0, zero, 2 [-> w110]`
+    - `w108`: `lhu a0, 20(t3)` (delay slot)
+    - `w109`: `addu a0, a1, zero` (fallthrough, key = 24)
+    - `w110`: `sll a0, a0, 1` (ponto de convergência)
+  - O bloco original contém um **`beq` incondicional adicional e uma cópia morta de `lhu`**, não duas instruções inacessíveis. Em código C canônico sob o MWCC com `-O4,p`, o otimizador elimina o salto incondicional redundante quando ambos os ramos convergem em uma atribuição imediata a `$a0`. Inserir código morto sintético ou saltos fakes foi expressamente rejeitado para proteger a autenticidade do código-fonte.
+
+#### 2. Reconciliação dos Totais Globais Inalterados
+- O comparador linear opera por índice posicional estrito (`orig[i] == cand[i]`).
+- Devido à diferença de 2 instruções no bloco 107–112, todas as instruções a partir da word 110 no candidato estão deslocadas em -2 posições em relação ao original.
+- Na região pós-deslocamento (words 110–252), cada instrução do candidato já era contabilizada como divergência no baseline 031 em sua posição linear.
+- As correções de registrador corrigem as instruções em suas posições semânticas (CFG), mas como coincidem com instruções diferentes na comparação linear (ex: `cand[116]` compara com `orig[116] beq`), continuam sendo contadas como divergências posicionais.
+- Portanto, os totais globais lineares permanecem matematicamente estáveis em **140/253 palavras coincidentes e 92 diferenças**, enquanto o mapeamento por grafo de fluxo de controle comprova a eliminação de 12 divergências de registrador.
+
+#### 3. Mapeamento de Instruções Corrigidas por CFG e Def-Use
+
+| Operação Semântica | Instrução Original | Candidato 031 | Candidato 032 | Status |
+|---|---|---|---|---|
+| `preceding += extent` | `orig_w118: addu s3, s3, a0` | `cand_w116: addu s4, s4, a0` | `cand_w116: addu s3, s3, a0` | **Corrigido** (`$s4` -> `$s3`) |
+| `leading += extent` | `orig_w122: addu s4, s4, a0` | `cand_w120: addu s3, s3, a0` | `cand_w120: addu s4, s4, a0` | **Corrigido** (`$s3` -> `$s4`) |
+| Arg 5 `func_00001764` (`leading`) | `orig_w131: addu t0, s4, zero` | `cand_w129: addu t0, s3, zero` | `cand_w129: addu t0, s4, zero` | **Corrigido** (`$s3` -> `$s4`) |
+| `line = 0` | `orig_w135: addu s1, zero, zero` | `cand_w133: addu s2, zero, zero` | `cand_w133: addu s1, zero, zero` | **Corrigido** (`$s2` -> `$s1`) |
+| `row = 0` | `orig_w136: addu s2, zero, zero` | `cand_w134: addu s1, zero, zero` | `cand_w134: addu s2, zero, zero` | **Corrigido** (`$s1` -> `$s2`) |
+| `position = leading + line` | `orig_w146: addu a1, a0, s1` | `cand_w144: addu a2, a0, s2` | `cand_w144: addu a2, a0, s1` | **Corrigido** (`$s2` -> `$s1`) |
+| `row * 2` (loop visível) | `orig_w161: sll v1, s2, 1` | `cand_w162: sll v1, s1, 1` | `cand_w162: sll v1, s2, 1` | **Corrigido** (`$s1` -> `$s2`) |
+| `row * 3` (loop visível) | `orig_w162: addu v1, v1, s2` | `cand_w163: addu v1, v1, s1` | `cand_w163: addu v1, v1, s2` | **Corrigido** (`$s1` -> `$s2`) |
+| `row += extents[key]` | `orig_w175: addu s2, s2, v1` | `cand_w176: addu s1, s1, v1` | `cand_w176: addu s2, s2, v1` | **Corrigido** (`$s1` -> `$s2`) |
+| `row < 8` | `orig_w176: slti v1, s2, 8` | `cand_w177: slti v1, s1, 8` | `cand_w177: slti v1, s2, 8` | **Corrigido** (`$s1` -> `$s2`) |
+| `line++` | `orig_w178: addiu s1, s1, 1` | `cand_w179: addiu s2, s2, 1` | `cand_w179: addiu s1, s1, 1` | **Corrigido** (`$s2` -> `$s1`) |
+| `preceding - leading` | `orig_w193: subu a0, s3, s4` | `cand_w194: subu a0, s4, s3` | `cand_w194: subu a0, s3, s4` | **Corrigido** (`s4, s3` -> `s3, s4`) |
+
+### Validação e Cobertura
+- **Suíte de Testes Windows (`py -3.12 -m pytest -q`)**: 790 passed, 39 skipped em 186 s.
+- **Suíte de Testes WSL2 (`pytest -q tests/integration/test_libtutoriallist_025_real.py`)**: 1 passed (10 compilações limpas, verificando estabilidade das 2 tentativas, asserção do desvio da word 93 e 8 asserções estritas comprovando a recuperação de registradores salvos em `0x2F4`).
+- **Opt-ins Reais WSL2 (019–023, Callbacks)**: 6 passed em 107 s.
+- **Opt-ins Reais Módulo (`test_libtutoriallist_real.py`)**: 2 passed em 26 s.
+- **Testes de Equivalência WSL2 (Módulo Integrado e Link Equivalence)**: 4 passed em 130 s.
+- **Integridade da Certificação**: Preservadas rigorosamente as **16 funções `MATCHED` / 912 certified words** e as **37 funções com zero diferenças de instrução**.
+- **SHA-256 dos Objetos Verificados**:
+  - `0x2F4`: `ea3b735b1ea9e9d6a3fd1938d57c3fbd7194636da6a8b4eb2776880e129ec595` (fonte `3d34ff3db6d4f6bc3075b9bc5b34005b63013d3392461be03a5e8c4eb5e7f1dc`)
+  - `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (fonte `d024c56a52319e61298916e4f3717b864ab25d88c6ade4b20c2f8e8fd14a3f60`)
+  - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`

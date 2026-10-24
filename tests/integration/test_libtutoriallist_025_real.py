@@ -353,6 +353,24 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             assert first["differences"][0]["word_index"] == expected["first_word"]
         if first["difference_count"]:
             assert first["differences"][0]["reason"] == expected.get("first_reason", "word differs")
+        if address == 0x2F4:
+            first_diff = first["differences"][0]
+            assert first_diff["word_index"] == 93
+            assert first_diff["candidate"] == "0x1880001f"
+            assert first_diff["original"] == "0x18800021"
+            assert first["candidate_size"] == 1012
+
+            diff_words = {d["word_index"]: d for d in first["differences"]}
+            # Confirmed register recovery: preceding in $s3, leading in $s4
+            assert diff_words[116]["candidate"] == "0x02649821"  # addu s3, s3, a0
+            assert diff_words[120]["candidate"] == "0x0284a021"  # addu s4, s4, a0
+            assert diff_words[129]["candidate"] == "0x02804021"  # addu t0, s4, zero (call arg 5: leading)
+            # Confirmed register recovery: line in $s1, row in $s2
+            assert diff_words[133]["candidate"] == "0x00008821"  # addu s1, zero, zero (line = 0)
+            assert diff_words[134]["candidate"] == "0x00009021"  # addu s2, zero, zero (row = 0)
+            assert diff_words[144]["candidate"] == "0x00913021"  # addu a2, a0, s1 (position = leading + line)
+            assert diff_words[162]["candidate"] == "0x00121840"  # sll v1, s2, 1 (row * 2)
+            assert diff_words[163]["candidate"] == "0x00721821"  # addu v1, v1, s2 (row * 3)
         if address == 0x1F10:
             diff_words = {d["word_index"]: d for d in first["differences"]}
             assert diff_words[103]["candidate"] == "0x01236021"
