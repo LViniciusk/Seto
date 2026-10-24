@@ -373,6 +373,9 @@ def test_025_new_reconstructions_and_complete_symbols() -> None:
             assert diff_words[163]["candidate"] == "0x00721821"  # addu v1, v1, s2 (row * 3)
         if address == 0x1F10:
             diff_words = {d["word_index"]: d for d in first["differences"]}
+            assert sorted(diff_words.keys()) == [
+                100, 101, 102, 103, 135, 143, 161, 167, 173, 174, 175
+            ]
             assert diff_words[103]["candidate"] == "0x01236021"
             assert diff_words[175]["candidate"] == "0x01236021"
         whole_results.append(first)

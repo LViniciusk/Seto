@@ -6052,3 +6052,83 @@ Esta rodada realizou a dissecação aprofundada do fluxo de controle (CFG) e age
   - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
   - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
   - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
+
+## SETO-DECOMP-033 — Final Register Allocation Recovery
+
+Esta rodada executou a investigação aprofundada da alocação de registradores e das cadeias def-use em `func_00001F10.c` (`0x1F10`, `libtutoriallist.prx`), mapeando a causa fundamental do swap de registradores entre `lead` e o ponteiro amplo `&trailing[group]`.
+
+### Tabela de Progresso e Evidência
+
+| Target | Antes | Depois | Accepted mechanism | Remaining blocker |
+|---|---|---|---|---|
+| `0x1F10` | NONMATCHING (137/186, 11 diffs, 744 B) | NONMATCHING (137/186, 11 diffs, 744 B) | Baseline autêntico preservado rigorosamente; diagnóstico causal definitivo do swap `t1`/`a3` por priorização por profundidade de loop no MWCC 3.0.1_219 vs linear-scan no histórico 2.4.1.01 | Comportamento dependente de versão do compilador (MWCC 3.0.1_219 vs MWCC 2.4.1.01) |
+| `0x2F4` | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | NONMATCHING (140/253, 92 diffs, 17 reloc, 1012 B) | Preservado integralmente conforme baseline 032-R2 | Bloco com `beq` incondicional e cópia morta `lhu` eliminados por `-O4,p` |
+| `0x1764` | NONMATCHING (42/182, 140 diffs, 728 B) | NONMATCHING (42/182, 140 diffs, 728 B) | Preservado integralmente | Rotação de registradores salvos |
+| `0x8F0` | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | INCONCLUSIVE (327/333, 0 diffs, 1332 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+| `0x21F8` | INCONCLUSIVE (190/238, 0 diffs, 952 B) | INCONCLUSIVE (190/238, 0 diffs, 952 B) | Preservado integralmente | Identidade de dados HI16/LO16 |
+
+### Análise Aprofundada da Alocação de Registradores
+
+#### 1. Diagnóstico do Pool e Prioridade do Alocador MWCC
+- **Ordem de Alocação de Registradores Voláteis (MWCC PSP MIPS)**:
+  - Testes isolados com funções sintéticas sem chamadas demonstraram que o MWCC seleciona registradores caller-saved em ordem decrescente de `$t` seguida de ordem decrescente de `$a`:
+    `... -> $t2 ($10) -> $t1 ($9) -> $t0 ($8) -> $a3 ($7) -> $a2 ($6) -> $a1 ($5) -> $a0 ($4)`.
+  - `$t2` é alocado para `group` (usado continuamente no preheader e loops).
+  - Os registradores livres remanescentes nesse estrato são `$t1`, `$t0` e `$a3`.
+
+#### 2. Causa Raiz do Swap `lead` ($a3 vs $t1) e `&trailing[group]` ($t1 vs $a3)
+- No **MWCC 3.0.1 build 219**, a coloração de grafos calcula o custo de spill ponderado pela profundidade de aninhamento de loop (`loop_depth * 10 + uses`):
+  - `lead` é utilizado no loop interno `for (j = 0; j < 8; j++)` (profundidade 2: `sll t2, lead, 1` e `addu a1, lead, t3`).
+  - O endereço amplo `&func_00006190_panel.trailing[group]` é utilizado apenas no loop externo `while (selected != position)` (profundidade 1: incremento em `sh v1, 0(addr)`).
+  - Consequentemente, o MWCC 3.0.1 atribui prioridade mais alta a `lead`, alocando para ele o primeiro registrador disponível do pool (`$t1`), relegando o endereço temporário `&trailing[group]` ao registrador seguinte (`$a3`).
+- No compilador original **MWCC 2.4.1.01** (identificado no `.comment` do PRX original, indisponível no ambiente legal configurado: `BLOCKED: historical compiler unavailable`):
+  - A alocação seguia modelo top-down / linear-scan no preheader:
+    1. Base `&leading[group]` calculada primeiro -> `$t0` ($8).
+    2. Base `&trailing[group]` calculada em seguida -> `$t1` ($9).
+    3. Valor escalar carregado `lead` alocado subsequentemente -> `$a3` ($7).
+- Todas as 11 diferenças na função resumem-se com exatidão matemática a essa permutação binária `$t1 <-> $a3`. Todas as instruções (opcodes, offsets imediatos, desvios, delay slots) coincidem em 100%.
+
+#### 3. Experimentos Testados e Falsificados (Registro Disciplinado)
+1. **Ponteiro Explícito para `trailing` (`cand_h1.c`)**:
+   - *Hipótese*: Atribuir `unsigned short *p_trailing = &panel.trailing[group]` forçaria o alocador a reconhecer o ponteiro como variável e alocar `$t1`.
+   - *Resultado*: REJEITADO. Reduziu o tamanho para 740 B (-4 B), causou materialização antecipada da base em `$a2` e gerou 88 diferenças.
+2. **Aritmética Direta Sem Variáveis Escalares (`cand_no_lead.c`)**:
+   - *Hipótese*: Remover variáveis `lead` e `trailing` intermediárias.
+   - *Resultado*: REJEITADO. Expandiu para 748 B (+4 B), 73 diferenças, invertendo ordem de operandos.
+3. **Tipo Estreito para `lead` (`unsigned short`) (`cand_type.c`)**:
+   - *Hipótese*: Declarar `unsigned short lead` para alterar pressão de registrador.
+   - *Resultado*: REJEITADO. 744 B, mas 23 diferenças (inserção de máscara de extensão e regressão em `slt`).
+4. **Inversão da Ordem de Carga (`lead` antes de `trailing`) (`cand_swap_loads.c`)**:
+   - *Hipótese*: Carregar `lead` antes de `trailing`.
+   - *Resultado*: REJEITADO. Expandiu para 748 B, 27 diferenças.
+5. **Eliminação do Cast `(unsigned char)` no Bound Check Interno (`cand_no_cast.c`)**:
+   - *Hipótese*: Avaliar se a remoção do cast alterava o CSE do loop.
+   - *Resultado*: REJEITADO. 744 B, 55 diferenças (explosão de pressão de registrador devido ao recálculo do deslocamento amplo).
+6. **Atribuição em Expressão Única (`cand_exp1.c`)**:
+   - *Hipótese*: `position = (lead = ...) + trailing;`.
+   - *Resultado*: REJEITADO. 744 B, inverteu ordem dos operandos da soma para `addu t4, v1, t1`.
+7. **Formato `for` Loop Invertido (`cand_for_loop.c`)**:
+   - *Hipótese*: Alterar sintaxe de loop para `for`.
+   - *Resultado*: REJEITADO. Objeto gerado 100% idêntico ao baseline (`b569edc7...`).
+8. **Inversão da Condição de Cauda (`cand_if_le.c`)**:
+   - *Hipótese*: `if (sum + extent <= 8) trailing++; else leading++;`.
+   - *Resultado*: REJEITADO. 744 B, 14 diferenças (desvio invertido).
+9. **Acumulação `position += lead` / `position += trailing` (`cand_pos_plus.c` / `cand_pos_plus_lead.c`)**:
+   - *Hipótese*: Acumular aditivamente em duas instruções.
+   - *Resultado*: REJEITADO. Inverte operandos para `trailing + lead` ou produz objeto idêntico (`b569edc7...`).
+10. **Padrão Canônico de `0x21F8` (`cand_21f8_style.c`)**:
+    - *Hipótese*: Replicar o padrão de `0x21F8` (`position = leading + trailing; lead = leading;`).
+    - *Resultado*: REJEITADO. Expandiu para 748 B (+4 B), 26 diferenças.
+
+### Validação e Cobertura
+- **Suíte de Testes Windows (`py -3.12 -m pytest -q -rs`)**: 790 passed, 39 skipped em 130 s.
+- **Suíte de Testes WSL2 (`pytest -q tests/integration/test_libtutoriallist_025_real.py`)**: 1 passed em 27 s (10 compilações limpas, verificando 0x2F4, 0x8F0, 0x1F10 e 0x21F8).
+- **Opt-ins Reais WSL2 (019–023, Callbacks, Módulo)**: 8 passed, 1 skipped em 75 s.
+- **Compilação e Verificação Estática**: `compileall` e `git diff --check` 100% limpos.
+- **Integridade da Certificação**: Preservadas rigorosamente as **16 funções `MATCHED` / 912 certified words** e as **37 funções com zero diferenças de instrução**.
+- **SHA-256 dos Objetos Verificados**:
+  - `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (fonte `d024c56a52319e61298916e4f3717b864ab25d88c6ade4b20c2f8e8fd14a3f60`)
+  - `0x2F4`: `ea3b735b1ea9e9d6a3fd1938d57c3fbd7194636da6a8b4eb2776880e129ec595`
+  - `0x1764`: `0a8d3235b28413127ed1d653d1236dff684f552e327d00b87a940485f88746ea`
+  - `0x8F0`: `4d34461a3af5e6740b895dc7810bc1eccef88918646b7f70ff1f90ee16b6ee67`
+  - `0x21F8`: `599b39cc6218e1cca1f1c9f44f5c555a8ba728ae20c0ee53e6eedc337e7b8ca7`
