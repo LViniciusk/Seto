@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from seto import elf, imports, mips
+from seto import elf, exports, imports, mips
 from seto.hashing import sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,90 +41,6 @@ if not EBOOT.is_file():
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import probe_common  # noqa: E402
-
-
-def _resident_string(module: elf.ElfFile, address: int) -> str:
-    resident = module.require_section(".rodata.sceResident")
-    offset = address - resident.addr
-    if not 0 <= offset < resident.size:
-        raise AssertionError(
-            f"library name pointer 0x{address:x} is outside .rodata.sceResident"
-        )
-    data = module.section_data(resident)
-    end = data.find(b"\x00", offset)
-    if end < 0:
-        raise AssertionError(f"library name at 0x{address:x} is not NUL-terminated")
-    return data[offset:end].decode("ascii")
-
-
-def _exported_nid(module: elf.ElfFile, library: str, nid: int) -> dict[str, object]:
-    """Follow one PSP export record and require its function-pointer relocation."""
-    lib_ent = module.require_section(".lib.ent")
-    entries = module.section_data(lib_ent)
-    assert len(entries) % 16 == 0
-    lib_ent_relocs = {
-        item.section_offset: item
-        for item in module.relocations_for(".lib.ent")
-        if item.section_offset is not None
-    }
-    resident = module.require_section(".rodata.sceResident")
-    resident_data = module.section_data(resident)
-
-    for entry_offset in range(0, len(entries), 16):
-        name_pointer = int.from_bytes(entries[entry_offset : entry_offset + 4], "little")
-        version = int.from_bytes(entries[entry_offset + 4 : entry_offset + 6], "little")
-        attributes = int.from_bytes(entries[entry_offset + 6 : entry_offset + 8], "little")
-        entry_words = entries[entry_offset + 8]
-        function_count = int.from_bytes(entries[entry_offset + 10 : entry_offset + 12], "little")
-        table_pointer = int.from_bytes(entries[entry_offset + 12 : entry_offset + 16], "little")
-        if not name_pointer or _resident_string(module, name_pointer) != library:
-            continue
-
-        name_reloc = lib_ent_relocs.get(entry_offset)
-        table_reloc = lib_ent_relocs.get(entry_offset + 12)
-        assert name_reloc is not None and name_reloc.type == elf.R_MIPS_32
-        assert name_reloc.addend == name_pointer and name_reloc.addend_valid
-        assert table_reloc is not None and table_reloc.type == elf.R_MIPS_32
-        assert table_reloc.addend == table_pointer and table_reloc.addend_valid
-        assert entry_words == 4
-        assert table_pointer % 4 == 0
-        assert resident.addr <= table_pointer
-        assert table_pointer + function_count * 8 <= resident.end
-
-        def read_word(address: int) -> int:
-            offset = address - resident.addr
-            return int.from_bytes(resident_data[offset : offset + 4], "little")
-
-        nids = [
-            read_word(table_pointer + index * 4) for index in range(function_count)
-        ]
-        assert nids.count(nid) == 1
-        index = nids.index(nid)
-        pointer_site = table_pointer + function_count * 4 + index * 4
-        target_address = read_word(pointer_site)
-        pointer_relocs = [
-            item
-            for item in module.relocations_for(".rodata.sceResident")
-            if item.section_offset == pointer_site - resident.addr
-        ]
-        assert len(pointer_relocs) == 1
-        pointer_reloc = pointer_relocs[0]
-        assert pointer_reloc.type == elf.R_MIPS_32
-        assert pointer_reloc.addend_valid and pointer_reloc.addend == target_address
-        assert module.require_section(".text").contains_address(target_address)
-        return {
-            "library": library,
-            "nid": f"0x{nid:08X}",
-            "version": version,
-            "attributes": attributes,
-            "function_count": function_count,
-            "nid_index": index,
-            "function_pointer_site": f"0x{pointer_site:x}",
-            "function_address": f"0x{target_address:x}",
-            "pointer_relocation": pointer_reloc.summary(),
-        }
-
-    raise AssertionError(f"EBOOT has no validated {library!r} export table")
 
 
 def _imported_nid(path: Path) -> dict[str, object]:
@@ -208,9 +124,25 @@ def test_034_eboot_export_and_exact_leaf_match() -> None:
         if item.section_offset is not None and FUNCTION <= item.section_offset < FUNCTION + FUNCTION_SIZE
     ]
 
-    export = _exported_nid(module, LIBRARY, NID)
-    assert export["function_address"] == f"0x{FUNCTION:x}"
-    assert export["function_count"] == 1245
+    matching_exports = exports.collect_exports(module, LIBRARY).exports_for_nid(NID)
+    assert len(matching_exports) == 1
+    export = matching_exports[0]
+    assert export.address == FUNCTION
+    assert export.function_count == 1245
+    assert export.pointer_relocation.type == elf.R_MIPS_32
+    assert export.pointer_relocation.addend_valid
+    assert export.pointer_relocation.addend == export.address
+    assert module.require_section(".text").contains_address(export.address)
+    export_summary = {
+        "library": export.library,
+        "nid": f"0x{export.nid:08X}",
+        "function_address": f"0x{export.address:x}",
+        "entry_index": export.entry_index,
+        "slot_index": export.slot_index,
+        "pointer_site": f"0x{export.pointer_site:x}",
+        "function_count": export.function_count,
+        "pointer_relocation": export.pointer_relocation.summary(),
+    }
 
     imports_by_module = [
         _imported_nid(LIBTUTORIALLIST),
@@ -297,7 +229,7 @@ def test_034_eboot_export_and_exact_leaf_match() -> None:
         "function": {
             "address": hex(FUNCTION),
             "size": FUNCTION_SIZE,
-            "export": export,
+            "export": export_summary,
         },
         "cross_artifact_imports": imports_by_module,
         "attempts": attempts,
