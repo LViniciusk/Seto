@@ -25,12 +25,11 @@ EXPECTED_LIBHTML_VIEW_SHA256 = "319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bda
 OPT_IN = "SETO_EBOOT_035_REAL"
 LIBRARY = "libehsys"
 
-# address, byte size, export NID, expected status, matching words, differences,
-# and the first observed differing word (index, candidate, original).
+# address, byte size, export NID, baseline status, baseline matching words, diffs.
 FUNCTIONS = (
-    (0x33D10, 60, 0x20E340D9, "MATCHED", 15, 0, None),
-    (0x3643C, 168, 0x4175E3DB, "NONMATCHING", 26, 16, (5, "0x8c840000", "0x24a30003")),
-    (0x9C98, 132, 0x1B00FB95, "NONMATCHING", 3, 30, (0, "0x2cc30004", "0x2cc20004")),
+    (0x33D10, 60, 0x20E340D9, "MATCHED", 15, 0),
+    (0x3643C, 168, 0x4175E3DB, "NONMATCHING", 26, 16),
+    (0x9C98, 132, 0x1B00FB95, "NONMATCHING", 3, 30),
 )
 PRIORITY_EXPORTS = {
     0x31454993: 0x3D8F0,
@@ -67,7 +66,12 @@ if not EBOOT.is_file():
     )
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 import probe_common  # noqa: E402
+from eboot_035_progress import (  # noqa: E402
+    BASELINE_DIFFERENCE_INDICES,
+    assert_match_progress,
+)
 
 
 @pytest.mark.skipif(
@@ -158,7 +162,6 @@ def test_035_verified_exports_and_three_real_compile_matches() -> None:
         expected_status,
         expected_matching,
         expected_diffs,
-        first_difference,
     ) in FUNCTIONS:
         exported = collection.exports_for_nid(nid)
         assert len(exported) == 1
@@ -240,26 +243,30 @@ def test_035_verified_exports_and_three_real_compile_matches() -> None:
                 )
             payload = json.loads(result.stdout)
             assert result.returncode == payload["exit_code"]
-            assert payload["status"] == expected_status
             assert payload["evidence"] == "compiled-object"
-            assert payload["verified_decompilation"] is (expected_status == "MATCHED")
             assert payload["provenance"]["flags"] == ["-O4,p", "-sdatathreshold", "0"]
             comparison = payload["match"]
-            assert comparison["matching_words"] == expected_matching
             assert comparison["total_words"] == size // 4
-            assert comparison["difference_count"] == expected_diffs
             assert comparison["relocation_issues"] == []
             assert comparison["limitations"] == []
-            if first_difference is None:
+            if expected_status == "MATCHED":
+                assert payload["status"] == "MATCHED"
+                assert payload["verified_decompilation"] is True
+                assert comparison["status"] == "MATCHED"
+                assert comparison["matching_words"] == expected_matching
+                assert comparison["difference_count"] == expected_diffs
                 assert comparison["differences"] == []
                 if address == 0x33D10:
                     assert any("0x92fc" in call for call in comparison["resolved_calls"])
             else:
-                word, candidate_word, original_word = first_difference
-                first = comparison["differences"][0]
-                assert first["word_index"] == word
-                assert first["candidate"] == candidate_word
-                assert first["original"] == original_word
+                assert expected_status == "NONMATCHING"
+                assert expected_diffs == len(BASELINE_DIFFERENCE_INDICES[address])
+                assert_match_progress(
+                    payload,
+                    total_words=size // 4,
+                    baseline_matching_words=expected_matching,
+                    baseline_difference_indices=BASELINE_DIFFERENCE_INDICES[address],
+                )
 
             object_path = out_dir / f"{source.stem}.o"
             candidate_object = elf.parse(object_path)
