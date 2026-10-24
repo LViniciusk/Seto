@@ -2445,6 +2445,37 @@ layout imposto, não prova de identidade; `INCONCLUSIVE` não vira `MATCHED` e a
 extensão a `0x414` segue fora de escopo. A suíte completa WSL2 mantém apenas as
 falhas ambientais já descritas acima.
 
+## SETO-DECOMP-036 — EBOOT Matching Recovery
+
+| Função | Baseline | Resultado final | Divergências | Relocações | Status |
+|---|---|---|---|---|---|
+| `0x3643C` | 26/42, diferenças nos índices 5–20 | 42/42 | nenhuma | 0 problemas; chamada local `0x31308` resolvida | **MATCHED** |
+| `0x3F2B0` | sem C certificado | candidato experimental v7: 30 words, 18/30 | 12 | 0 reportadas; comparação exploratória | **NONMATCHING** |
+| `0x9C98` | 3/33, diferenças registradas em `tests/eboot_035_progress.py` | baseline de produção preservado; hipótese experimental até 4/33 | 29, incluindo índices fora da allowlist de baseline | 0 reportadas; experimento não aceitável | **BLOQUEADO** |
+
+`0x3643C` agora compila com MWCC PSP 3.0.1 build 219 (`-O4,p
+-sdatathreshold 0`) como `MATCHED`, 42/42, sem limitações nem problemas de
+relocation. Duas compilações independentes já foram verificadas, ambas com o
+objeto SHA-256 `43436156562c9a690d650c7a0b514a410f8f5cc7f541d7688d5242ac6fa6a7d1`.
+O alinhamento signed por divisão e o lugar da inicialização do buffer explicam
+a sequência de instruções recuperada.
+
+Para `0x3F2B0`, a fronteira Ghidra e o export `libehsys/0xE58C0FDC` foram
+confirmados. A melhor estrutura experimental alcançou exatamente 30 words e
+18 iguais; as variações de flags MWCC examinadas não chegaram a 30 words
+coincidentes. Não foi promovida a fonte de produção, pois não há certificação de
+equivalência. Para `0x9C98`, hipóteses do contador pré-decrementado renderam no
+máximo 4/33, mas com diferenças novas; a fonte de produção permanece no
+baseline. A comparação real 035 já tinha verificado `0x33D10` estritamente
+MATCHED 15/15; nenhum arquivo dessa função foi alterado nesta rodada.
+
+As duas falhas locais mencionadas no teste parametrizado de exports não se
+reproduziram neste ambiente: `tests/test_exports.py::test_malformed_entries_and_names_are_reported`
+passou (4 casos). Suíte Windows/Python 3.12: **827 passed, 45 skipped**;
+`compileall` e `git diff --check` passaram. Integrações reais WSL2 034/035:
+**2 passed**; integração real 036: **1 passed**, incluindo compilação dupla e
+regressão 035.
+
 ## SETO-DECOMP-015-R3 — Preserve Valid Jump-Table Divergences
 
 **Resultado operacional: `PASS` inalterado; a 015 continua 30/30 words e 6/6
