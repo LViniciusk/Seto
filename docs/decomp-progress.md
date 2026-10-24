@@ -6102,3 +6102,93 @@ A permutação pode resultar de diferenças de heurística de alocação entre 2
 - `py -3.12 -m pytest -q -rs` (Windows), integração real 025 em WSL2/Metrowerks, `compileall` e `git diff --check`: ver PR #32.
 - SHA-256 do objeto `0x1F10`: `b569edc7730675e8f17614803b951fe6e4a468264ada92831aae23f321f5f307` (inalterado).
 - Preservados: 16 funções `MATCHED` / 912 palavras certificadas e as 37 funções com zero diferenças de instrução.
+
+## SETO-DECOMP-034 — EBOOT original e primeira reconstrução
+
+### Mídia e dump
+
+- ISO `TF1.iso`: **701.693.952 bytes**, SHA-256
+  `fb22d0f06bb9f45a2d0eff0ef66d541e61210599105037063db60421e1a3c906`;
+  `PARAM.SFO` confirma `ULUS10136`, versão `1.03`, Yu-Gi-Oh! GX Tag Force.
+- EBOOT criptografado original: **1.110.624 bytes**, assinatura `~PSP`, SHA-256
+  `9a5bbf89419b6ba13494318fce4adb6279d099bda54fbf40b9c2dc178b96809a`.
+- PPSSPP **v1.20.4** (`PPSSPPWindows64.exe`, SHA-256
+  `27d3edbb06dc623dab60877d3e3a975aef4034c7d4fac464e92fd4998864d2ec`). O
+  Memory Stick ativo é `Documents/PPSSPP/memstick`; o diretório `PSP/SYSTEM/DUMP`
+  não existia antes do primeiro boot. Foi habilitada temporariamente a opção
+  oficial *Dump decrypted EBOOT.BIN on game boot* via `DumpFileTypes=1` (bit
+  EBOOT); a configuração foi restaurada para `DumpFileTypes=0`.
+- O arquivo novo `PSP/SYSTEM/DUMP/ULUS10136_EBOOT.BIN` tem **1.110.624 bytes**,
+  assinatura ELF e SHA-256
+  `d4d0efc3d6c49a7ba8142adbd316ed006a3035a572169e9ef04c6cd0daba7a91`. Foi
+  copiado, não renomeado, para `private/decrypted/ULUS10136_EBOOT.elf` com hash
+  idêntico. Um segundo boot mostrou a janela `ULUS10136 : Yu-Gi-Oh! GX Tag Force`
+  com o argumento ISO exato; o hash do dump não mudou. ISO, EBOOT original e
+  dump não foram versionados nem modificados.
+
+### ELF, inventário e relação com `libehsys`
+
+- O dump passa pelo parser existente sem ajustes: `ELF32`, little-endian,
+  `EM_MIPS`, `ET_MIPS_PSP_PRX`, entry `0`, 24 seções, um `PT_LOAD` executável
+  que contém o entrypoint, 17.369 relocações válidas e sem tabela de símbolos.
+  O mapeamento de `.text` e das seções alocadas confere com o `PT_LOAD`; `.text`
+  tem 437.548 bytes. Tipos de relocação: `R_MIPS_26` 6.694, `R_MIPS_32` 2.537,
+  `R_MIPS_HI16` 4.013, `R_MIPS_LO16` 4.125. `.comment` identifica
+  `MW MIPS C Compiler (2.4.1.01)`.
+- As APIs existentes `functions`, `imports`, `split` e `disasm` funcionaram;
+  `imports` reconheceu 28 bibliotecas/274 stubs, `split` validou 3 segmentos/14
+  subsegmentos e `disasm` listou a função escolhida. Os 2.307 limites de
+  `mips.find_functions` e as 1.651 funções do auto-analysis Ghidra são candidatos,
+  não uma contagem certificada do executável. Ghidra 12.1.3 selecionou
+  explicitamente `Allegrex:LE:32:default`.
+- `.lib.ent` declara `libehsys` (versão `0x48`, 1.245 entradas). Seus 1.219 NIDs
+  distintos coincidem com os conjuntos importados por `libtutoriallist.prx` e
+  `libhtml_view.prx` (1.245 stubs cada; 26 NIDs repetidos). Para o NID
+  `0x31454993`, o slot de export contém uma relocação PSP `R_MIPS_32` válida que
+  aponta para `.text+0x3d8f0`; ambos os PRXs importam `libehsys/0x31454993`.
+  Portanto, a relação da função selecionada com a interface comum é baseada em
+  metadados de export/import, não apenas em nomes ou semelhança de código.
+  Não foram inferidos endereços para os outros slots de export sem relocação.
+
+### Primeira função e validação
+
+- `decomp/src/eboot/func_0003D8F0.c` reconstrói
+  `[.text:0x3d8f0,0x3d8f8)`, export `libehsys/0x31454993`. Ghidra verificou um
+  corpo contíguo exato de 8 bytes, com 8 chamadas entrantes; as instruções são
+  `jr $ra` e `addiu $v0,$zero,1` no delay slot. O nome permanece address-derived.
+- TDD: a hipótese inicial `return 0` compilou como `NONMATCHING` 1/2 (word 1:
+  candidato `0x00001021`, original `0x24020001`). Corrigido para `return 1`, o
+  resultado é `MATCHED` **2/2**, sem diferenças, relocations ou limitações.
+- Duas compilações independentes `mwccpsp 3.0.1 build 219`, `-O4,p
+  -sdatathreshold 0`, deram objeto SHA-256
+  `4ab73352e85ea72a45ca939bb8cc8806e862bb61b5aa4e34655b9398bca5b4bc`; fonte
+  SHA-256 `49cd55f16e9deeb20a4a5fd8321592537f5a76b949931dc9b551990fcb9baf8e`; a
+  alternativa `-O4,s -sdatathreshold 0` gerou o mesmo objeto. A versão 2.4.1.01
+  do `.comment` é evidência do EBOOT original, não foi tratada como prova de que
+  o compilador histórico esteja disponível.
+
+### Testes e regressões
+
+- `SETO_EBOOT_034_REAL=1` em WSL2/Metrowerks: **1 passed** (5,11 s); repetido
+  em uma cópia nativa com `private/` real: **1 passed**. Duas compilações
+  `-O4,p` na integração produziram o mesmo hash do objeto. A alternativa
+  `-O4,s` também passou com o mesmo hash.
+- Opt-ins reais 019–023, 025 e callbacks: **7 passed**; equivalência real de
+  jump-table, multi-reference, integrated-module e link: **8 passed**.
+- Suíte completa Windows/Python 3.12: **787 passed, 43 skipped**. Suíte WSL2/
+  Python 3.12 em cópia com `private/` real: **809 passed, 21 skipped**. Os skips
+  são opt-ins ou pré-requisitos ausentes, não foram contados como aprovações.
+- `compileall` e `git diff --check`: **PASS**. A execução nativa Windows do
+  compilador foi `BLOCKED` pela licença ausente `C:\flexlm\license.dat`; a
+  aprovação oficial foi obtida via WSL2/wibo.
+- Totais de certificação anteriores permanecem separados: **16 `MATCHED` / 912
+  palavras** e 37 funções sem diferenças. O resultado EBOOT não foi somado a
+  esses totais.
+
+### Limitações restantes
+
+Somente a primeira função foi reconstruída; os inventários automáticos não são
+uma cobertura total validada. O nome semântico e a assinatura de alto nível não
+são conhecidos, além do retorno de 32 bits igual a `1`. O compilador original
+2.4.1.01 não está disponível; a certificação mede igualdade do intervalo com o
+MWCC 3.0.1 configurado.
