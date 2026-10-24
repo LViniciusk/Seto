@@ -6192,3 +6192,94 @@ uma cobertura total validada. O nome semântico e a assinatura de alto nível n�
 são conhecidos, além do retorno de 32 bits igual a `1`. O compilador original
 2.4.1.01 não está disponível; a certificação mede igualdade do intervalo com o
 MWCC 3.0.1 configurado.
+
+## SETO-DECOMP-035 — exports de `libehsys` e reconstruções do EBOOT
+
+### Inventário verificável
+
+- `src/seto/exports.py` acrescenta uma API reutilizável para exports PSP; a
+  regressão 034 passou a usar essa API em vez de manter outro parser de tabelas.
+  Um slot só é aceito quando sua entrada tem o layout suportado, a relocação do
+  ponteiro é válida e o addend comprovado aponta para dentro do `.text`
+  executável. Entradas ambíguas ou sem essas provas são relatadas como
+  limitações, não promovidas a exports.
+- `scripts/triage_eboot_035.py` gera `build/seto035/export-triage.json` a partir
+  do EBOOT e de `libtutoriallist.prx` / `libhtml_view.prx`; a integração também
+  confere os hashes dos insumos e revalida deterministicamente os logs do
+  Ghidra. O relatório lista os exports, slots, NIDs repetidos, aliases,
+  limitações, stubs e chamadas-importadoras, além das referências, relocations e
+  chamadas internas dos candidatos.
+- Foram comprovados **1.182 slots de export**, correspondentes a **1.156 NIDs
+  distintos**; há **64 limitações** (63 slots sem prova suficiente), **26 grupos
+  com NID repetido**, dos quais **15 ambíguos**, e **15 grupos de aliases**. Os
+  valores dos NIDs duplicados e aliases permanecem separados por slot/endereço;
+  o inventário não escolhe uma identidade arbitrariamente.
+- Os cinco mapeamentos prioritários conferidos contra stubs de importação são:
+  `0x31454993 → 0x3D8F0` (já coberto em 034), `0x10F3BB61 → 0x8040`,
+  `0xB4471B5E → 0x38DB4`, `0x20E340D9 → 0x33D10` e
+  `0x8171F765 → 0x3D8C8`. As importações de `libtutoriallist.prx` e
+  `libhtml_view.prx` são apresentadas separadamente; importar um stub não é
+  contado como prova de que o módulo o chama.
+
+### Fronteiras e escopo da reconstrução
+
+- Ghidra **12.1.3**, linguagem `Allegrex:LE:32:default`, confirmou fronteira
+  contígua e de tamanho exato para os dez candidatos examinados. As funções
+  variam de 15 a 66 instruções. O relatório inclui os limites, o resultado da
+  decompilação, as referências e o limite sugerido pelo detector independente.
+- No export `0x10F3BB61`, Ghidra confirma `[0x8040,0x813C)`, enquanto
+  `mips.find_functions()` termina prematuramente em `0x80F4`; o limite
+  automático não foi tratado como autoridade. Essa rotina e candidatos com
+  referências de dados ainda sem identidade, muitas chamadas ou lógica de
+  comando mais complexa ficam documentados como trabalho futuro.
+- Foram mantidas três fontes C em `decomp/src/eboot/`: `0x33D10`, `0x3643C` e
+  `0x9C98`. São nomes derivados de endereço; não se inferem nomes semânticos,
+  assinaturas de API nem equivalência com MWCC 2.4.1.01.
+- `0x3F2B0` foi excluída da entrega: embora sua fronteira Ghidra esteja
+  confirmada e o corpo tenha sido inspecionado, as hipóteses compiladas
+  produziram símbolos de tamanho incompatível com o intervalo verificado; por
+  isso, nenhuma comparação parcial foi apresentada como resultado da função.
+
+### Compilação e comparação do EBOOT
+
+As comparações abaixo compilam a fonte nesta execução com MWCC PSP **3.0.1 build
+219**, `-O4,p -sdatathreshold 0`, e comparam o objeto gerado à faixa de `.text`.
+Foram feitas duas compilações independentes por fonte; cada par produziu hashes
+de fonte e objeto idênticos. Os resultados EBOOT não alteram os totais PRX.
+
+| Endereço / NID | Resultado | Comparação | SHA-256 da fonte | SHA-256 do objeto |
+| --- | --- | ---: | --- | --- |
+| `0x33D10` / `0x20E340D9` | **MATCHED** | 15/15, 0 diferenças, 0 problemas de relocation/limitações | `5bdd4ecf38e6dac1974056618465cbe3075c8a7de6583bb555a1543d0656c985` | `d41780e40ad8fe5459191c992b407ce9db44864f49f69873f0c0be2ad57aea89` |
+| `0x3643C` / `0x4175E3DB` | **NONMATCHING** | 26/42, 16 diferenças, 0 problemas de relocation/limitações | `11adb5d37bdf75f8301af3103186687d794efb29e9192a300ba75ed18475c23a` | `84b61c64fdddfc972a57d666cc0d9cdb98fa25aa66dfb89584c01eaf371ca7fc` |
+| `0x9C98` / `0x1B00FB95` | **NONMATCHING** | 3/33, 30 diferenças, 0 problemas de relocation/limitações | `e50ed669982e212d3624907a28d5f34b43203321d5fccb01cbf5a92a6a2959e2` | `6626a628dc14f9dd7ca79c6652a9e93409629a31ebd3f1b0d412bf1e91d8e881` |
+
+Em `0x3643C`, a primeira diferença está na palavra 5 (`0x8c840000` no objeto,
+`0x24a30003` no EBOOT); em `0x9C98`, está na palavra 0 (`0x2cc30004` no objeto,
+`0x2cc20004` no EBOOT). Ambos os objetos têm o tamanho exato da fronteira e
+resolvem as chamadas/relocations sem limitações, mas continuam NONMATCHING.
+Somente `0x33D10` é uma nova função MATCHED nesta tarefa.
+
+O `.comment` do EBOOT menciona `2.4.1.01`; isso é evidência sobre o binário
+original, **não** prova de equivalência do compilador. A verificação foi feita
+com 3.0.1 e não afirma equivalência de versão.
+
+### Testes, regressões e baseline
+
+- A integração real 035 em WSL2 compilou e comparou as três funções duas vezes:
+  **1 passed**. A integração real 034, após a migração à API compartilhada,
+  também passou: **1 passed**.
+- Regressões reais WSL2/Metrowerks 019–023, 025 e callbacks: **7 passed**; foram
+  executadas em uma cópia temporária com o PRX físico para respeitar a proteção
+  contra `private/` via symlink. A suíte completa nessa cópia: **797 passed, 37
+  skipped**. Suíte completa Windows/Python 3.12: **810 passed, 44 skipped**.
+- Testes focados de exports, evidência Ghidra e integração, em Windows/Python
+  3.12: **23 passed, 2 skipped** antes das execuções reais. `compileall` e
+  `git diff --check`: **PASS**. A instalação temporária de pytest usada em WSL2
+  fica sob `build/seto035/`; não é dependência adicionada ao ambiente do projeto.
+- Mantidos sem alteração os resultados PRX anteriores: **16 MATCHED / 912
+  palavras certificadas** e **37 funções sem diferenças**. O MATCHED EBOOT de
+  15 palavras é relatado separadamente, sem ser somado a esses totais.
+- O EBOOT de entrada tem SHA-256
+  `d4d0efc3d6c49a7ba8142adbd316ed006a3035a572169e9ef04c6cd0daba7a91`.
+  Relatórios, objetos, logs do Ghidra, insumos proprietários e ferramentas são
+  artefatos locais ignorados em `build/`, não conteúdo da entrega.
