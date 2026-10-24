@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import probe_common
 from seto import elf
 from seto.hashing import sha256_file
 from eboot_035_progress import BASELINE_DIFFERENCE_INDICES, assert_match_progress
@@ -33,25 +34,25 @@ def test_036_matching_recovery_and_baseline_preservation() -> None:
         pytest.fail("BLOCKED: configured Metrowerks/wibo integration must run under WSL2/Linux")
     assert sha256_file(EBOOT.resolve(strict=True)) == EXPECTED_EBOOT_SHA256
 
-    build_root = REPO_ROOT / "build" / "seto036" / "integration"
-    build_root.mkdir(parents=True, exist_ok=True)
+    try:
+        build_root = probe_common.validated_build_root(REPO_ROOT, subdir="seto036")
+    except probe_common.ProbeError as exc:
+        pytest.fail(f"BLOCKED: unsafe integration build root: {exc}")
+    try:
+        probe_common.ensure_build_dir(build_root, build_root)
+    except probe_common.ProbeError as exc:
+        pytest.fail(f"BLOCKED: unsafe integration build root: {exc}")
     match_script = REPO_ROOT / "scripts" / "match_function.py"
     config = REPO_ROOT / "config" / "wsl" / "seto.toml"
-
-    # Preserve the already-certified 15/15 production function using the full 035 integration.
-    env = os.environ.copy()
-    env["SETO_EBOOT_035_REAL"] = "1"
-    regression = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/integration/test_eboot_035_real.py", "-q"],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=600, check=False,
-    )
-    assert regression.returncode == 0, regression.stdout + regression.stderr
 
     source = REPO_ROOT / "decomp" / "src" / "eboot" / "func_0003643C.c"
     attempts = []
     for number in (1, 2):
-        out_dir = build_root / f"attempt-{number}"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = build_root / "integration" / f"attempt-{number}"
+        try:
+            probe_common.ensure_build_dir(out_dir, build_root)
+        except probe_common.ProbeError as exc:
+            pytest.fail(f"BLOCKED: unsafe integration output directory: {exc}")
         run = subprocess.run(
             [sys.executable, str(match_script), "--config", str(config), "--prx", str(EBOOT),
              "--function", "0x3643C", "--size", "168", "--source", str(source),

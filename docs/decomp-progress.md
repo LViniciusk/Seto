@@ -2445,46 +2445,6 @@ layout imposto, não prova de identidade; `INCONCLUSIVE` não vira `MATCHED` e a
 extensão a `0x414` segue fora de escopo. A suíte completa WSL2 mantém apenas as
 falhas ambientais já descritas acima.
 
-## SETO-DECOMP-036 — EBOOT Matching Recovery
-
-| Função | Baseline | Resultado final | Divergências | Relocações | Status |
-|---|---|---|---|---|---|
-| `0x3643C` | 26/42, diferenças nos índices 5–20 | 42/42 | nenhuma | 0 problemas; chamada local `0x31308` resolvida | **MATCHED** |
-| `0x3F2B0` | sem C certificado | candidato experimental v7: 30 words, 18/30 | 12 | 0 reportadas; comparação exploratória | **NONMATCHING** |
-| `0x9C98` | 3/33, diferenças registradas em `tests/eboot_035_progress.py` | baseline de produção preservado; hipótese experimental até 4/33 | 29, incluindo índices fora da allowlist de baseline | 0 reportadas; experimento não aceitável | **BLOQUEADO** |
-| `0xD28C` | nenhuma reconstrução C validada | candidato experimental: 31–35 words contra limite de 38 | não comparável no limite integral | nenhuma reportada | **BLOQUEADO** |
-
-`0x3643C` agora compila com MWCC PSP 3.0.1 build 219 (`-O4,p
--sdatathreshold 0`) como `MATCHED`, 42/42, sem limitações nem problemas de
-relocation. Duas compilações independentes já foram verificadas, ambas com o
-objeto SHA-256 `43436156562c9a690d650c7a0b514a410f8f5cc7f541d7688d5242ac6fa6a7d1`.
-O alinhamento signed por divisão e o lugar da inicialização do buffer explicam
-a sequência de instruções recuperada.
-
-Para `0x3F2B0`, a fronteira Ghidra e o export `libehsys/0xE58C0FDC` foram
-confirmados. A melhor estrutura experimental alcançou exatamente 30 words e
-18 iguais; as variações de flags MWCC examinadas não chegaram a 30 words
-coincidentes. Não foi promovida a fonte de produção, pois não há certificação de
-equivalência. Para `0x9C98`, hipóteses do contador pré-decrementado renderam no
-máximo 4/33, mas com diferenças novas; a fonte de produção permanece no
-baseline. A comparação real 035 já tinha verificado `0x33D10` estritamente
-MATCHED 15/15; nenhum arquivo dessa função foi alterado nesta rodada.
-
-Como expansão alternativa, `0xD28C` (`libehsys/0xD3A120A4`) foi escolhida do
-inventário 035: Ghidra 12.1.3 confirmou `[0xD28C,0xD324)` como corpo exato de
-38 instruções Allegrex, sem chamadas nem dados globais. A hipótese C segue a
-detecção de NUL por palavra e o fallback byte a byte, mas as compilações MWCC
-3.0.1 examinadas geraram objetos de 31–35 words. O matcher corretamente recusou
-comparações truncadas; não foi promovida nem contada como função recuperada.
-
-As duas falhas locais mencionadas no teste parametrizado de exports não se
-reproduziram neste ambiente: `tests/test_exports.py::test_malformed_entries_and_names_are_reported`
-passou (4 casos). Suíte Windows/Python 3.12: **827 passed, 45 skipped**;
-`compileall` e `git diff --check` passaram. Integrações reais WSL2 034/035:
-**2 passed**; integração real 036: **1 passed**, incluindo compilação dupla e
-regressão 035. `0xD28C` permanece bloqueada no marco de tamanho integral; os
-experimentos permanecem em `build/` e não são artefatos de produção.
-
 ## SETO-DECOMP-015-R3 — Preserve Valid Jump-Table Divergences
 
 **Resultado operacional: `PASS` inalterado; a 015 continua 30/30 words e 6/6
@@ -6323,3 +6283,38 @@ com 3.0.1 e não afirma equivalência de versão.
   `d4d0efc3d6c49a7ba8142adbd316ed006a3035a572169e9ef04c6cd0daba7a91`.
   Relatórios, objetos, logs do Ghidra, insumos proprietários e ferramentas são
   artefatos locais ignorados em `build/`, não conteúdo da entrega.
+
+## SETO-DECOMP-036 — EBOOT Matching Recovery
+
+| Função | Baseline | Resultado final | Divergências | Relocações | Status |
+|---|---|---|---|---|---|
+| `0x3643C` | 26/42, diferenças nos índices 5–20 | 42/42 | nenhuma | 0 problemas; chamada local `0x31308` resolvida | **MATCHED** |
+| `0x3F2B0` | sem C certificado | candidato experimental v7: 30 words, 18/30 | 12 | 0 reportadas; comparação exploratória | **NONMATCHING** |
+| `0x9C98` | 3/33, diferenças registradas em `tests/eboot_035_progress.py` | baseline de produção preservado; hipótese experimental até 4/33 | 29, incluindo índices fora da allowlist de baseline | 0 reportadas; experimento não aceitável | **BLOQUEADO** |
+| `0xD28C` | nenhuma reconstrução C validada | candidato experimental: 31–35 words contra limite de 38 | não comparável no limite integral | nenhuma reportada | **BLOQUEADO** |
+
+`0x3643C` compila com MWCC PSP 3.0.1 build 219 (`-O4,p -sdatathreshold 0`)
+como `MATCHED`, 42/42, sem limitações nem problemas de relocation. Duas
+compilações independentes produziram o objeto SHA-256
+`43436156562c9a690d650c7a0b514a410f8f5cc7f541d7688d5242ac6fa6a7d1`. O
+alinhamento signed por divisão e a posição de inicialização do buffer explicam
+a sequência recuperada.
+
+Para `0x3F2B0`, a fronteira Ghidra e o export `libehsys/0xE58C0FDC` foram
+confirmados. A melhor hipótese atingiu 30 words, com 18 iguais; não foi
+promovida sem equivalência. Para `0x9C98`, hipóteses estruturais renderam no
+máximo 4/33 com divergências novas, portanto a fonte de produção permanece no
+baseline. `0x33D10` permanece estritamente MATCHED 15/15.
+
+Como expansão alternativa, `0xD28C` (`libehsys/0xD3A120A4`) foi selecionada do
+inventário 035. Ghidra 12.1.3 confirmou `[0xD28C,0xD324)` como corpo Allegrex
+exato de 38 instruções, sem chamadas ou dados globais. As hipóteses C
+compilaram entre 31 e 35 words; o matcher não aceitou comparações truncadas e
+nenhuma foi promovida.
+
+As falhas locais reportadas no teste de exports não se reproduziram:
+`tests/test_exports.py::test_malformed_entries_and_names_are_reported` passou
+(4 casos). Suíte Windows/Python 3.12: 827 passed, 45 skipped; compileall e
+`git diff --check` passaram. Integrações reais WSL2 034/035: 2 passed; 036:
+1 passed. Experimentos não certificados e artefatos proprietários permanecem
+ignorados em `build/`.
