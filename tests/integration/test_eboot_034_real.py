@@ -34,7 +34,10 @@ pytestmark = pytest.mark.integration
 if not EBOOT.is_file():
     if os.environ.get(OPT_IN) == "1":
         pytest.fail(f"BLOCKED: {EBOOT} is absent while {OPT_IN}=1")
-    pytest.skip("local PPSSPP EBOOT dump is absent; this test reads private/ only")
+    pytest.skip(
+        "local PPSSPP EBOOT dump is absent; this test reads private/ only",
+        allow_module_level=True,
+    )
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import probe_common  # noqa: E402
