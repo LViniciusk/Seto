@@ -42,13 +42,18 @@ def test_036_matching_recovery_and_baseline_preservation() -> None:
         probe_common.ensure_build_dir(build_root, build_root)
     except probe_common.ProbeError as exc:
         pytest.fail(f"BLOCKED: unsafe integration build root: {exc}")
+    integration_dir = build_root / "integration"
+    try:
+        probe_common.ensure_build_dir(integration_dir, build_root)
+    except probe_common.ProbeError as exc:
+        pytest.fail(f"BLOCKED: unsafe integration directory: {exc}")
     match_script = REPO_ROOT / "scripts" / "match_function.py"
     config = REPO_ROOT / "config" / "wsl" / "seto.toml"
 
     source = REPO_ROOT / "decomp" / "src" / "eboot" / "func_0003643C.c"
     attempts = []
     for number in (1, 2):
-        out_dir = build_root / "integration" / f"attempt-{number}"
+        out_dir = integration_dir / f"attempt-{number}"
         try:
             probe_common.ensure_build_dir(out_dir, build_root)
         except probe_common.ProbeError as exc:

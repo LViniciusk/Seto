@@ -38,3 +38,22 @@ def test_036_attempt_directory_rejects_symlink_before_matcher(tmp_path: Path) ->
     with pytest.raises(ProbeError, match="build directory may not be a symlink"):
         ensure_build_dir(link, root)
     assert list(outside.iterdir()) == []
+
+
+def test_036_intermediate_integration_symlink_is_rejected_before_creation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "build" / "seto036"
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    integration = root / "integration"
+    try:
+        integration.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"platform does not permit local symlink creation: {exc}")
+
+    ensure_build_dir(root, root)
+    with pytest.raises(ProbeError, match="build directory may not be a symlink"):
+        ensure_build_dir(integration, root)
+    assert list(outside.iterdir()) == []
