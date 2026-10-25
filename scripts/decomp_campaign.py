@@ -1,0 +1,2742 @@
+#!/usr/bin/env python3
+"""Local, resumable OpenCode orchestration for strictly verified EBOOT work.
+
+The scheduler stores only candidate metadata and local checkpoints in SQLite.
+It never writes AIMemory pages, changes the production matcher, or treats an
+agent's claim of MATCHED as evidence.  Certification is performed by two fresh
+invocations of scripts/match_function.py against the private EBOOT.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import datetime as dt
+import email.utils
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+import tomllib
+import uuid
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from pathlib import Path
+from typing import Any, Callable, Iterable, Sequence
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = REPO_ROOT / "config" / "decomp_campaign.toml"
+SECRET_ENV_PARTS = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
+TOKEN_PATTERNS = (
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+)
+HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class FailureKind(StrEnum):
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    RATE_LIMIT = "rate_limit"
+    AUTH = "auth"
+    NETWORK = "network"
+    TIMEOUT = "timeout"
+    AGENT_ERROR = "agent_error"
+    INTERRUPTED = "interrupted"
+
+
+@dataclass(frozen=True)
+class Failure:
+    kind: FailureKind
+    retry_after_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class Candidate:
+    address: str
+    size_bytes: int
+    nid: str
+    priority: int
+    boundary_status: str
+    preferred_provider: str | None = None
+    evidence: dict[str, Any] = field(default_factory=dict)
+    initial_state: str | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            address = int(self.address, 0)
+            nid = int(self.nid, 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("candidate address and NID must be hexadecimal integers") from exc
+        if address < 0 or nid < 0 or nid > 0xFFFFFFFF:
+            raise ValueError("candidate address/NID is outside its valid range")
+        if self.size_bytes <= 0 or self.size_bytes % 4:
+            raise ValueError("candidate size must be a positive multiple of four bytes")
+        if self.boundary_status not in {"EXACT", "UNVERIFIED"}:
+            raise ValueError("boundary_status must be EXACT or UNVERIFIED")
+
+    @property
+    def numeric_address(self) -> int:
+        return int(self.address, 0)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> Candidate:
+        return cls(
+            address=str(value["address"]),
+            size_bytes=int(value["size_bytes"]),
+            nid=str(value["nid"]),
+            priority=int(value.get("priority", 0)),
+            boundary_status=str(value.get("boundary_status", "UNVERIFIED")),
+            preferred_provider=value.get("preferred_provider"),
+            evidence=dict(value.get("evidence", {})),
+            initial_state=value.get("initial_state"),
+        )
+
+
+@dataclass(frozen=True)
+class Worker:
+    worker_id: str
+    provider: str
+    model: str
+
+
+@dataclass(frozen=True)
+class Claim:
+    address: str
+    size_bytes: int
+    nid: str
+    priority: int
+    boundary_status: str
+    worker_id: str
+    provider: str
+    session_id: str | None
+    attempt_number: int
+    lease_until: float
+    checkpoint: dict[str, Any]
+    evidence: dict[str, Any]
+
+    @property
+    def numeric_address(self) -> int:
+        return int(self.address, 0)
+
+
+@dataclass(frozen=True)
+class WorkResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    interrupted: bool = False
+
+
+class CampaignInterrupted(Exception):
+    """Internal signal used to release a task after an operator stop request."""
+
+
+def validate_model_id(model: str, allowed_models: Iterable[str]) -> str:
+    """Require an exact, configured model identifier; aliases are not accepted."""
+    allowed = set(allowed_models)
+    if model not in allowed:
+        raise ValueError(f"model {model!r} is not explicitly allowlisted")
+    if "#" in model or any(ch.isspace() for ch in model):
+        raise ValueError("model variants and whitespace are not permitted")
+    return model
+
+
+def _retry_after(text: str) -> float | None:
+    match = re.search(
+        r"(?i)retry[- ]after\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*(s|sec(?:onds?)?)?",
+        text,
+    )
+    if match:
+        return float(match.group(1))
+    match = re.search(r"(?i)retry after\s+([0-9]+(?:\.[0-9]+)?)\s*(s|sec(?:onds?)?)?", text)
+    if match:
+        return float(match.group(1))
+    match = re.search(r"(?i)retry[- ]after\s*:\s*(.+?)(?:\r?\n|$)", text)
+    if match:
+        try:
+            when = email.utils.parsedate_to_datetime(match.group(1))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=dt.timezone.utc)
+            return max(0.0, (when - dt.datetime.now(dt.timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None
+
+
+def classify_failure(
+    returncode: int | None,
+    stdout: str,
+    stderr: str,
+    *,
+    timed_out: bool = False,
+) -> Failure:
+    """Classify explicit provider signals without treating unknown errors as quota."""
+    if timed_out:
+        return Failure(FailureKind.TIMEOUT)
+    text = f"{stdout}\n{stderr}".lower()
+    if re.search(
+        r"insufficient[_ -]quota|quota[_ -]exhausted|quota exceeded|"
+        r"usage limit (?:has been )?reached|credits? (?:are )?exhausted|"
+        r"billing hard limit|monthly limit reached|daily quota exhausted",
+        text,
+    ):
+        return Failure(FailureKind.QUOTA_EXHAUSTED)
+    if re.search(r"rate limit|too many requests|http\s*429|status\s*429", text):
+        return Failure(FailureKind.RATE_LIMIT, _retry_after(f"{stdout}\n{stderr}"))
+    if re.search(
+        r"unauthorized|invalid api key|authentication failed|http\s*401|http\s*403|"
+        r"status(?: code)?\s*[:=]?\s*401|status(?: code)?\s*[:=]?\s*403|forbidden",
+        text,
+    ):
+        return Failure(FailureKind.AUTH)
+    if re.search(r"request timed? out|operation timed? out|deadline exceeded", text):
+        return Failure(FailureKind.TIMEOUT)
+    if re.search(
+        r"connection (?:reset|refused|aborted)|name or service not known|"
+        r"temporary failure in name resolution|network is unreachable|"
+        r"service unavailable|http\s*50[0234]|status\s*50[0234]|tls handshake",
+        text,
+    ):
+        return Failure(FailureKind.NETWORK)
+    if returncode is None or returncode != 0:
+        return Failure(FailureKind.AGENT_ERROR)
+    return Failure(FailureKind.AGENT_ERROR)
+
+
+def _safe_text(value: Any, limit: int = 4000) -> str:
+    text = str(value)
+    for pattern in TOKEN_PATTERNS:
+        text = pattern.sub(lambda m: (m.group(1) if m.lastindex else "") + "[REDACTED]", text)
+    return text[:limit]
+
+
+def _sanitize_checkpoint(
+    checkpoint: dict[str, Any], *, trusted_evidence: bool = False
+) -> dict[str, Any]:
+    """Persist bounded checkpoint metadata, separating agent claims from evidence."""
+    allowed = {"next_experiment", "limitations"}
+    if trusted_evidence:
+        allowed |= {
+            "source_path",
+            "source_sha256",
+            "best_source_sha256",
+            "best_source_snapshot",
+            "ghidra_log_path",
+            "ghidra_log_sha256",
+            "boundary_status",
+            "best_match",
+            "evidence_paths",
+        }
+    result: dict[str, Any] = {}
+    for key in allowed:
+        if key not in checkpoint:
+            continue
+        value = checkpoint[key]
+        if key in {"source_path", "ghidra_log_path", "boundary_status", "next_experiment"}:
+            result[key] = _safe_text(value, 4000)
+        elif key in {
+            "source_sha256",
+            "best_source_sha256",
+            "ghidra_log_sha256",
+        }:
+            if HEX_SHA256.fullmatch(str(value)):
+                result[key] = str(value)
+        elif key == "best_source_snapshot":
+            if isinstance(value, str) and not Path(value).is_absolute() and ".." not in Path(value).parts:
+                result[key] = value
+        elif key == "limitations" and isinstance(value, list):
+            result[key] = [_safe_text(item, 1000) for item in value[:40]]
+        elif key == "evidence_paths" and isinstance(value, list):
+            result[key] = [_safe_text(item, 500) for item in value[:40]]
+        elif key == "best_match" and isinstance(value, dict):
+            fields = {
+                "status",
+                "matching_words",
+                "total_words",
+                "difference_count",
+                "difference_indices",
+                "source_sha256",
+                "object_sha256",
+                "report_path",
+            }
+            result[key] = {
+                item_key: (
+                    [_safe_text(item, 100) for item in item_value[:100]]
+                    if item_key == "difference_indices" and isinstance(item_value, list)
+                    else _safe_text(item_value, 500)
+                    if isinstance(item_value, str)
+                    else item_value
+                )
+                for item_key, item_value in value.items()
+                if item_key in fields and isinstance(item_value, (str, int, list))
+            }
+    return result
+
+
+def _json_dump(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def is_strict_match(
+    report: dict[str, Any], *, expected_address: int, expected_size: int
+) -> bool:
+    """Validate one production matcher report; a model assertion is insufficient."""
+    try:
+        match = report["match"]
+        provenance = report["provenance"]
+        expected_words = expected_size // 4
+        return bool(
+            report.get("status") == "MATCHED"
+            and report.get("verified_decompilation") is True
+            and report.get("evidence") == "compiled-object"
+            and int(str(report.get("address")), 0) == expected_address
+            and report.get("symbol") == f"func_{expected_address:08X}"
+            and HEX_SHA256.fullmatch(str(provenance.get("source_sha256", "")))
+            and HEX_SHA256.fullmatch(str(provenance.get("object_sha256", "")))
+            and Path(str(provenance.get("compiler", ""))).name.lower() == "mwccpsp.exe"
+            and list(provenance.get("flags", [])) == ["-O4,p", "-sdatathreshold", "0"]
+            and match.get("status") == "MATCHED"
+            and int(match.get("matching_words", -1)) == expected_words
+            and int(match.get("total_words", -1)) == expected_words
+            and int(match.get("difference_count", -1)) == 0
+            and match.get("differences") == []
+            and match.get("limitations") == []
+            and match.get("relocation_issues") == []
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def is_deterministic_match(
+    result: dict[str, Any], *, expected_address: int, expected_size: int
+) -> bool:
+    """Require two full matcher reports and identical independent object hashes."""
+    reports = result.get("reports")
+    builds = result.get("build_sha256")
+    if not isinstance(reports, list) or len(reports) != 2:
+        return False
+    if not isinstance(builds, list) or len(builds) != 2 or builds[0] != builds[1]:
+        return False
+    if not all(HEX_SHA256.fullmatch(str(value)) for value in builds):
+        return False
+    if not all(
+        is_strict_match(report, expected_address=expected_address, expected_size=expected_size)
+        for report in reports
+        if isinstance(report, dict)
+    ):
+        return False
+    if any(not isinstance(report, dict) for report in reports):
+        return False
+    source_hashes = {report.get("provenance", {}).get("source_sha256") for report in reports}
+    object_hashes = [report.get("provenance", {}).get("object_sha256") for report in reports]
+    return (
+        len(source_hashes) == 1
+        and object_hashes == builds
+        and result.get("status") == "MATCHED"
+        and result.get("source_sha256") in source_hashes
+    )
+
+
+def campaign_build_path(repo_root: Path, relative: str | Path) -> Path:
+    """Return a build path while rejecting traversal and symlinks at every level."""
+    root = repo_root / "build"
+    if root.is_symlink():
+        raise ValueError(f"build root is a symlink: {root}")
+    rel = Path(relative)
+    if rel.is_absolute() or any(part in {"..", ""} for part in rel.parts):
+        raise ValueError("build path escapes the allowed build tree")
+    target = root / rel
+    cursor = root
+    for part in rel.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError(f"symlink is not allowed in campaign build path: {cursor}")
+    resolved_root = root.resolve(strict=False)
+    resolved_target = target.resolve(strict=False)
+    try:
+        resolved_target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("build path escapes the allowed build tree") from exc
+    return target
+
+
+class CampaignStore:
+    """Small SQLite queue with atomic claims, leases, checkpoints, and event history."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA foreign_keys=ON")
+        return connection
+
+    def _initialize(self) -> None:
+        with self._connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS candidates (
+                    address TEXT PRIMARY KEY,
+                    size_bytes INTEGER NOT NULL,
+                    nid TEXT NOT NULL,
+                    priority INTEGER NOT NULL,
+                    boundary_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    owner TEXT,
+                    provider TEXT,
+                    last_provider TEXT,
+                    session_id TEXT,
+                    lease_until REAL,
+                    available_at REAL NOT NULL DEFAULT 0,
+                    preferred_provider TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    attempts_without_progress INTEGER NOT NULL DEFAULT 0,
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                    best_result_json TEXT NOT NULL DEFAULT '{}',
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS providers (
+                    provider TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    resume_at REAL,
+                    reason TEXT,
+                    updated_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    address TEXT NOT NULL REFERENCES candidates(address),
+                    attempt_number INTEGER NOT NULL,
+                    worker_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    ended_at REAL,
+                    outcome TEXT NOT NULL DEFAULT 'running',
+                    failure_kind TEXT,
+                    retry_after REAL,
+                    UNIQUE(address, attempt_number)
+                );
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at REAL NOT NULL,
+                    kind TEXT NOT NULL,
+                    address TEXT,
+                    worker_id TEXT,
+                    provider TEXT,
+                    session_id TEXT
+                );
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO metadata(key, value) VALUES ('stop_requested', '0');
+                """
+            )
+
+    def seed(self, candidates: Iterable[Candidate]) -> int:
+        inserted = 0
+        now = time.time()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for candidate in candidates:
+                state = candidate.initial_state or (
+                    "pending" if candidate.boundary_status == "EXACT" else "needs_boundary"
+                )
+                db.execute(
+                    """INSERT OR IGNORE INTO candidates
+                    (address,size_bytes,nid,priority,boundary_status,status,preferred_provider,
+                     evidence_json,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (
+                        candidate.address.lower(),
+                        candidate.size_bytes,
+                        candidate.nid.upper(),
+                        candidate.priority,
+                        candidate.boundary_status,
+                        state,
+                        candidate.preferred_provider,
+                        _json_dump(candidate.evidence),
+                        now,
+                    ),
+                )
+                inserted += db.execute("SELECT changes()").fetchone()[0]
+            db.commit()
+        return inserted
+
+    def _event(
+        self,
+        db: sqlite3.Connection,
+        kind: str,
+        *,
+        address: str | None = None,
+        worker_id: str | None = None,
+        provider: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        db.execute(
+            "INSERT INTO events(created_at,kind,address,worker_id,provider,session_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (time.time(), kind, address, worker_id, provider, session_id),
+        )
+
+    def claim_next(
+        self,
+        worker_id: str,
+        provider: str,
+        *,
+        lease_seconds: float = 1800,
+        max_attempts_per_candidate: int = 8,
+        now: float | None = None,
+    ) -> Claim | None:
+        now = time.time() if now is None else now
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT OR IGNORE INTO providers(provider,status,updated_at) VALUES (?,'active',?)",
+                (provider, now),
+            )
+            provider_row = db.execute(
+                "SELECT status,resume_at FROM providers WHERE provider=?", (provider,)
+            ).fetchone()
+            if provider_row["status"] in {"suspended_quota", "blocked_auth", "blocked"}:
+                db.commit()
+                return None
+            if provider_row["status"] in {"rate_limited", "network_backoff"}:
+                if provider_row["resume_at"] is None or provider_row["resume_at"] > now:
+                    db.commit()
+                    return None
+                db.execute(
+                    "UPDATE providers SET status='active',resume_at=NULL,reason=NULL,updated_at=? WHERE provider=?",
+                    (now, provider),
+                )
+            db.execute(
+                """UPDATE candidates SET status='stalled',updated_at=?
+                   WHERE status IN ('pending','needs_boundary') AND attempt_count>=?""",
+                (now, max_attempts_per_candidate),
+            )
+            row = db.execute(
+                """SELECT * FROM candidates
+                WHERE status IN ('pending','needs_boundary') AND available_at<=?
+                  AND attempt_count<?
+                  AND (preferred_provider IS NULL OR preferred_provider=?)
+                ORDER BY priority DESC,attempt_count ASC,address ASC LIMIT 1""",
+                (now, max_attempts_per_candidate, provider),
+            ).fetchone()
+            if row is None:
+                db.commit()
+                return None
+            session_id = (
+                row["session_id"]
+                if row["last_provider"] == provider and row["session_id"]
+                else None
+            )
+            attempt_session_id = session_id or "pending_" + uuid.uuid4().hex
+            attempt_number = int(row["attempt_count"]) + 1
+            lease_until = now + max(1.0, lease_seconds)
+            db.execute(
+                """UPDATE candidates SET status='running',owner=?,provider=?,last_provider=?,
+                    session_id=?,lease_until=?,attempt_count=?,updated_at=? WHERE address=?""",
+                (
+                    worker_id,
+                    provider,
+                    provider,
+                    session_id,
+                    lease_until,
+                    attempt_number,
+                    now,
+                    row["address"],
+                ),
+            )
+            db.execute(
+                """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (row["address"], attempt_number, worker_id, provider, attempt_session_id, now),
+            )
+            self._event(
+                db,
+                "claimed",
+                address=row["address"],
+                worker_id=worker_id,
+                provider=provider,
+                session_id=session_id,
+            )
+            claim = Claim(
+                address=row["address"],
+                size_bytes=int(row["size_bytes"]),
+                nid=row["nid"],
+                priority=int(row["priority"]),
+                boundary_status=row["boundary_status"],
+                worker_id=worker_id,
+                provider=provider,
+                session_id=session_id,
+                attempt_number=attempt_number,
+                lease_until=lease_until,
+                checkpoint=json.loads(row["checkpoint_json"]),
+                evidence=json.loads(row["evidence_json"]),
+            )
+            db.commit()
+            return claim
+
+    def bind_session(self, claim: Claim, session_id: str) -> Claim:
+        """Persist an OpenCode-issued session ID on the owned attempt and task."""
+        if not session_id:
+            raise ValueError("OpenCode session ID cannot be empty")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._require_owner(db, claim)
+            now = time.time()
+            db.execute(
+                "UPDATE candidates SET session_id=?,last_provider=?,updated_at=? WHERE address=?",
+                (session_id, claim.provider, now, claim.address),
+            )
+            db.execute(
+                "UPDATE attempts SET session_id=? WHERE address=? AND attempt_number=?",
+                (session_id, claim.address, claim.attempt_number),
+            )
+            self._event(
+                db,
+                "session_bound",
+                address=claim.address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=session_id,
+            )
+            db.commit()
+        return replace(claim, session_id=session_id)
+
+    def _require_owner(self, db: sqlite3.Connection, claim: Claim) -> sqlite3.Row:
+        row = db.execute("SELECT * FROM candidates WHERE address=?", (claim.address,)).fetchone()
+        if (
+            row is None
+            or row["status"] != "running"
+            or row["owner"] != claim.worker_id
+            or row["provider"] != claim.provider
+            or row["session_id"] != claim.session_id
+            or int(row["attempt_count"]) != claim.attempt_number
+        ):
+            raise RuntimeError("task lease is no longer owned by this worker")
+        return row
+
+    def save_checkpoint(
+        self,
+        claim: Claim,
+        checkpoint: dict[str, Any],
+        *,
+        trusted_evidence: bool = False,
+    ) -> None:
+        update = _sanitize_checkpoint(checkpoint, trusted_evidence=trusted_evidence)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._require_owner(db, claim)
+            checkpoint = json.loads(row["checkpoint_json"])
+            checkpoint.update(update)
+            encoded = _json_dump(checkpoint)
+            if len(encoded) > 128_000:
+                raise ValueError("checkpoint metadata exceeds 128 KiB")
+            db.execute(
+                "UPDATE candidates SET checkpoint_json=?,updated_at=? WHERE address=?",
+                (encoded, time.time(), claim.address),
+            )
+            self._event(
+                db,
+                "checkpoint_saved",
+                address=claim.address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=claim.session_id,
+            )
+            db.commit()
+
+    def update_boundary(self, claim: Claim, size_bytes: int, evidence: dict[str, Any]) -> None:
+        if size_bytes <= 0 or size_bytes % 4:
+            raise ValueError("Ghidra boundary size must be a positive multiple of four bytes")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._require_owner(db, claim)
+            old = db.execute(
+                "SELECT evidence_json FROM candidates WHERE address=?", (claim.address,)
+            ).fetchone()
+            merged = json.loads(old["evidence_json"])
+            merged["ghidra_validation"] = evidence
+            db.execute(
+                """UPDATE candidates SET size_bytes=?,boundary_status='EXACT',evidence_json=?,updated_at=?
+                   WHERE address=?""",
+                (size_bytes, _json_dump(merged), time.time(), claim.address),
+            )
+            self._event(
+                db,
+                "boundary_validated",
+                address=claim.address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=claim.session_id,
+            )
+            db.commit()
+
+    def complete(
+        self,
+        claim: Claim,
+        checkpoint: dict[str, Any],
+        verification: dict[str, Any],
+        *,
+        max_attempts_without_progress: int,
+        max_attempts_per_candidate: int,
+    ) -> str:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._require_owner(db, claim)
+            size = int(row["size_bytes"])
+            previous = json.loads(row["best_result_json"])
+            previous_checkpoint = json.loads(row["checkpoint_json"])
+            score = int(verification.get("matching_words", -1))
+            previous_score = int(previous.get("matching_words", -1))
+            improved = score > previous_score
+            best = verification if improved or not previous else previous
+            boundary_only = verification.get("status") == "BOUNDARY_VALIDATED"
+            checkpoint = _sanitize_checkpoint(checkpoint, trusted_evidence=True)
+            if not boundary_only:
+                source_sha256 = verification.get("source_sha256")
+                if isinstance(source_sha256, str) and HEX_SHA256.fullmatch(source_sha256):
+                    source_path = f"decomp/src/eboot/func_{claim.numeric_address:08X}.c"
+                    checkpoint["source_path"] = source_path
+                    checkpoint["source_sha256"] = source_sha256
+                    if improved or not previous:
+                        snapshot = verification.get("source_snapshot_path")
+                        if isinstance(snapshot, str):
+                            checkpoint["best_source_sha256"] = source_sha256
+                            checkpoint["best_source_snapshot"] = snapshot
+                    else:
+                        for key in ("best_source_sha256", "best_source_snapshot"):
+                            if key in previous_checkpoint:
+                                checkpoint[key] = previous_checkpoint[key]
+                if isinstance(best, dict):
+                    best_reports = best.get("reports", [])
+                    matcher = (
+                        best_reports[-1].get("match", {})
+                        if isinstance(best_reports, list)
+                        and best_reports
+                        and isinstance(best_reports[-1], dict)
+                        else {}
+                    )
+                    differences = matcher.get("differences", [])
+                    difference_indices = []
+                    if isinstance(differences, list):
+                        for difference in differences[:100]:
+                            if isinstance(difference, dict):
+                                index = difference.get("word_index", difference.get("index"))
+                                if isinstance(index, int):
+                                    difference_indices.append(index)
+                    best_source = best.get("source_sha256")
+                    best_object = best.get("build_sha256", [])
+                    checkpoint["best_match"] = {
+                        "status": best.get("status", "NONMATCHING"),
+                        "matching_words": int(best.get("matching_words", -1)),
+                        "total_words": int(best.get("total_words", size // 4)),
+                        "difference_count": int(matcher.get("difference_count", len(differences) if isinstance(differences, list) else 0)),
+                        "difference_indices": difference_indices,
+                        "source_sha256": best_source if isinstance(best_source, str) else "",
+                        "object_sha256": best_object[0] if isinstance(best_object, list) and best_object else "",
+                        "report_path": f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-1/func_{claim.numeric_address:08X}.match.json",
+                    }
+                    limitations = matcher.get("limitations", [])
+                    checkpoint["limitations"] = limitations if isinstance(limitations, list) else []
+                    evidence_paths = [
+                        f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-1/func_{claim.numeric_address:08X}.match.json",
+                        f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-2/func_{claim.numeric_address:08X}.match.json",
+                    ]
+                    if isinstance(checkpoint.get("ghidra_log_path"), str):
+                        evidence_paths.insert(0, f"build/{checkpoint['ghidra_log_path']}")
+                    checkpoint["evidence_paths"] = evidence_paths
+            encoded_checkpoint = _json_dump(checkpoint)
+            if len(encoded_checkpoint) > 128_000:
+                raise ValueError("checkpoint metadata exceeds 128 KiB")
+            if boundary_only:
+                status = "pending"
+            elif is_deterministic_match(
+                verification,
+                expected_address=claim.numeric_address,
+                expected_size=size,
+            ):
+                status = "matched"
+            elif int(row["attempt_count"]) >= max_attempts_per_candidate:
+                status = "stalled"
+            elif not improved and int(row["attempts_without_progress"]) + 1 >= max_attempts_without_progress:
+                status = "stalled"
+            else:
+                status = "pending"
+            if boundary_only:
+                no_progress = int(row["attempts_without_progress"])
+            else:
+                no_progress = 0 if improved else int(row["attempts_without_progress"]) + 1
+            now = time.time()
+            db.execute(
+                """UPDATE candidates SET status=?,owner=NULL,provider=NULL,lease_until=NULL,
+                    preferred_provider=CASE WHEN ?='pending' THEN NULL ELSE preferred_provider END,
+                    checkpoint_json=?,best_result_json=?,attempts_without_progress=?,updated_at=?
+                    WHERE address=?""",
+                (
+                    status,
+                    status,
+                    encoded_checkpoint,
+                    _json_dump(best),
+                    no_progress,
+                    now,
+                    claim.address,
+                ),
+            )
+            db.execute(
+                "UPDATE attempts SET ended_at=?,outcome=? WHERE address=? AND attempt_number=?",
+                (now, status, claim.address, claim.attempt_number),
+            )
+            self._event(
+                db,
+                status,
+                address=claim.address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=claim.session_id,
+            )
+            db.commit()
+            return status
+
+    def fail(
+        self,
+        claim: Claim,
+        failure: Failure,
+        *,
+        max_retry_after: float = 900,
+        max_attempts_per_candidate: int = 8,
+    ) -> None:
+        now = time.time()
+        delay = failure.retry_after_seconds
+        if failure.kind is FailureKind.RATE_LIMIT:
+            delay = max(delay or 0, 1.0)
+        elif failure.kind in {FailureKind.NETWORK, FailureKind.TIMEOUT}:
+            delay = min(max_retry_after, max(delay or 2.0, 1.0))
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            candidate_row = self._require_owner(db, claim)
+            provider_status = "blocked"
+            task_status = "blocked"
+            preferred_provider: str | None = claim.provider
+            available_at = now
+            if failure.kind is FailureKind.QUOTA_EXHAUSTED:
+                provider_status = "suspended_quota"
+                task_status = "pending"
+                preferred_provider = None
+            elif failure.kind is FailureKind.RATE_LIMIT:
+                provider_status = "rate_limited"
+                task_status = "pending"
+                available_at = now + float(delay or 0)
+            elif failure.kind in {FailureKind.NETWORK, FailureKind.TIMEOUT}:
+                provider_status = "network_backoff"
+                task_status = "pending"
+                available_at = now + float(delay or 0)
+            elif failure.kind is FailureKind.AGENT_ERROR:
+                # Unknown errors pause this task, but are not mislabeled as quota and
+                # do not authorize moving it to the other provider.
+                provider_status = "active"
+                task_status = "blocked"
+            elif failure.kind is FailureKind.INTERRUPTED:
+                provider_status = "active"
+                task_status = "pending"
+            if int(candidate_row["attempt_count"]) >= max_attempts_per_candidate:
+                task_status = "stalled"
+                preferred_provider = claim.provider
+            if failure.kind is FailureKind.QUOTA_EXHAUSTED:
+                resume_at = None
+            elif provider_status in {"rate_limited", "network_backoff"}:
+                resume_at = available_at
+            else:
+                resume_at = None
+            reason = failure.kind.value
+            db.execute(
+                """INSERT INTO providers(provider,status,resume_at,reason,updated_at)
+                   VALUES (?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET
+                   status=excluded.status,resume_at=excluded.resume_at,reason=excluded.reason,
+                   updated_at=excluded.updated_at""",
+                (claim.provider, provider_status, resume_at, reason, now),
+            )
+            db.execute(
+                """UPDATE candidates SET status=?,owner=NULL,provider=NULL,lease_until=NULL,
+                   preferred_provider=?,available_at=?,last_provider=?,session_id=?,updated_at=?
+                   WHERE address=?""",
+                (
+                    task_status,
+                    preferred_provider,
+                    available_at,
+                    claim.provider,
+                    claim.session_id,
+                    now,
+                    claim.address,
+                ),
+            )
+            db.execute(
+                """UPDATE attempts SET ended_at=?,outcome=?,failure_kind=?,retry_after=?
+                   WHERE address=? AND attempt_number=?""",
+                (
+                    now,
+                    failure.kind.value,
+                    failure.kind.value,
+                    delay,
+                    claim.address,
+                    claim.attempt_number,
+                ),
+            )
+            self._event(
+                db,
+                failure.kind.value,
+                address=claim.address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=claim.session_id,
+            )
+            db.commit()
+
+    def recover_expired(self, *, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT address,owner,provider,session_id,attempt_count FROM candidates "
+                "WHERE status='running' AND lease_until<=?",
+                (now,),
+            ).fetchall()
+            for row in rows:
+                db.execute(
+                    """UPDATE candidates SET status='pending',owner=NULL,provider=NULL,
+                       lease_until=NULL,updated_at=? WHERE address=?""",
+                    (now, row["address"]),
+                )
+                db.execute(
+                    """UPDATE attempts SET ended_at=?,outcome='interrupted',failure_kind='interrupted'
+                       WHERE address=? AND attempt_number=? AND outcome='running'""",
+                    (now, row["address"], row["attempt_count"]),
+                )
+                self._event(
+                    db,
+                    "interrupted_recovered",
+                    address=row["address"],
+                    worker_id=row["owner"],
+                    provider=row["provider"],
+                    session_id=row["session_id"],
+                )
+            db.commit()
+            return len(rows)
+
+    def request_stop(self) -> None:
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO metadata(key,value) VALUES('stop_requested','1') "
+                "ON CONFLICT(key) DO UPDATE SET value='1'"
+            )
+
+    def stop_requested(self) -> bool:
+        with self._connect() as db:
+            row = db.execute("SELECT value FROM metadata WHERE key='stop_requested'").fetchone()
+            return bool(row and row[0] == "1")
+
+    def resume(self) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "UPDATE metadata SET value='0' WHERE key='stop_requested'"
+            )
+            db.execute(
+                "UPDATE providers SET status='active',resume_at=NULL,reason=NULL,updated_at=?",
+                (time.time(),),
+            )
+            db.commit()
+
+    def get_task(self, address: str) -> dict[str, Any]:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM candidates WHERE address=?", (address.lower(),)).fetchone()
+        if row is None:
+            raise KeyError(address)
+        result = dict(row)
+        for source, target in (
+            ("checkpoint_json", "checkpoint"),
+            ("best_result_json", "best_result"),
+            ("evidence_json", "evidence"),
+        ):
+            result[target] = json.loads(result.pop(source))
+        return result
+
+    def list_tasks(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            addresses = [row[0] for row in db.execute("SELECT address FROM candidates ORDER BY priority DESC,address")]
+        return [self.get_task(address) for address in addresses]
+
+    def list_attempts(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT * FROM attempts ORDER BY id").fetchall()
+            return [dict(row) for row in rows]
+
+    def attempt_summary(self) -> dict[str, dict[str, int]]:
+        summary: dict[str, dict[str, int]] = {}
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT provider,outcome,COUNT(*) AS count FROM attempts GROUP BY provider,outcome"
+            ).fetchall()
+        for row in rows:
+            provider = str(row["provider"])
+            outcome = str(row["outcome"])
+            summary.setdefault(provider, {})[outcome] = int(row["count"])
+        return summary
+
+    def provider_status(self, provider: str) -> str:
+        with self._connect() as db:
+            row = db.execute("SELECT status FROM providers WHERE provider=?", (provider,)).fetchone()
+            return "active" if row is None else str(row[0])
+
+def _safe_child_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in list(env):
+        if any(part in key.upper() for part in SECRET_ENV_PARTS):
+            env.pop(key, None)
+    return env
+
+
+def _drain_bounded(stream: Any, output: bytearray, limit: int) -> None:
+    while True:
+        chunk = stream.read(8192)
+        if not chunk:
+            return
+        remaining = limit - len(output)
+        if remaining > 0:
+            output.extend(chunk[:remaining])
+
+
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+        except OSError:
+            pass
+    if os.name == "nt":
+        taskkill = shutil.which("taskkill.exe")
+        if taskkill:
+            try:
+                subprocess.run(
+                    [taskkill, "/PID", str(process.pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+def _run_process(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    output_limit: int,
+    stop_requested: Callable[[], bool],
+    deadline: float | None = None,
+) -> WorkResult:
+    if not argv or not cwd.is_dir():
+        raise ValueError("process command and worktree directory are required")
+    process = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=_safe_child_environment(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+    stdout_buffer = bytearray()
+    stderr_buffer = bytearray()
+    assert process.stdout is not None and process.stderr is not None
+    readers = [
+        threading.Thread(target=_drain_bounded, args=(process.stdout, stdout_buffer, output_limit), daemon=True),
+        threading.Thread(target=_drain_bounded, args=(process.stderr, stderr_buffer, output_limit), daemon=True),
+    ]
+    for thread in readers:
+        thread.start()
+    started = time.monotonic()
+    timed_out = interrupted = False
+    while process.poll() is None:
+        if stop_requested():
+            interrupted = True
+            _terminate_process(process)
+            break
+        if time.monotonic() - started >= timeout or (deadline is not None and time.monotonic() >= deadline):
+            timed_out = True
+            _terminate_process(process)
+            break
+        time.sleep(0.1)
+    try:
+        process.wait(timeout=4)
+    except subprocess.TimeoutExpired:
+        _terminate_process(process)
+    for thread in readers:
+        thread.join(timeout=4)
+    return WorkResult(
+        returncode=process.returncode if process.returncode is not None else -1,
+        stdout=stdout_buffer.decode("utf-8", errors="replace"),
+        stderr=stderr_buffer.decode("utf-8", errors="replace"),
+        timed_out=timed_out,
+        interrupted=interrupted,
+    )
+
+
+def _extract_checkpoint(output: str) -> dict[str, Any]:
+    texts: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("type") in {"text", "text_delta"} and isinstance(value.get("text"), str):
+                texts.append(value["text"])
+            if isinstance(value.get("checkpoint"), dict):
+                texts.append(json.dumps({"checkpoint": value["checkpoint"]}))
+            for item in value.values():
+                if isinstance(item, (dict, list)):
+                    walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    try:
+        walk(json.loads(output))
+    except json.JSONDecodeError:
+        for line in output.splitlines():
+            try:
+                walk(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    for text in reversed(texts):
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{\s*\"checkpoint\"\s*:", text)
+            if not match:
+                continue
+            try:
+                value = json.loads(text[match.start() :])
+            except json.JSONDecodeError:
+                continue
+        if isinstance(value, dict) and isinstance(value.get("checkpoint"), dict):
+            checkpoint = dict(value["checkpoint"])
+            if "next_experiment" not in checkpoint:
+                checkpoint["next_experiment"] = "Review saved source and verified matcher report."
+            return checkpoint
+    raise ValueError("OpenCode did not return the required JSON checkpoint")
+
+
+def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
+    compact_checkpoint = {
+        key: checkpoint[key]
+        for key in ("next_experiment", "source_sha256", "best_match", "ghidra_log_path")
+        if key in checkpoint
+    }
+    return (
+        "Work on one EBOOT function in this isolated Git worktree. Do not modify the matcher, "
+        "certified sources, integration tests, or documentation. Do not write to AIMemory; "
+        "do not run git add/commit/push, alter branches, or access paths outside this worktree. "
+        "first use the read-only ai-memory retrieval tools for project knowledge about the "
+        "relevant MIPS/MWCC subsystem; if retrieval is unavailable, report that limitation. "
+        "Never write, annotate, or send checkpoints to AIMemory. Keep the candidate C source "
+        "at its prescribed path and all auxiliary artifacts in the worker build directory. "
+        "First revalidate the export/NID, references, and exact Ghidra boundary. Compile and compare the complete function "
+        "with scripts/match_function.py and the configured MWCC PSP 3.0.1 toolchain. "
+        "Never claim MATCHED from partial words: the orchestrator independently runs two "
+        "full builds before certification. Keep only this function's source and evidence "
+        "at the prescribed source path and evidence under its worker build directory. "
+        "Return one JSON object with a top-level "
+        "checkpoint containing ghidra_log_path, next_experiment, limitations, and "
+        "evidence paths. If the inventory boundary is UNVERIFIED, report only its "
+        "Ghidra proof first; the orchestrator will then schedule reconstruction. "
+        "For a confirmed boundary, also include source_path and source_sha256. Do not include credentials, "
+        "raw private dumps, or media contents in the JSON.\n\n"
+        f"Address: {claim.address}; size currently listed: {claim.size_bytes} bytes; "
+        f"NID: {claim.nid}; boundary: {claim.boundary_status}; priority: {claim.priority}.\n"
+        f"Worktree: {worktree}\n"
+        f"Task evidence/build root: build/decomp-campaign/{claim.worker_id}/"
+        f"{claim.address.removeprefix('0x')} (paths in JSON must be repo-relative).\n"
+        f"Candidate source path: decomp/src/eboot/func_{claim.numeric_address:08X}.c.\n"
+        f"Provenance hints: {json.dumps(claim.evidence, sort_keys=True)}\n"
+        f"Previous local checkpoint: {json.dumps(compact_checkpoint, sort_keys=True)}\n"
+        f"Session: {claim.session_id}. Preserve the best hypothesis and identify the first "
+        "causal divergence; do not promote speculative semantics to certified facts."
+    )
+
+
+class CampaignRunner:
+    """Run independent OpenCode subprocesses against separate worktrees."""
+
+    def __init__(
+        self,
+        store: CampaignStore,
+        *,
+        opencode_command: Sequence[str],
+        worktrees: dict[str, Path],
+        verifier: Callable[[Path, Claim, dict[str, Any]], dict[str, Any]] | None = None,
+        timeout_seconds: float = 900,
+        output_limit: int = 1_048_576,
+        max_attempts_without_progress: int = 3,
+        max_attempts_per_candidate: int = 8,
+        max_duration_seconds: float | None = None,
+        lease_seconds: float = 3660,
+        ghidra_home: str | None = None,
+        ghidra_windows_home: str | None = None,
+        wsl_distro: str = "Ubuntu",
+        expected_eboot_sha256: str | None = None,
+        checkpoint_repo_root: Path | None = None,
+        max_retry_after_seconds: float = 900,
+    ):
+        self.store = store
+        self.command = list(opencode_command)
+        self.worktrees = {key: Path(value) for key, value in worktrees.items()}
+        self.verifier = verifier or self._verify_with_matcher_twice
+        self.auto_preflight = verifier is None
+        self.timeout_seconds = timeout_seconds
+        self.output_limit = output_limit
+        self.max_attempts_without_progress = max_attempts_without_progress
+        self.max_attempts_per_candidate = max_attempts_per_candidate
+        self.max_duration_seconds = max_duration_seconds
+        self.lease_seconds = max(60.0, lease_seconds)
+        self.ghidra_home = ghidra_home
+        self.ghidra_windows_home = ghidra_windows_home
+        self.wsl_distro = wsl_distro
+        self.expected_eboot_sha256 = expected_eboot_sha256
+        self.max_retry_after_seconds = max(1.0, max_retry_after_seconds)
+        self.checkpoint_repo_root = (
+            Path(checkpoint_repo_root).resolve(strict=True)
+            if checkpoint_repo_root is not None
+            else None
+        )
+
+    def _command(self) -> list[str]:
+        command = list(self.command)
+        if os.name == "nt":
+            script_index = next(
+                (index for index, item in enumerate(command) if item.lower().endswith(".ps1")),
+                None,
+            )
+            wrapper_index = script_index
+            if wrapper_index is None and command and command[0].lower().endswith((".cmd", ".bat")):
+                wrapper_index = 0
+            if wrapper_index is not None:
+                wrapper = Path(command[wrapper_index])
+                executable = (
+                    wrapper.parent
+                    / "node_modules"
+                    / "@opencode"
+                    / "cli"
+                    / "bin"
+                    / "opencode.exe"
+                )
+                if executable.is_file():
+                    return [str(executable), *command[wrapper_index + 1 :]]
+            if script_index == 0:
+                powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+                if powershell is None:
+                    raise FileNotFoundError("PowerShell is needed to invoke the installed OpenCode shim")
+                return [powershell, "-NoProfile", "-File", command[0], *command[1:]]
+        return command
+
+    def _api_request(
+        self, worktree: Path, args: Sequence[str], deadline: float | None
+    ) -> WorkResult:
+        result = _run_process(
+            [*self._command(), "api", *args],
+            cwd=worktree,
+            timeout=min(30.0, self.timeout_seconds),
+            output_limit=self.output_limit,
+            stop_requested=self.store.stop_requested,
+            deadline=deadline,
+        )
+        if result.interrupted:
+            raise CampaignInterrupted
+        if result.timed_out:
+            raise ValueError("OpenCode session API timed out")
+        return result
+
+    @staticmethod
+    def _session_data(result: WorkResult) -> dict[str, Any]:
+        try:
+            payload = json.loads(result.stdout)
+            data = payload["data"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise ValueError("OpenCode session API returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            raise ValueError("OpenCode session API returned invalid session data")
+        return data
+
+    @staticmethod
+    def _session_id(value: Any) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"ses_[A-Za-z0-9_-]+", value):
+            raise ValueError("OpenCode did not return a valid session ID")
+        return value
+
+    @staticmethod
+    def _same_location(data: dict[str, Any], worktree: Path) -> bool:
+        location = data.get("location")
+        directory = location.get("directory") if isinstance(location, dict) else None
+        if not isinstance(directory, str):
+            return False
+        try:
+            return os.path.normcase(str(Path(directory).resolve())) == os.path.normcase(
+                str(worktree.resolve())
+            )
+        except OSError:
+            return False
+
+    def _create_session(
+        self,
+        claim: Claim,
+        worktree: Path,
+        deadline: float | None,
+    ) -> str:
+        result = self._api_request(
+            worktree,
+            [
+                "post",
+                "/api/session",
+                "--data",
+                json.dumps(
+                    {
+                        "title": f"Seto EBOOT {claim.address} {claim.worker_id}",
+                        "location": {"directory": str(worktree.resolve())},
+                    },
+                    separators=(",", ":"),
+                ),
+            ],
+            deadline,
+        )
+        if result.returncode != 0:
+            raise ValueError("OpenCode could not create a session")
+        data = self._session_data(result)
+        session_id = self._session_id(data.get("id"))
+        if not self._same_location(data, worktree):
+            raise ValueError("OpenCode created a session outside the worker worktree")
+        return session_id
+
+    def _ensure_session(
+        self, claim: Claim, worktree: Path, deadline: float | None
+    ) -> Claim:
+        """Reuse an existing provider session, or create/bind one via the V2 API."""
+        session_id = claim.session_id
+        if session_id and re.fullmatch(r"ses_[A-Za-z0-9_-]+", session_id):
+            result = self._api_request(
+                worktree, ["get", f"/api/session/{session_id}"], deadline
+            )
+            if result.returncode == 0:
+                data = self._session_data(result)
+                if (
+                    self._session_id(data.get("id")) == session_id
+                    and self._same_location(data, worktree)
+                ):
+                    return claim
+            elif not (
+                "SessionNotFoundError" in result.stdout
+                and "404" in result.stderr
+            ):
+                raise ValueError("OpenCode could not validate the saved session")
+
+        session_id = self._create_session(claim, worktree, deadline)
+        return self.store.bind_session(claim, session_id)
+
+    def _argv(self, worker: Worker, claim: Claim, prompt: str) -> list[str]:
+        if claim.session_id is None:
+            raise ValueError("OpenCode session must be created before running a prompt")
+        return [
+            *self._command(),
+            "run",
+            "--model",
+            worker.model,
+            "--format",
+            "json",
+            "--session",
+            claim.session_id,
+            "--title",
+            f"Seto EBOOT {claim.address} {worker.worker_id}",
+            prompt,
+        ]
+
+    def _restore_best_source(self, worktree: Path, claim: Claim) -> None:
+        if self.checkpoint_repo_root is None:
+            return
+        source_hash = claim.checkpoint.get("best_source_sha256")
+        if not isinstance(source_hash, str) or not HEX_SHA256.fullmatch(source_hash):
+            return
+        address = f"{claim.numeric_address:08X}"
+        expected_relative = f"decomp-campaign/checkpoints/{address.lower()}/{source_hash}.c"
+        if claim.checkpoint.get("best_source_snapshot") != expected_relative:
+            raise ValueError("best-source checkpoint path does not match its address/hash")
+        snapshot = campaign_build_path(self.checkpoint_repo_root, expected_relative)
+        if snapshot.is_symlink() or not snapshot.is_file():
+            raise ValueError("best-source checkpoint snapshot is missing or unsafe")
+        if hashlib.sha256(snapshot.read_bytes()).hexdigest() != source_hash:
+            raise ValueError("best-source checkpoint hash does not match its contents")
+        source_relative = Path("decomp/src/eboot") / f"func_{address}.c"
+        source = _safe_worktree_path(worktree, source_relative)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_file() and not source.is_symlink():
+            if hashlib.sha256(source.read_bytes()).hexdigest() == source_hash:
+                return
+        elif source.is_symlink():
+            raise ValueError("candidate source path is a symlink")
+        temporary = source.with_name(source.name + f".restore-{claim.attempt_number}.tmp")
+        if temporary.exists() or temporary.is_symlink():
+            raise ValueError("refusing to overwrite an existing best-source restore temporary")
+        shutil.copyfile(snapshot, temporary)
+        if hashlib.sha256(temporary.read_bytes()).hexdigest() != source_hash:
+            temporary.unlink(missing_ok=True)
+            raise ValueError("restored best-source copy failed its hash check")
+        os.replace(temporary, source)
+
+    def _snapshot_candidate_source(
+        self, worktree: Path, claim: Claim, verification: dict[str, Any]
+    ) -> None:
+        if self.checkpoint_repo_root is None:
+            return
+        address = f"{claim.numeric_address:08X}"
+        source = _safe_worktree_path(
+            worktree, Path("decomp/src/eboot") / f"func_{address}.c"
+        )
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("verified candidate source is missing or unsafe")
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        if source_hash != verification.get("source_sha256"):
+            raise ValueError("matcher source hash does not match the current candidate file")
+        relative = f"decomp-campaign/checkpoints/{address.lower()}/{source_hash}.c"
+        destination = campaign_build_path(self.checkpoint_repo_root, relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_symlink():
+            raise ValueError("best-source checkpoint destination is a symlink")
+        if destination.exists():
+            if not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != source_hash:
+                raise ValueError("existing content-addressed source checkpoint is corrupt")
+        else:
+            temporary = destination.with_name(destination.name + ".tmp")
+            if temporary.exists() or temporary.is_symlink():
+                raise ValueError("refusing to overwrite a source-checkpoint temporary")
+            shutil.copyfile(source, temporary)
+            if hashlib.sha256(temporary.read_bytes()).hexdigest() != source_hash:
+                temporary.unlink(missing_ok=True)
+                raise ValueError("source checkpoint copy failed its hash check")
+            os.replace(temporary, destination)
+        verification["source_snapshot_path"] = relative
+
+    def _prepare_claim(self, worktree: Path, claim: Claim, deadline: float | None) -> Claim:
+        """Recheck export provenance and exact Ghidra body before any model call."""
+        eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
+        triage = worktree / "build" / "seto035" / "export-triage.json"
+        if any(path.is_symlink() or not path.is_file() for path in (eboot, triage)):
+            raise ValueError("private EBOOT or real export/import triage is missing/unsafe")
+        if self.expected_eboot_sha256:
+            observed = hashlib.sha256(eboot.read_bytes()).hexdigest()
+            if observed != self.expected_eboot_sha256.lower():
+                raise ValueError("local EBOOT hash differs from the certified baseline")
+        validate_export_evidence(triage, claim.address, claim.nid)
+        if os.name == "nt":
+            if not self.ghidra_windows_home:
+                raise ValueError("machine-local Windows Ghidra home is not configured")
+        elif not self.ghidra_home or not self.ghidra_home.startswith("/"):
+            raise ValueError("machine-local WSL/Linux Ghidra home is not configured")
+
+        address = claim.address.removeprefix("0x")
+        project_relative = (
+            f"decomp-campaign/{claim.worker_id}/{address}/ghidra-projects/"
+            f"attempt-{claim.attempt_number}"
+        )
+        log_relative = (
+            f"decomp-campaign/{claim.worker_id}/{address}/evidence/"
+            f"ghidra-attempt-{claim.attempt_number}.log"
+        )
+        project_dir = campaign_build_path(worktree, project_relative)
+        log_path = campaign_build_path(worktree, log_relative)
+        if project_dir.exists() or project_dir.is_symlink() or log_path.exists() or log_path.is_symlink():
+            raise ValueError("refusing to overwrite existing Ghidra project/evidence")
+        project_dir.mkdir(parents=True, exist_ok=False)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        project_name = f"seto_eboot_{address}_attempt_{claim.attempt_number}"
+        script_dir = worktree / "scripts" / "ghidra"
+        if os.name == "nt":
+            ghidra_bat = Path(self.ghidra_windows_home) / "support" / "analyzeHeadless.bat"
+            powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+            wrapper = worktree / "scripts" / "run_ghidra_headless.ps1"
+            if powershell is None or ghidra_bat.is_symlink() or not ghidra_bat.is_file() or not wrapper.is_file():
+                raise ValueError("Windows Ghidra headless launcher or safe wrapper is missing")
+            argv = [
+                powershell,
+                "-NoProfile",
+                "-File",
+                str(wrapper),
+                str(ghidra_bat),
+                str(project_dir),
+                project_name,
+                "-import",
+                str(eboot),
+                "-scriptPath",
+                str(script_dir),
+                "-postScript",
+                "SetoAnalyzeEntry.java",
+                claim.address,
+            ]
+        else:
+            argv = [
+                    f"{self.ghidra_home.rstrip('/')}/support/analyzeHeadless",
+                str(project_dir),
+                project_name,
+                "-import",
+                str(eboot),
+                "-scriptPath",
+                str(script_dir),
+                "-postScript",
+                "SetoAnalyzeEntry.java",
+                claim.address,
+            ]
+        process = _run_process(
+            argv,
+            cwd=worktree,
+            timeout=900,
+            output_limit=8_000_000,
+            stop_requested=self.store.stop_requested,
+            deadline=deadline,
+        )
+        if process.interrupted:
+            raise CampaignInterrupted
+        if process.timed_out or process.returncode != 0:
+            raise ValueError("Ghidra headless boundary analysis failed")
+        # Persist only the helper's bounded markers. Ghidra's surrounding process
+        # output may contain private paths or diagnostics unrelated to evidence.
+        marker_lines = []
+        for line in (process.stdout + "\n" + process.stderr).splitlines():
+            marker = re.search(r"SETO_[A-Z0-9_]+=", line)
+            if marker:
+                marker_lines.append(line[marker.start() :].split(" (GhidraScript)", 1)[0].strip())
+        if not marker_lines:
+            raise ValueError(
+                "Ghidra completed without boundary markers "
+                f"(captured {len(process.stdout)} stdout / {len(process.stderr)} stderr bytes)"
+            )
+        log_path.write_text(
+            "\n".join(marker_lines) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        boundary = validate_ghidra_log(
+            log_path.read_text(encoding="utf-8"), claim.numeric_address
+        )
+        if claim.boundary_status == "EXACT" and boundary["size_bytes"] != claim.size_bytes:
+            raise ValueError("fresh Ghidra analysis conflicts with the inventory's exact size")
+        if claim.boundary_status == "UNVERIFIED":
+            self.store.update_boundary(claim, int(boundary["size_bytes"]), boundary)
+        checkpoint = dict(claim.checkpoint)
+        checkpoint.update(
+            {
+                "ghidra_log_path": log_relative,
+                "ghidra_log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+                "boundary_status": "EXACT",
+            }
+        )
+        self.store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+        return replace(
+            claim,
+            size_bytes=int(boundary["size_bytes"]),
+            boundary_status="EXACT",
+            checkpoint=checkpoint,
+        )
+
+    def _verify_with_matcher_twice(
+        self,
+        worktree: Path,
+        claim: Claim,
+        checkpoint: dict[str, Any],
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        log_value = checkpoint.get("ghidra_log_path")
+        if not isinstance(log_value, str):
+            raise ValueError("checkpoint must reference a local Ghidra evidence log")
+        log_path = campaign_build_path(worktree, log_value)
+        worker_root = campaign_build_path(
+            worktree, f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
+        )
+        if not log_path.resolve(strict=True).is_relative_to(worker_root.resolve(strict=False)):
+            raise ValueError("Ghidra log must remain in this worker's function build directory")
+        if log_path.is_symlink() or not log_path.is_file() or log_path.stat().st_size > 2_000_000:
+            raise ValueError("Ghidra evidence log is absent, unsafe, or too large")
+        boundary = validate_ghidra_log(log_path.read_text(encoding="utf-8", errors="replace"), claim.numeric_address)
+        triage_path = worktree / "build" / "seto035" / "export-triage.json"
+        if triage_path.is_symlink() or not triage_path.is_file():
+            raise ValueError("local real-triage report is missing in the worker worktree")
+        validate_export_evidence(triage_path, claim.address, claim.nid)
+        if claim.boundary_status == "UNVERIFIED":
+            self.store.update_boundary(claim, int(boundary["size_bytes"]), boundary)
+            return {
+                "status": "BOUNDARY_VALIDATED",
+                "matching_words": -1,
+                "total_words": int(boundary["size_bytes"]) // 4,
+                "ghidra_boundary": boundary,
+            }
+        if boundary["size_bytes"] != claim.size_bytes:
+            raise ValueError("Ghidra boundary conflicts with the inventory's exact size")
+
+        source_relative = f"decomp/src/eboot/func_{claim.numeric_address:08X}.c"
+        source = worktree / source_relative
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("required candidate source is missing or is a symlink")
+        source = source.resolve(strict=True)
+        source.relative_to(worktree.resolve(strict=True))
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+
+        eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
+        config = worktree / "config" / "wsl" / "seto.toml"
+        matcher = worktree / "scripts" / "match_function.py"
+        if any(path.is_symlink() or not path.is_file() for path in (eboot, config, matcher)):
+            raise ValueError("EBOOT, local MWCC config, or production matcher is missing/unsafe")
+        if os.name == "nt":
+            reports = self._run_matcher_wsl(
+                worktree, claim, source, eboot, config, matcher, deadline=deadline
+            )
+        else:
+            reports = self._run_matcher_native(
+                worktree, claim, source, eboot, config, matcher, deadline=deadline
+            )
+        objects = [
+            str(report.get("provenance", {}).get("object_sha256", ""))
+            for report in reports
+        ]
+        matching = max(
+            (int(report.get("match", {}).get("matching_words", -1)) for report in reports),
+            default=-1,
+        )
+        all_matched = all(
+            is_strict_match(
+                report,
+                expected_address=claim.numeric_address,
+                expected_size=claim.size_bytes,
+            )
+            for report in reports
+        )
+        result: dict[str, Any] = {
+            "status": "MATCHED" if all_matched and objects[0] == objects[1] else "NONMATCHING",
+            "source_sha256": source_hash,
+            "matching_words": matching,
+            "total_words": claim.size_bytes // 4,
+            "build_sha256": objects,
+            "reports": reports,
+            "ghidra_log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+            "ghidra_boundary": boundary,
+        }
+        return result
+
+    def _run_matcher_native(
+        self,
+        worktree: Path,
+        claim: Claim,
+        source: Path,
+        eboot: Path,
+        config: Path,
+        matcher: Path,
+        *,
+        deadline: float | None = None,
+    ) -> list[dict[str, Any]]:
+        reports: list[dict[str, Any]] = []
+        for number in (1, 2):
+            out = campaign_build_path(
+                worktree,
+                f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-{number}",
+            )
+            out.mkdir(parents=True, exist_ok=True)
+            result = _run_process(
+                [
+                    sys.executable,
+                    str(matcher),
+                    "--config",
+                    str(config),
+                    "--prx",
+                    str(eboot),
+                    "--function",
+                    claim.address,
+                    "--size",
+                    str(claim.size_bytes),
+                    "--source",
+                    str(source),
+                    "--out",
+                    str(out),
+                    "--json",
+                ],
+                cwd=worktree,
+                timeout=420,
+                output_limit=self.output_limit,
+                stop_requested=self.store.stop_requested,
+                deadline=deadline,
+            )
+            if result.interrupted:
+                raise CampaignInterrupted
+            if result.timed_out:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise CampaignInterrupted
+                raise ValueError("production matcher build/compare timed out")
+            reports.append(_parse_match_report(result.returncode, result.stdout))
+        return reports
+
+    def _run_matcher_wsl(
+        self,
+        worktree: Path,
+        claim: Claim,
+        source: Path,
+        eboot: Path,
+        config: Path,
+        matcher: Path,
+        *,
+        deadline: float | None = None,
+    ) -> list[dict[str, Any]]:
+        distro = os.environ.get("SETO_WSL_DISTRO", "Ubuntu")
+        worktree_wsl = _wsl_path(worktree, distro)
+        reports: list[dict[str, Any]] = []
+        for number in (1, 2):
+            relative_out = f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-{number}"
+            out = campaign_build_path(worktree, relative_out)
+            out.mkdir(parents=True, exist_ok=True)
+            out_wsl = _wsl_path(out, distro)
+            argv = [
+                "wsl.exe",
+                "-d",
+                distro,
+                "--cd",
+                worktree_wsl,
+                "--exec",
+                "env",
+                f"PYTHONPATH={_wsl_path(worktree / 'src', distro)}",
+                "python3",
+                _wsl_path(matcher, distro),
+                "--config",
+                _wsl_path(config, distro),
+                "--prx",
+                _wsl_path(eboot, distro),
+                "--function",
+                claim.address,
+                "--size",
+                str(claim.size_bytes),
+                "--source",
+                _wsl_path(source, distro),
+                "--out",
+                out_wsl,
+                "--json",
+            ]
+            result = _run_process(
+                argv,
+                cwd=worktree,
+                timeout=420,
+                output_limit=self.output_limit,
+                stop_requested=self.store.stop_requested,
+                deadline=deadline,
+            )
+            if result.interrupted:
+                raise CampaignInterrupted
+            if result.timed_out:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise CampaignInterrupted
+                raise ValueError("production matcher build/compare timed out")
+            reports.append(_parse_match_report(result.returncode, result.stdout))
+        return reports
+
+    def _run_claim(self, worker: Worker, claim: Claim, deadline: float | None) -> str:
+        worktree = self.worktrees[worker.worker_id]
+        if worktree.is_symlink() or not worktree.is_dir():
+            self._fail(claim, Failure(FailureKind.AGENT_ERROR))
+            return "blocked"
+        try:
+            if self.auto_preflight:
+                claim = self._prepare_claim(worktree, claim, deadline)
+            claim = self._ensure_session(claim, worktree, deadline)
+            self._restore_best_source(worktree, claim)
+            protected_before = _file_manifest(worktree) if self.auto_preflight else {}
+            changes_before = _worktree_status_snapshot(worktree) if self.auto_preflight else {}
+            git_head_before = _git_output(worktree, "rev-parse", "HEAD") if self.auto_preflight else ""
+            git_branch_before = _git_output(worktree, "branch", "--show-current") if self.auto_preflight else ""
+            validate_model_id(worker.model, {"openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"})
+            process = _run_process(
+                self._argv(worker, claim, _prompt(claim, claim.checkpoint, worktree)),
+                cwd=worktree,
+                timeout=self.timeout_seconds,
+                output_limit=self.output_limit,
+                stop_requested=self.store.stop_requested,
+                deadline=deadline,
+            )
+            protected_after = _file_manifest(worktree) if self.auto_preflight else {}
+            if protected_before != protected_after:
+                raise ValueError("worker modified a protected matcher, toolchain, or private input")
+            if self.auto_preflight:
+                _assert_worker_changes_scoped(
+                    changes_before,
+                    _worktree_status_snapshot(worktree),
+                    claim,
+                )
+                _assert_git_identity_unchanged(
+                    worktree,
+                    original_head=git_head_before,
+                    original_branch=git_branch_before,
+                )
+            if process.interrupted:
+                self._fail(claim, Failure(FailureKind.INTERRUPTED))
+                return "interrupted"
+            if process.returncode != 0 or process.timed_out:
+                self._fail(
+                    claim,
+                    classify_failure(
+                        process.returncode,
+                        process.stdout,
+                        process.stderr,
+                        timed_out=process.timed_out,
+                    ),
+                )
+                return "failed"
+            agent_checkpoint = _extract_checkpoint(process.stdout)
+            checkpoint = {
+                key: agent_checkpoint[key]
+                for key in ("next_experiment", "limitations")
+                if key in agent_checkpoint
+            }
+            for key in ("ghidra_log_path", "ghidra_log_sha256", "boundary_status"):
+                if key in claim.checkpoint:
+                    checkpoint[key] = claim.checkpoint[key]
+            self.store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+            if self.auto_preflight:
+                verification = self._verify_with_matcher_twice(
+                    worktree, claim, checkpoint, deadline
+                )
+            else:
+                verification = self.verifier(worktree, claim, checkpoint)
+            if verification.get("status") != "BOUNDARY_VALIDATED":
+                self._snapshot_candidate_source(worktree, claim, verification)
+            status = self.store.complete(
+                claim,
+                checkpoint,
+                verification,
+                max_attempts_without_progress=self.max_attempts_without_progress,
+                max_attempts_per_candidate=self.max_attempts_per_candidate,
+            )
+            return status
+        except CampaignInterrupted:
+            self._fail(claim, Failure(FailureKind.INTERRUPTED))
+            return "interrupted"
+        except Exception:
+            # Persist only a bounded classification; process/model text is never logged.
+            try:
+                self._fail(claim, Failure(FailureKind.AGENT_ERROR))
+            except RuntimeError:
+                pass
+            return "blocked"
+
+    def _fail(self, claim: Claim, failure: Failure) -> None:
+        self.store.fail(
+            claim,
+            failure,
+            max_retry_after=self.max_retry_after_seconds,
+            max_attempts_per_candidate=self.max_attempts_per_candidate,
+        )
+
+    def run(self, workers: Sequence[Worker], *, max_tasks: int) -> dict[str, Any]:
+        if max_tasks <= 0:
+            raise ValueError("max_tasks must be positive")
+        for worker in workers:
+            validate_model_id(worker.model, {"openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"})
+            if worker.worker_id not in self.worktrees:
+                raise ValueError(f"missing isolated worktree for {worker.worker_id}")
+        self.store.recover_expired()
+        if self.store.stop_requested():
+            return {"attempted": 0, "outcomes": {}, "stopped": True}
+        deadline = (
+            None
+            if self.max_duration_seconds is None
+            else time.monotonic() + self.max_duration_seconds
+        )
+        outcomes: list[str] = []
+        try:
+            while len(outcomes) < max_tasks and not self.store.stop_requested():
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+                # Reserve a distinct task for each available worker before the
+                # round starts. Re-check only after every process exits so that
+                # quota fallback released by the last process is never stranded.
+                round_claims: list[tuple[Worker, Claim]] = []
+                for worker in workers:
+                    if len(outcomes) + len(round_claims) >= max_tasks:
+                        break
+                    claim = self.store.claim_next(
+                        worker.worker_id,
+                        worker.provider,
+                        lease_seconds=self.lease_seconds,
+                        max_attempts_per_candidate=self.max_attempts_per_candidate,
+                    )
+                    if claim is not None:
+                        round_claims.append((worker, claim))
+                if not round_claims:
+                    break
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(round_claims)) as pool:
+                    futures = [
+                        pool.submit(self._run_claim, worker, claim, deadline)
+                        for worker, claim in round_claims
+                    ]
+                    for future in futures:
+                        outcomes.append(future.result())
+        except KeyboardInterrupt:
+            self.store.request_stop()
+            raise
+        return {
+            "attempted": len(outcomes),
+            "outcomes": {kind: outcomes.count(kind) for kind in sorted(set(outcomes))},
+            "stopped": self.store.stop_requested(),
+        }
+
+
+def _parse_match_report(returncode: int, stdout: str) -> dict[str, Any]:
+    try:
+        report = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("production matcher did not return JSON") from exc
+    if not isinstance(report, dict) or returncode not in {0, 3, 5}:
+        raise ValueError("production matcher returned an invalid exit code or report")
+    expected_codes = {"MATCHED": 0, "NONMATCHING": 3, "INCONCLUSIVE": 5}
+    if expected_codes.get(report.get("status")) != returncode:
+        raise ValueError("production matcher status and exit code disagree")
+    return report
+
+
+def _wsl_path(path: Path, distro: str) -> str:
+    result = subprocess.run(
+        ["wsl.exe", "-d", distro, "--exec", "wslpath", "-a", str(path.resolve())],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OSError("WSL path conversion failed")
+    value = result.stdout.strip()
+    if not value.startswith("/"):
+        raise OSError("WSL returned a non-absolute path")
+    return value
+
+
+def validate_ghidra_log(text: str, address: int) -> dict[str, Any]:
+    """Validate the complete, contiguous instruction listing emitted by Ghidra."""
+    try:
+        marker_names = (
+            "SETO_LANGUAGE",
+            "SETO_FUNCTION_START",
+            "SETO_FUNCTION_END",
+            "SETO_FUNCTION_BODY_START",
+            "SETO_FUNCTION_BODY_END",
+            "SETO_FUNCTION_BODY_ADDRESSES",
+            "SETO_FUNCTION_BODY_RANGES",
+            "SETO_ADDRESSABLE_UNIT_SIZE",
+            "SETO_BOUNDARY_STATUS",
+            "SETO_DECOMP_STATUS",
+            "SETO_INSTRUCTION_COUNT",
+        )
+        markers: dict[str, str] = {}
+        for name in marker_names:
+            matches = re.findall(rf"(?m)^\s*{re.escape(name)}=([^\s]+)\s*$", text)
+            if len(matches) != 1:
+                raise ValueError("missing or duplicate marker")
+            markers[name] = matches[0]
+        start = int(markers["SETO_FUNCTION_BODY_START"], 16)
+        end = int(markers["SETO_FUNCTION_BODY_END"], 16)
+        function_end = int(markers["SETO_FUNCTION_END"], 16)
+        requested_start = int(markers["SETO_FUNCTION_START"], 0)
+        addresses = int(markers["SETO_FUNCTION_BODY_ADDRESSES"])
+        ranges = int(markers["SETO_FUNCTION_BODY_RANGES"])
+        unit = int(markers["SETO_ADDRESSABLE_UNIT_SIZE"])
+        instruction_count = int(markers["SETO_INSTRUCTION_COUNT"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Ghidra evidence does not prove one exact Allegrex function boundary"
+        ) from exc
+
+    raw_instruction_markers = re.findall(r"(?m)^\s*SETO_INSN=", text)
+    instruction_rows = re.findall(
+        r"(?m)^\s*SETO_INSN=(0x[0-9a-fA-F]+)\s+SIZE=(\d+)\s*$", text
+    )
+    try:
+        instructions = [(int(item, 16), int(size)) for item, size in instruction_rows]
+    except ValueError as exc:
+        raise ValueError(
+            "Ghidra evidence does not prove one exact Allegrex function boundary"
+        ) from exc
+    size = end - start
+    if (
+        markers["SETO_LANGUAGE"] != "Allegrex:LE:32:default"
+        or markers["SETO_BOUNDARY_STATUS"] != "EXACT"
+        or markers["SETO_DECOMP_STATUS"] != "OK"
+        or start != address
+        or requested_start != address
+        or function_end != end
+        or start % 4
+        or size <= 0
+        or size % 4
+        or addresses != size
+        or ranges != 1
+        or unit != 1
+        or len(raw_instruction_markers) != len(instruction_rows)
+        or len(instructions) != instruction_count
+        or instruction_count != size // 4
+        or any(
+            instruction_address != start + index * 4 or instruction_size != 4
+            for index, (instruction_address, instruction_size) in enumerate(instructions)
+        )
+    ):
+        raise ValueError("Ghidra evidence does not prove one exact Allegrex function boundary")
+    return {
+        "language": "Allegrex:LE:32:default",
+        "start": f"0x{start:x}",
+        "end": f"0x{end:x}",
+        "size_bytes": size,
+        "instruction_count": instruction_count,
+    }
+
+
+def validate_export_evidence(path: Path, address: str, nid: str) -> None:
+    """Require a unique, relocated export with a real importing PRX call site."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("real export/import triage report cannot be read") from exc
+    rows = [
+        item
+        for item in payload.get("exports", [])
+        if item.get("address", "").lower() == address.lower()
+        and item.get("nid", "").upper() == nid.upper()
+        and item.get("library") == "libehsys"
+    ]
+    if len(rows) != 1:
+        raise ValueError("candidate does not have one unique libehsys export/NID")
+    row = rows[0]
+    relocation = row.get("pointer_relocation", {})
+    if (
+        relocation.get("type") != "R_MIPS_32"
+        or relocation.get("addend_valid") is not True
+        or int(relocation.get("addend", -1)) != int(address, 0)
+        or relocation.get("application_valid") is not True
+    ):
+        raise ValueError("candidate export pointer relocation is not proven")
+    calls = [
+        site
+        for importer in row.get("importers", [])
+        for site in importer.get("call_sites", [])
+    ]
+    limitations = [
+        limitation
+        for importer in row.get("importers", [])
+        for limitation in importer.get("table_limitations", [])
+    ]
+    if not calls or limitations:
+        raise ValueError("candidate lacks real importing call sites or has table limitations")
+
+
+def load_inventory(path: Path) -> tuple[list[Candidate], dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1 or not isinstance(payload.get("candidates"), list):
+        raise ValueError("unsupported campaign inventory schema")
+    candidates = [Candidate.from_dict(item) for item in payload["candidates"]]
+    addresses = [candidate.address.lower() for candidate in candidates]
+    if len(addresses) != len(set(addresses)):
+        raise ValueError("campaign inventory contains duplicate addresses")
+    return candidates, payload
+
+
+def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
+    with path.open("rb") as stream:
+        value = tomllib.load(stream)
+    if value.get("schema_version") != 1:
+        raise ValueError("unsupported campaign configuration schema")
+    models = value.get("models", {}).get("allowlist", [])
+    if not isinstance(models, list) or not models:
+        raise ValueError("model allowlist must be a non-empty list")
+    if len(models) != len(set(models)):
+        raise ValueError("model allowlist contains duplicates")
+    return value
+
+
+def _git_output(repo_root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("Git worktree operation failed")
+    return result.stdout.strip()
+
+
+def _safe_worktree_path(worktree: Path, relative: str | Path) -> Path:
+    relative = Path(relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("worker path escapes the worktree")
+    target = worktree / relative
+    cursor = worktree
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError(f"worker path contains a symlink: {cursor}")
+    try:
+        target.resolve(strict=False).relative_to(worktree.resolve(strict=True))
+    except ValueError as exc:
+        raise ValueError("worker path escapes the worktree") from exc
+    return target
+
+
+def _file_manifest(worktree: Path) -> dict[str, str]:
+    """Hash every file the worker must treat as read-only, including ignored media."""
+    candidates = [
+        *sorted((worktree / "src" / "seto").rglob("*.py")),
+        *(
+            worktree / relative
+            for relative in (
+                "scripts/match_function.py",
+                "scripts/ghidra/SetoAnalyzeEntry.java",
+                "scripts/run_ghidra_headless.ps1",
+                "config/decomp_campaign.toml",
+                "config/decomp_campaign_inventory.json",
+                "config/decomp_campaign.local.toml",
+                "config/wsl/seto.toml",
+                "private/decrypted/ULUS10136_EBOOT.elf",
+                "private/original/PSP_GAME/USRDIR/gmodule/libtutoriallist.prx",
+                "private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx",
+                "build/seto035/export-triage.json",
+            )
+        ),
+    ]
+    manifest: dict[str, str] = {}
+    for path in candidates:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"protected worker input is missing or unsafe: {path.name}")
+        relative = path.relative_to(worktree).as_posix()
+        manifest[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return manifest
+
+
+def _worktree_status_snapshot(worktree: Path) -> dict[str, tuple[str, str]]:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=worktree,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("could not audit worker worktree changes")
+    snapshot: dict[str, tuple[str, str]] = {}
+    for record in result.stdout.split(b"\0"):
+        if not record:
+            continue
+        if len(record) < 4:
+            raise ValueError("Git returned malformed worktree status")
+        status = record[:2].decode("ascii", errors="replace")
+        relative = record[3:].decode("utf-8", errors="surrogateescape").replace("\\", "/")
+        if "R" in status or "C" in status:
+            raise ValueError("worker worktree rename/copy operations are not allowed")
+        path = _safe_worktree_path(worktree, relative)
+        if path.is_symlink():
+            digest = "SYMLINK"
+        elif path.is_file():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            digest = "MISSING"
+        snapshot[relative.casefold()] = (status, digest)
+    return snapshot
+
+
+def _assert_worker_changes_scoped(
+    before: dict[str, tuple[str, str]],
+    after: dict[str, tuple[str, str]],
+    claim: Claim,
+) -> None:
+    address = f"{claim.numeric_address:08X}".casefold()
+    allowed_source = f"decomp/src/eboot/func_{address}.c".casefold()
+    allowed_build = (
+        f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/".casefold()
+    )
+    for relative in set(before) | set(after):
+        if before.get(relative) == after.get(relative):
+            continue
+        if relative == allowed_source:
+            if relative in after and after[relative][1] in {"SYMLINK", "MISSING"}:
+                raise ValueError("candidate source was replaced with an unsafe file")
+            continue
+        if relative.startswith(allowed_build):
+            continue
+        raise ValueError("worker changed files outside its candidate source/build directory")
+
+
+def _assert_git_identity_unchanged(
+    worktree: Path,
+    *,
+    original_head: str,
+    original_branch: str,
+) -> None:
+    if (
+        _git_output(worktree, "rev-parse", "HEAD") != original_head
+        or _git_output(worktree, "branch", "--show-current") != original_branch
+    ):
+        raise ValueError("worker committed changes or switched its isolated branch")
+
+
+def _copy_local_file(source: Path, destination: Path, *, expected_sha256: str | None = None) -> str:
+    if source.is_symlink() or not source.is_file():
+        raise ValueError(f"required local input is missing or unsafe: {source.name}")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    if expected_sha256 and source_hash != expected_sha256.lower():
+        raise ValueError(f"local input hash does not match the configured baseline: {source.name}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_symlink():
+        raise ValueError(f"worker input target is a symlink: {destination}")
+    if destination.exists():
+        if not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != source_hash:
+            raise ValueError(f"refusing to overwrite a different worker-local input: {destination.name}")
+    else:
+        shutil.copyfile(source, destination)
+    return source_hash
+
+
+def prepare_worker_worktrees(
+    repo_root: Path,
+    config: dict[str, Any],
+) -> dict[str, Path]:
+    """Create/reuse one Git worktree per worker and provision local ignored inputs."""
+    repo_root = repo_root.resolve(strict=True)
+    current_remote = _git_output(repo_root, "remote", "get-url", "origin")
+    root_relative = Path(config["worktrees"]["root"])
+    if root_relative.is_absolute() or ".." in root_relative.parts:
+        raise ValueError("worktree root must be a relative build path")
+    if root_relative.parts[0] != "build":
+        raise ValueError("worktrees must be isolated under the ignored build/ tree")
+    root = campaign_build_path(repo_root, Path(*root_relative.parts[1:]))
+    root.mkdir(parents=True, exist_ok=True)
+    prefix = str(config["worktrees"]["branch_prefix"]).strip("/")
+    worktrees: dict[str, Path] = {}
+    registered = _git_output(repo_root, "worktree", "list", "--porcelain")
+    inputs = config["inputs"]
+    input_specs = (
+        ("eboot", "eboot_sha256"),
+        ("libtutoriallist", "libtutoriallist_sha256"),
+        ("libhtml_view", "libhtml_view_sha256"),
+        ("triage_report", "triage_report_sha256"),
+        (config["toolchain"]["mwcc_config"], None),
+        (config["toolchain"]["ghidra_local_config"], None),
+    )
+    for worker_id in config["workers"]:
+        if not re.fullmatch(r"[a-z0-9-]+", worker_id):
+            raise ValueError("worker identifiers may contain only lowercase letters, digits, and hyphens")
+        relative = root_relative / worker_id
+        target = campaign_build_path(repo_root, relative.relative_to("build"))
+        branch = f"{prefix}/{worker_id}"
+        target_text = str(target.resolve(strict=False))
+        if target.is_symlink():
+            raise ValueError(f"worker worktree may not be a symlink: {target}")
+        registered_paths = [
+            os.path.normcase(os.path.normpath(line.removeprefix("worktree ").strip()))
+            for line in registered.splitlines()
+            if line.startswith("worktree ")
+        ]
+        already_registered = os.path.normcase(os.path.normpath(target_text)) in registered_paths
+        if already_registered:
+            actual_root = _git_output(target, "rev-parse", "--show-toplevel")
+            actual_branch = _git_output(target, "branch", "--show-current")
+            if Path(actual_root).resolve() != target.resolve() or actual_branch != branch:
+                raise ValueError("existing worker path is registered to a different worktree/branch")
+        elif target.exists():
+            raise ValueError("refusing to reuse an unregistered non-empty worker directory")
+        else:
+            branch_exists = subprocess.run(
+                ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                cwd=repo_root,
+                check=False,
+            ).returncode == 0
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if branch_exists:
+                _git_output(repo_root, "worktree", "add", str(target), branch)
+            else:
+                _git_output(repo_root, "worktree", "add", "-b", branch, str(target), "HEAD")
+        remote = _git_output(target, "remote", "get-url", "origin")
+        if remote != current_remote:
+            raise ValueError("worker worktree does not resolve to the same AIMemory project remote")
+        for input_key, hash_key in input_specs:
+            source_relative = input_key if input_key not in inputs else inputs[input_key]
+            source = repo_root / source_relative
+            destination = _safe_worktree_path(target, source_relative)
+            expected_hash = inputs.get(hash_key) if hash_key else None
+            _copy_local_file(source, destination, expected_sha256=expected_hash)
+        worktrees[worker_id] = target
+    return worktrees
+
+
+def _config_paths(config: dict[str, Any], config_path: Path) -> tuple[Path, Path]:
+    base = config_path.resolve().parent.parent
+    inventory = (base / config["inventory"]).resolve()
+    database_relative = Path(config["database"])
+    if database_relative.is_absolute() or ".." in database_relative.parts:
+        raise ValueError("database path must remain inside build/")
+    database = campaign_build_path(base, database_relative.relative_to("build"))
+    return inventory, database
+
+
+def _sanitize_opencode_prefix(command: list[str]) -> list[str]:
+    if not command:
+        raise ValueError("OpenCode command cannot be empty")
+    if len(command) == 1 and os.name == "nt" and command[0].lower() == "opencode":
+        resolved = next(
+            (shutil.which(name) for name in ("opencode.exe", "opencode.cmd", "opencode.bat") if shutil.which(name)),
+            None,
+        )
+        if resolved is None:
+            powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+            if powershell:
+                found = subprocess.run(
+                    [
+                        powershell,
+                        "-NoProfile",
+                        "-Command",
+                        "(Get-Command opencode -ErrorAction Stop).Source",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                candidate = found.stdout.strip()
+                if found.returncode == 0 and candidate.lower().endswith(".ps1"):
+                    return [powershell, "-NoProfile", "-File", candidate]
+                if found.returncode == 0 and candidate:
+                    return [candidate]
+        if resolved:
+            return [resolved]
+    return command
+
+
+def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    command = _sanitize_opencode_prefix(list(config["opencode"].get("command", ["opencode"])))
+    catalog = subprocess.run(
+        [*command, "models"], cwd=cwd, capture_output=True, text=True, timeout=120, check=False
+    )
+    auth = subprocess.run(
+        [*command, "auth", "list"], cwd=cwd, capture_output=True, text=True, timeout=60, check=False
+    )
+    listed_models = set(catalog.stdout.splitlines()) if catalog.returncode == 0 else set()
+    auth_text = auth.stdout if auth.returncode == 0 else ""
+    worker_states = {}
+    for worker_name, item in config.get("workers", {}).items():
+        model = validate_model_id(item["model"], config["models"]["allowlist"])
+        model_present = model in listed_models
+        provider_auth = bool(re.search(rf"(?im)^\s*{re.escape(item['provider'])}\s+.+\bstored\b", auth_text))
+        worker_states[worker_name] = {
+            "model": model,
+            "catalog": "available" if model_present else "missing",
+            "auth": "stored" if provider_auth else "not-listed",
+            "execution": "unverified",
+            "ready": False,
+        }
+    return {
+        "catalog_exit_code": catalog.returncode,
+        "auth_exit_code": auth.returncode,
+        "workers": worker_states,
+    }
+
+
+def _ai_memory_connected(command: list[str], cwd: Path) -> bool:
+    result = subprocess.run(
+        [*command, "mcp", "list"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return result.returncode == 0 and bool(
+        re.search(r"(?im)^\s*✓\s+ai-memory\s+connected\s*$", result.stdout)
+    )
+
+
+def _doctor(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
+    command = _sanitize_opencode_prefix(list(config["opencode"].get("command", ["opencode"])))
+    repo_root = config_path.resolve().parent.parent
+    version = subprocess.run(
+        [*command, "--version"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    model_check = _opencode_preflight(config, repo_root)
+    mcp = subprocess.run(
+        [*command, "mcp", "list"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    ai_memory = shutil.which("ai-memory")
+    memory_version = None
+    if ai_memory:
+        result = subprocess.run(
+            [ai_memory, "--version"], capture_output=True, text=True, timeout=30, check=False
+        )
+        if result.returncode == 0:
+            memory_version = result.stdout.strip().splitlines()[0]
+    wsl = shutil.which("wsl.exe") or shutil.which("wsl")
+    wsl_result: str | None = None
+    toolchain: dict[str, str] = {"mwcc": "BLOCKED", "wibo": "BLOCKED", "ghidra": "BLOCKED"}
+    if wsl:
+        result = subprocess.run(
+            [wsl, "-d", config.get("toolchain", {}).get("wsl_distro", "Ubuntu"), "--exec", "python3", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode == 0:
+            wsl_result = result.stdout.strip()
+        local_toolchain = repo_root / config["toolchain"]["mwcc_config"]
+        if local_toolchain.is_file() and not local_toolchain.is_symlink():
+            try:
+                local_settings = tomllib.loads(local_toolchain.read_text(encoding="utf-8-sig"))
+                mwcc = local_settings["tools"]["mwccpsp"]["path"]
+                wibo_path = local_settings["tools"]["wibo"]["path"]
+                checks = {
+                    "mwcc": [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-f", mwcc],
+                    "wibo": [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", wibo_path],
+                }
+                for name, argv in checks.items():
+                    checked = subprocess.run(argv, capture_output=True, timeout=30, check=False)
+                    toolchain[name] = "READY" if checked.returncode == 0 else "BLOCKED"
+                java_check = subprocess.run(
+                    [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", "/usr/bin/java"],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                ghidra_config = repo_root / config["toolchain"]["ghidra_local_config"]
+                if ghidra_config.is_file() and not ghidra_config.is_symlink():
+                    ghidra_settings = tomllib.loads(ghidra_config.read_text(encoding="utf-8"))
+                    ghidra_home = ghidra_settings.get("ghidra", {}).get("home")
+                    if java_check.returncode == 0 and isinstance(ghidra_home, str) and ghidra_home.startswith("/"):
+                        headless = f"{ghidra_home.rstrip('/')}/support/analyzeHeadless"
+                        checked = subprocess.run(
+                            [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", headless],
+                            capture_output=True,
+                            timeout=30,
+                            check=False,
+                        )
+                        toolchain["ghidra"] = "READY" if checked.returncode == 0 else "BLOCKED"
+                    if toolchain["ghidra"] != "READY":
+                        windows_home = ghidra_settings.get("ghidra", {}).get("windows_home")
+                        powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+                        wrapper = repo_root / "scripts" / "run_ghidra_headless.ps1"
+                        if isinstance(windows_home, str) and powershell and wrapper.is_file():
+                            launcher = Path(windows_home) / "support" / "analyzeHeadless.bat"
+                            if launcher.is_file() and not launcher.is_symlink():
+                                checked = subprocess.run(
+                                    [powershell, "-NoProfile", "-File", str(wrapper), str(launcher), "--help"],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=120,
+                                    check=False,
+                                )
+                                output = checked.stdout + checked.stderr
+                                if "Headless Analyzer Usage" in output and "could not be found" not in output:
+                                    toolchain["ghidra"] = "READY"
+            except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
+                pass
+    return {
+        "opencode_version": version.stdout.strip() if version.returncode == 0 else "BLOCKED",
+        "opencode": model_check,
+        "mcp_connected": mcp.returncode == 0
+        and bool(re.search(r"(?im)^\s*✓\s+ai-memory\s+connected\s*$", mcp.stdout)),
+        "ai_memory_version": memory_version,
+        "wsl_python": wsl_result,
+        "toolchain": toolchain,
+        "execution": "BLOCKED: campaign is opt-in; provider execution/cost and unattended tool permissions are unverified",
+    }
+
+
+def _print_json(value: Any) -> None:
+    print(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+def _status_report(
+    store: CampaignStore,
+    config: dict[str, Any],
+    repo_root: Path,
+) -> dict[str, Any]:
+    tasks = store.list_tasks()
+    counts: dict[str, int] = {}
+    for task in tasks:
+        counts[task["status"]] = counts.get(task["status"], 0) + 1
+    matched = [task for task in tasks if task["status"] == "matched"]
+    worktree_root_rel = Path(config["worktrees"]["root"]).relative_to("build")
+    worktree_root = campaign_build_path(repo_root, worktree_root_rel)
+    reconstructed: list[str] = []
+    for task in tasks:
+        checkpoint = task["checkpoint"]
+        digest = checkpoint.get("best_source_sha256")
+        if not isinstance(digest, str) or not HEX_SHA256.fullmatch(digest):
+            continue
+        address = f"{int(task['address'], 0):08X}"
+        source_relative = Path("decomp/src/eboot") / f"func_{address}.c"
+        found = False
+        for worker_id in config["workers"]:
+            worktree = worktree_root / worker_id
+            if worktree.is_symlink() or not worktree.is_dir():
+                continue
+            try:
+                source = _safe_worktree_path(worktree, source_relative)
+                if source.is_file() and not source.is_symlink() and hashlib.sha256(source.read_bytes()).hexdigest() == digest:
+                    found = True
+                    break
+            except (OSError, ValueError):
+                continue
+        snapshot_rel = checkpoint.get("best_source_snapshot")
+        if not found and isinstance(snapshot_rel, str):
+            try:
+                snapshot = campaign_build_path(repo_root, snapshot_rel)
+                found = (
+                    not snapshot.is_symlink()
+                    and snapshot.is_file()
+                    and hashlib.sha256(snapshot.read_bytes()).hexdigest() == digest
+                )
+            except (OSError, ValueError):
+                found = False
+        if found:
+            reconstructed.append(task["address"])
+    attempts = store.attempt_summary()
+    provider_attempts = {
+        provider: sum(outcomes.values()) for provider, outcomes in attempts.items()
+    }
+    return {
+        "execution_enabled": bool(config.get("execution", {}).get("enabled", False)),
+        "provider_access_verified": bool(
+            config.get("execution", {}).get("provider_access_verified", False)
+        ),
+        "worker_permissions_reviewed": bool(
+            config.get("execution", {}).get("worker_permissions_reviewed", False)
+        ),
+        "counts": counts,
+        "matched_functions": len(matched),
+        "matched_instructions": sum(int(task["size_bytes"]) // 4 for task in matched),
+        "reconstructed_c_functions": len(reconstructed),
+        "reconstructed_c_addresses": reconstructed,
+        "blockers": [
+            {"address": task["address"], "status": task["status"]}
+            for task in tasks
+            if task["status"] in {"needs_boundary", "blocked", "stalled"}
+        ],
+        "providers": {
+            worker["provider"]: store.provider_status(worker["provider"])
+            for worker in config["workers"].values()
+        },
+        "observed_consumption": {
+            "model_process_attempts_by_provider": provider_attempts,
+            "token_and_cost_totals": "not reported by the current OpenCode JSON integration",
+        },
+        "stopped": store.stop_requested(),
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("doctor", help="read-only environment/model/auth/MCP diagnostics")
+    subparsers.add_parser("init", help="seed the local SQLite queue from the reviewed inventory")
+    subparsers.add_parser("plan", help="show queued candidates and explicit execution readiness")
+    subparsers.add_parser("status", help="show queue/provider/checkpoint status")
+    resume = subparsers.add_parser("resume", help="recover expired leases and clear a clean stop")
+    resume.add_argument("--recover-expired", action="store_true")
+    resume.add_argument("--retry-blocked", action="store_true", help="explicitly retry blocked tasks after fixing their cause")
+    stop = subparsers.add_parser("stop", help="request safe shutdown of running workers")
+    run = subparsers.add_parser("run", help="execute only after a separate explicit authorization")
+    run.add_argument("--confirm", action="store_true", help="confirm this model execution campaign")
+    run.add_argument("--continuous", action="store_true", help="drain the bounded queue until idle or configured limits")
+    run.add_argument("--allow-openai-usage", action="store_true", help="confirm use of the configured OpenAI account")
+    run.add_argument("--allow-free-model-usage", action="store_true", help="confirm requests to the exact allowlisted free model")
+    run.add_argument("--max-tasks", type=int, default=None)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    config_path = args.config.resolve()
+    try:
+        config = load_config(config_path)
+        inventory_path, database_path = _config_paths(config, config_path)
+        candidates, inventory = load_inventory(inventory_path)
+        if args.command == "doctor":
+            _print_json(_doctor(config, config_path))
+            return 0
+        store = CampaignStore(database_path)
+        if args.command == "init":
+            inserted = store.seed(candidates)
+            _print_json({"seeded": inserted, "inventory_candidates": len(candidates), "database": str(database_path)})
+            return 0
+        if args.command == "plan":
+            _print_json(
+                {
+                    "campaign_enabled": bool(config.get("execution", {}).get("enabled", False)),
+                    "provider_access_verified": bool(
+                        config.get("execution", {}).get("provider_access_verified", False)
+                    ),
+                    "worker_permissions_reviewed": bool(
+                        config.get("execution", {}).get("worker_permissions_reviewed", False)
+                    ),
+                    "models": {name: value["model"] for name, value in config["workers"].items()},
+                    "inventory_candidates": len(candidates),
+                    "pending_with_exact_boundary": sum(
+                        c.boundary_status == "EXACT" for c in candidates
+                    ),
+                    "awaiting_ghidra_boundary": sum(
+                        c.boundary_status != "EXACT" for c in candidates
+                    ),
+                    "source_commit": inventory.get("source_commit"),
+                    "instruction": "No model process is started by plan/doctor/status.",
+                }
+            )
+            return 0
+        if args.command == "status":
+            _print_json(_status_report(store, config, REPO_ROOT))
+            return 0
+        if args.command == "stop":
+            store.request_stop()
+            _print_json({"stop_requested": True})
+            return 0
+        if args.command == "resume":
+            recovered = store.recover_expired() if args.recover_expired else 0
+            store.resume()
+            if args.retry_blocked:
+                with store._connect() as db:
+                    db.execute(
+                        "UPDATE candidates SET status='pending',updated_at=? WHERE status='blocked'",
+                        (time.time(),),
+                    )
+            _print_json({"resumed": True, "expired_leases_recovered": recovered})
+            return 0
+        if args.command == "run":
+            if not args.confirm:
+                raise ValueError("run requires --confirm; preparation commands never start model sessions")
+            if args.continuous and not config.get("execution", {}).get("continuous", False):
+                raise ValueError("continuous mode is disabled in config")
+            if not config.get("execution", {}).get("enabled", False):
+                raise ValueError("campaign execution is disabled in config; separate authorization is required")
+            if not config.get("execution", {}).get("provider_access_verified", False):
+                raise ValueError(
+                    "provider execution/access is unverified; keep the campaign blocked until a later, "
+                    "explicitly authorized readiness check"
+                )
+            if not config.get("execution", {}).get("worker_permissions_reviewed", False):
+                raise ValueError(
+                    "worker tool permissions have not been reviewed for unattended execution"
+                )
+            if not args.allow_openai_usage:
+                raise ValueError("run requires --allow-openai-usage for the explicitly configured OpenAI account")
+            if not args.allow_free_model_usage:
+                raise ValueError("run requires --allow-free-model-usage for the exact configured DeepSeek Free model")
+            preflight = _doctor(config, config_path)
+            if not preflight["mcp_connected"]:
+                raise ValueError("AIMemory MCP is not connected in the current OpenCode project")
+            for name, state in preflight["opencode"]["workers"].items():
+                if state["catalog"] != "available":
+                    raise ValueError(f"configured model for {name} is absent from the OpenCode catalog")
+            openai_state = preflight["opencode"]["workers"].get("openai", {})
+            free_state = preflight["opencode"]["workers"].get("deepseek", {})
+            if openai_state.get("auth") != "stored":
+                raise ValueError("OpenAI provider authentication is not listed as stored")
+            if free_state.get("model") != "opencode/deepseek-v4.1-flash-free":
+                raise ValueError("DeepSeek worker must use the exact allowlisted Free model")
+            if preflight.get("wsl_python") is None or any(
+                state != "READY" for state in preflight.get("toolchain", {}).values()
+            ):
+                raise ValueError("WSL2, Ghidra, MWCC, or wibo preflight is BLOCKED")
+            if not database_path.exists() or not store.list_tasks():
+                store.seed(candidates)
+            worktrees = prepare_worker_worktrees(
+                REPO_ROOT,
+                config,
+            )
+            command = _sanitize_opencode_prefix(list(config["opencode"].get("command", ["opencode"])))
+            disconnected = [
+                worker_id
+                for worker_id, path in worktrees.items()
+                if not _ai_memory_connected(command, path)
+            ]
+            if disconnected:
+                raise ValueError(
+                    "AIMemory MCP is not connected in worker worktree(s): "
+                    + ", ".join(disconnected)
+                )
+            workers = [
+                Worker(worker_id, value["provider"], validate_model_id(value["model"], config["models"]["allowlist"]))
+                for worker_id, value in config["workers"].items()
+            ]
+            limits = config["limits"]
+            local_ghidra = tomllib.loads(
+                (REPO_ROOT / config["toolchain"]["ghidra_local_config"]).read_text(encoding="utf-8")
+            )["ghidra"]
+            runner = CampaignRunner(
+                store,
+                opencode_command=command,
+                worktrees=worktrees,
+                timeout_seconds=float(limits["agent_timeout_seconds"]),
+                output_limit=int(limits["max_output_bytes"]),
+                max_attempts_without_progress=int(limits["max_attempts_without_progress"]),
+                max_attempts_per_candidate=int(limits["max_attempts_per_candidate"]),
+                max_duration_seconds=float(limits["max_duration_seconds"]),
+                lease_seconds=float(limits["lease_seconds"]),
+                ghidra_home=local_ghidra.get("home"),
+                ghidra_windows_home=local_ghidra.get("windows_home"),
+                wsl_distro=config["toolchain"]["wsl_distro"],
+                expected_eboot_sha256=config["inputs"]["eboot_sha256"],
+                checkpoint_repo_root=REPO_ROOT,
+                max_retry_after_seconds=float(limits["max_retry_after_seconds"]),
+            )
+            if args.max_tasks is None:
+                max_tasks = int(limits["max_tasks"])
+                if not args.continuous:
+                    max_tasks = min(max_tasks, int(limits["max_workers"]))
+            else:
+                max_tasks = args.max_tasks
+            if max_tasks > int(limits["max_tasks"]):
+                raise ValueError("--max-tasks cannot exceed the configured campaign limit")
+            outcome = runner.run(workers, max_tasks=max_tasks)
+            _print_json(outcome)
+            return 0
+        return 2
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        print(f"decomp_campaign: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

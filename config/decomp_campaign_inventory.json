@@ -1,0 +1,302 @@
+{
+  "schema_version": 1,
+  "source_commit": "5a17ff3c5498666604c1fcc124f4c408de18ed9b",
+  "baseline": {
+    "eboot_matched_functions": 8,
+    "eboot_matched_instructions": 206,
+    "prx_matched_functions": 16,
+    "prx_matched_instructions": 912
+  },
+  "triage": {
+    "report": "build/seto035/export-triage.json",
+    "generator": "scripts/triage_eboot_035.py",
+    "media_sha256": "d4d0efc3d6c49a7ba8142adbd316ed006a3035a572169e9ef04c6cd0daba7a91",
+    "selection_note": "Known exact Ghidra boundaries are schedulable. Additional real, uniquely relocated exports with PRX call references are inventory-only until Ghidra independently proves their body boundary."
+  },
+  "candidates": [
+    {
+      "address": "0x8040",
+      "size_bytes": 252,
+      "nid": "0x10F3BB61",
+      "priority": 100,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6407,6457-6458",
+        "historical_status": "TRIAGED",
+        "size_basis": "Ghidra 12.1.3 exact [0x8040,0x813c); 63 instructions",
+        "note": "mips.find_functions truncates at 0x80f4; includes callback and data references."
+      }
+    },
+    {
+      "address": "0x302c4",
+      "size_bytes": 172,
+      "nid": "0xB2B9FEFA",
+      "priority": 45,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "build/seto035/export-triage.json; Ghidra 12.1.3 saved evidence",
+        "historical_status": "DEFERRED",
+        "size_basis": "Ghidra exact boundary; 43 instructions",
+        "note": "Five data references resolve only to load-segment addresses without named-section identity."
+      }
+    },
+    {
+      "address": "0x4217c",
+      "size_bytes": 176,
+      "nid": "0x942B03D0",
+      "priority": 65,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6406",
+        "historical_status": "TRIAGED",
+        "size_basis": "Ghidra 12.1.3 exact boundary; 44 instructions",
+        "note": "Four internal calls and a 0xc60-byte stack frame; reserve candidate."
+      }
+    },
+    {
+      "address": "0x3f2b0",
+      "size_bytes": 120,
+      "nid": "0xE58C0FDC",
+      "priority": 35,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6351,6367-6372",
+        "historical_status": "NONMATCHING",
+        "size_basis": "Ghidra 12.1.3 exact boundary; 30 instructions",
+        "note": "Prior hypotheses changed branch type/scheduling and did not match the full symbol."
+      }
+    },
+    {
+      "address": "0x37f38",
+      "size_bytes": 264,
+      "nid": "0xE6E4401F",
+      "priority": 90,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6404,6453-6454",
+        "historical_status": "BLOCKED_BY_SIZE",
+        "size_basis": "Ghidra 12.1.3 exact boundary; 66 instructions",
+        "note": "Prior object was 12 bytes short; two dynamic bit scans and packed command fields."
+      }
+    },
+    {
+      "address": "0xd28c",
+      "size_bytes": 152,
+      "nid": "0x476FD94A",
+      "priority": 30,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6294,6309-6313",
+        "historical_status": "BLOCKED_BY_SIZE",
+        "size_basis": "Ghidra 12.1.3 exact [0xd28c,0xd324); 38 instructions",
+        "note": "Previous hypotheses compiled to 31-35 words; no truncated comparison was accepted."
+      }
+    },
+    {
+      "address": "0x2c28c",
+      "size_bytes": 112,
+      "nid": "0x7187E0F0",
+      "priority": 85,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6403,6446-6452",
+        "historical_status": "NONMATCHING_26_OF_28",
+        "size_basis": "SETO-DECOMP-038 Ghidra-confirmed interval; 28 instructions",
+        "note": "Best local-only hypothesis is 26/28; preserve its causal divergence without promoting it."
+      }
+    },
+    {
+      "address": "0x44eb4",
+      "size_bytes": 76,
+      "nid": "0xAB962AE7",
+      "priority": 20,
+      "boundary_status": "EXACT",
+      "evidence": {
+        "source": "docs/decomp-progress.md:6354,6405,6460-6467",
+        "historical_status": "BLOCKED_BY_DATA_IDENTITY_AND_SIZE",
+        "size_basis": "Ghidra 12.1.3 exact boundary; 19 instructions",
+        "note": "Must prove global object identity before any reconstruction; do not invent a data map."
+      }
+    },
+    {
+      "address": "0x31650",
+      "size_bytes": 12,
+      "nid": "0x9EA6989A",
+      "priority": 48,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 3 instructions",
+        "prx_call_sites": 9,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x42838",
+      "size_bytes": 36,
+      "nid": "0x60B55A50",
+      "priority": 44,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 9 instructions",
+        "prx_call_sites": 5,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x36430",
+      "size_bytes": 12,
+      "nid": "0xF462EE6E",
+      "priority": 42,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 3 instructions",
+        "prx_call_sites": 4,
+        "note": "Adjacent to the certified 0x3643c function; verify non-overlap and exact entry first."
+      }
+    },
+    {
+      "address": "0x44f38",
+      "size_bytes": 24,
+      "nid": "0xA4AFF8E6",
+      "priority": 38,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 6 instructions",
+        "prx_call_sites": 3,
+        "note": "A neighboring export at 0x44f20 is inventoried separately; confirm no overlapping body."
+      }
+    },
+    {
+      "address": "0x44f20",
+      "size_bytes": 24,
+      "nid": "0xB8AD96EA",
+      "priority": 37,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 6 instructions",
+        "prx_call_sites": 3,
+        "note": "A neighboring export at 0x44f38 is inventoried separately; confirm no overlapping body."
+      }
+    },
+    {
+      "address": "0x428f0",
+      "size_bytes": 136,
+      "nid": "0xB89D38DC",
+      "priority": 36,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 34 instructions",
+        "prx_call_sites": 3,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x35f50",
+      "size_bytes": 12,
+      "nid": "0x1EC5342B",
+      "priority": 34,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 3 instructions",
+        "prx_call_sites": 3,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x35e44",
+      "size_bytes": 268,
+      "nid": "0xDFCA450B",
+      "priority": 33,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 67 instructions",
+        "prx_call_sites": 3,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x55824",
+      "size_bytes": 180,
+      "nid": "0x450CD6C5",
+      "priority": 28,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 45 instructions",
+        "prx_call_sites": 2,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x55644",
+      "size_bytes": 284,
+      "nid": "0x5998BFD7",
+      "priority": 27,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 71 instructions",
+        "prx_call_sites": 2,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x44d70",
+      "size_bytes": 76,
+      "nid": "0xD853F15C",
+      "priority": 26,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 19 instructions",
+        "prx_call_sites": 2,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x44c68",
+      "size_bytes": 24,
+      "nid": "0x33ED567B",
+      "priority": 25,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json real export/import triage",
+        "historical_status": "NOT_ANALYZED_BY_GHIDRA",
+        "size_basis": "MIPS function detector candidate only; provisional 6 instructions",
+        "prx_call_sites": 2,
+        "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+schema_version = 1
+inventory = "config/decomp_campaign_inventory.json"
+database = "build/decomp-campaign/campaign.sqlite3"
+
+[execution]
+# Preparation and diagnostics are safe by default. A later task must explicitly
+# authorize provider usage and change this flag before `run` can start sessions.
+enabled = false
+continuous = false
+require_explicit_confirmation = true
+provider_access_verified = false
+worker_permissions_reviewed = false
+
+[opencode]
+command = ["opencode"]
+format = "json"
+
+[models]
+allowlist = ["openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"]
+
+[workers.openai]
+provider = "openai"
+model = "openai/gpt-6-luna"
+max_parallel = 1
+
+[workers.deepseek]
+provider = "opencode"
+model = "opencode/deepseek-v4.1-flash-free"
+max_parallel = 1
+free_model_only = true
+
+[limits]
+max_workers = 2
+max_tasks = 40
+max_duration_seconds = 3600
+lease_seconds = 3660
+agent_timeout_seconds = 900
+max_attempts_per_candidate = 8
+max_attempts_without_progress = 3
+max_output_bytes = 1048576
+max_retry_after_seconds = 900
+
+[toolchain]
+wsl_distro = "Ubuntu"
+mwcc_config = "config/wsl/seto.toml"
+ghidra_local_config = "config/decomp_campaign.local.toml"
+
+[inputs]
+eboot = "private/decrypted/ULUS10136_EBOOT.elf"
+eboot_sha256 = "d4d0efc3d6c49a7ba8142adbd316ed006a3035a572169e9ef04c6cd0daba7a91"
+libtutoriallist = "private/original/PSP_GAME/USRDIR/gmodule/libtutoriallist.prx"
+libtutoriallist_sha256 = "2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49"
+libhtml_view = "private/original/PSP_GAME/USRDIR/gmodule/libhtml_view.prx"
+libhtml_view_sha256 = "319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26"
+triage_report = "build/seto035/export-triage.json"
+triage_report_sha256 = "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c"
+
+[worktrees]
+root = "build/decomp-campaign/worktrees"
+branch_prefix = "seto/decomp-campaign"
