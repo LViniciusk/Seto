@@ -110,6 +110,20 @@ used as an automatic retry loop. Rate limits honor `Retry-After`, provider
 outages back off, and a run exits instead of polling when no worker can claim a
 task.
 
+## Session and campaign limits
+
+Before a worker prompt, the runner creates a session through OpenCode's session
+API in that worker's worktree and persists the returned session ID. It checks a
+saved ID before reuse; a missing session or a provider change gets a new,
+independent session. SQLite checkpoints and earlier attempt/session IDs remain
+available across that change. Session setup itself does not send a model prompt.
+
+The campaign does not consolidate worker worktrees or automatically promote
+MATCHED sources into the certified source tree. Reviewing and consolidating
+those sources, then preparing the post-campaign PR, remain manual operator
+steps. AIMemory is used only for read-only knowledge retrieval; shared writes
+and checkpoint recording remain disabled.
+
 ## Verification and isolation
 
 Each worker gets its own ignored Git worktree and branch. The orchestrator
@@ -140,4 +154,19 @@ The real-toolchain smoke used the already certified `0x38DB4` source solely to
 exercise Ghidra, two isolated MWCC builds, the unchanged production matcher,
 and SQLite completion. It returned 63/63 words twice with identical object
 hashes; it is not new campaign progress. The WSL integration regression for
-SETO-DECOMP-038 passed. Full-suite results are recorded in the PR description.
+SETO-DECOMP-038 passed.
+
+SETO-DECOMP-039-R2 validation (2026-10-25), with campaign execution still
+disabled and no model inference:
+
+- OpenCode 2.1.4 session protocol: created via `POST /api/session`, read back
+  via `GET /api/session/{id}`, then deleted; no prompt was sent. A direct
+  `run --session` continuation was not exercised because that requires a model
+  request; the installed CLI help and V2 docs identify `--session` as the
+  continuation interface.
+- Orchestrator tests: 29 passed; full suite: 864 passed, 44 skipped.
+- `compileall` and `git diff --check`: clean.
+- Fresh Ghidra proof for `0x38DB4`: 63 contiguous 4-byte instructions; two
+  independent MWCC/production-matcher builds returned 63/63 with identical
+  object SHA-256 `81b5ac578ed3b4ee12f4c448f0f9f3d0b6b5d3e28b0803a1f8d4457942dc5924`.
+  This only rechecked an already certified source and is not campaign progress.

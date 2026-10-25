@@ -115,7 +115,7 @@ class Claim:
     boundary_status: str
     worker_id: str
     provider: str
-    session_id: str
+    session_id: str | None
     attempt_number: int
     lease_until: float
     checkpoint: dict[str, Any]
@@ -542,8 +542,9 @@ class CampaignStore:
             session_id = (
                 row["session_id"]
                 if row["last_provider"] == provider and row["session_id"]
-                else "ses_" + uuid.uuid4().hex[:24]
+                else None
             )
+            attempt_session_id = session_id or "pending_" + uuid.uuid4().hex
             attempt_number = int(row["attempt_count"]) + 1
             lease_until = now + max(1.0, lease_seconds)
             db.execute(
@@ -563,7 +564,7 @@ class CampaignStore:
             db.execute(
                 """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at)
                    VALUES (?,?,?,?,?,?)""",
-                (row["address"], attempt_number, worker_id, provider, session_id, now),
+                (row["address"], attempt_number, worker_id, provider, attempt_session_id, now),
             )
             self._event(
                 db,
@@ -589,6 +590,33 @@ class CampaignStore:
             )
             db.commit()
             return claim
+
+    def bind_session(self, claim: Claim, session_id: str) -> Claim:
+        """Persist an OpenCode-issued session ID on the owned attempt and task."""
+        if not session_id:
+            raise ValueError("OpenCode session ID cannot be empty")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._require_owner(db, claim)
+            now = time.time()
+            db.execute(
+                "UPDATE candidates SET session_id=?,last_provider=?,updated_at=? WHERE address=?",
+                (session_id, claim.provider, now, claim.address),
+            )
+            db.execute(
+                "UPDATE attempts SET session_id=? WHERE address=? AND attempt_number=?",
+                (session_id, claim.address, claim.attempt_number),
+            )
+            self._event(
+                db,
+                "session_bound",
+                address=claim.address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=session_id,
+            )
+            db.commit()
+        return replace(claim, session_id=session_id)
 
     def _require_owner(self, db: sqlite3.Connection, claim: Claim) -> sqlite3.Row:
         row = db.execute("SELECT * FROM candidates WHERE address=?", (claim.address,)).fetchone()
@@ -1202,15 +1230,142 @@ class CampaignRunner:
             else None
         )
 
-    def _argv(self, worker: Worker, claim: Claim, prompt: str) -> list[str]:
+    def _command(self) -> list[str]:
         command = list(self.command)
-        if os.name == "nt" and command and command[0].lower().endswith(".ps1"):
-            powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
-            if powershell is None:
-                raise FileNotFoundError("PowerShell is needed to invoke the installed OpenCode shim")
-            command = [powershell, "-NoProfile", "-File", command[0], *command[1:]]
+        if os.name == "nt":
+            script_index = next(
+                (index for index, item in enumerate(command) if item.lower().endswith(".ps1")),
+                None,
+            )
+            wrapper_index = script_index
+            if wrapper_index is None and command and command[0].lower().endswith((".cmd", ".bat")):
+                wrapper_index = 0
+            if wrapper_index is not None:
+                wrapper = Path(command[wrapper_index])
+                executable = (
+                    wrapper.parent
+                    / "node_modules"
+                    / "@opencode"
+                    / "cli"
+                    / "bin"
+                    / "opencode.exe"
+                )
+                if executable.is_file():
+                    return [str(executable), *command[wrapper_index + 1 :]]
+            if script_index == 0:
+                powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+                if powershell is None:
+                    raise FileNotFoundError("PowerShell is needed to invoke the installed OpenCode shim")
+                return [powershell, "-NoProfile", "-File", command[0], *command[1:]]
+        return command
+
+    def _api_request(
+        self, worktree: Path, args: Sequence[str], deadline: float | None
+    ) -> WorkResult:
+        result = _run_process(
+            [*self._command(), "api", *args],
+            cwd=worktree,
+            timeout=min(30.0, self.timeout_seconds),
+            output_limit=self.output_limit,
+            stop_requested=self.store.stop_requested,
+            deadline=deadline,
+        )
+        if result.interrupted:
+            raise CampaignInterrupted
+        if result.timed_out:
+            raise ValueError("OpenCode session API timed out")
+        return result
+
+    @staticmethod
+    def _session_data(result: WorkResult) -> dict[str, Any]:
+        try:
+            payload = json.loads(result.stdout)
+            data = payload["data"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise ValueError("OpenCode session API returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            raise ValueError("OpenCode session API returned invalid session data")
+        return data
+
+    @staticmethod
+    def _session_id(value: Any) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"ses_[A-Za-z0-9_-]+", value):
+            raise ValueError("OpenCode did not return a valid session ID")
+        return value
+
+    @staticmethod
+    def _same_location(data: dict[str, Any], worktree: Path) -> bool:
+        location = data.get("location")
+        directory = location.get("directory") if isinstance(location, dict) else None
+        if not isinstance(directory, str):
+            return False
+        try:
+            return os.path.normcase(str(Path(directory).resolve())) == os.path.normcase(
+                str(worktree.resolve())
+            )
+        except OSError:
+            return False
+
+    def _create_session(
+        self,
+        claim: Claim,
+        worktree: Path,
+        deadline: float | None,
+    ) -> str:
+        result = self._api_request(
+            worktree,
+            [
+                "post",
+                "/api/session",
+                "--data",
+                json.dumps(
+                    {
+                        "title": f"Seto EBOOT {claim.address} {claim.worker_id}",
+                        "location": {"directory": str(worktree.resolve())},
+                    },
+                    separators=(",", ":"),
+                ),
+            ],
+            deadline,
+        )
+        if result.returncode != 0:
+            raise ValueError("OpenCode could not create a session")
+        data = self._session_data(result)
+        session_id = self._session_id(data.get("id"))
+        if not self._same_location(data, worktree):
+            raise ValueError("OpenCode created a session outside the worker worktree")
+        return session_id
+
+    def _ensure_session(
+        self, claim: Claim, worktree: Path, deadline: float | None
+    ) -> Claim:
+        """Reuse an existing provider session, or create/bind one via the V2 API."""
+        session_id = claim.session_id
+        if session_id and re.fullmatch(r"ses_[A-Za-z0-9_-]+", session_id):
+            result = self._api_request(
+                worktree, ["get", f"/api/session/{session_id}"], deadline
+            )
+            if result.returncode == 0:
+                data = self._session_data(result)
+                if (
+                    self._session_id(data.get("id")) == session_id
+                    and self._same_location(data, worktree)
+                ):
+                    return claim
+            elif not (
+                "SessionNotFoundError" in result.stdout
+                and "404" in result.stderr
+            ):
+                raise ValueError("OpenCode could not validate the saved session")
+
+        session_id = self._create_session(claim, worktree, deadline)
+        return self.store.bind_session(claim, session_id)
+
+    def _argv(self, worker: Worker, claim: Claim, prompt: str) -> list[str]:
+        if claim.session_id is None:
+            raise ValueError("OpenCode session must be created before running a prompt")
         return [
-            *command,
+            *self._command(),
             "run",
             "--model",
             worker.model,
@@ -1361,7 +1516,7 @@ class CampaignRunner:
             argv,
             cwd=worktree,
             timeout=900,
-            output_limit=2_000_000,
+            output_limit=8_000_000,
             stop_requested=self.store.stop_requested,
             deadline=deadline,
         )
@@ -1371,13 +1526,16 @@ class CampaignRunner:
             raise ValueError("Ghidra headless boundary analysis failed")
         # Persist only the helper's bounded markers. Ghidra's surrounding process
         # output may contain private paths or diagnostics unrelated to evidence.
-        marker_lines = [
-            line.strip()
-            for line in process.stdout.splitlines()
-            if re.search(r"\bSETO_[A-Z0-9_]+=", line)
-        ]
+        marker_lines = []
+        for line in (process.stdout + "\n" + process.stderr).splitlines():
+            marker = re.search(r"SETO_[A-Z0-9_]+=", line)
+            if marker:
+                marker_lines.append(line[marker.start() :].split(" (GhidraScript)", 1)[0].strip())
         if not marker_lines:
-            raise ValueError("Ghidra completed without emitting boundary evidence markers")
+            raise ValueError(
+                "Ghidra completed without boundary markers "
+                f"(captured {len(process.stdout)} stdout / {len(process.stderr)} stderr bytes)"
+            )
         log_path.write_text(
             "\n".join(marker_lines) + "\n",
             encoding="utf-8",
@@ -1609,6 +1767,7 @@ class CampaignRunner:
         try:
             if self.auto_preflight:
                 claim = self._prepare_claim(worktree, claim, deadline)
+            claim = self._ensure_session(claim, worktree, deadline)
             self._restore_best_source(worktree, claim)
             protected_before = _file_manifest(worktree) if self.auto_preflight else {}
             changes_before = _worktree_status_snapshot(worktree) if self.auto_preflight else {}
@@ -1780,39 +1939,71 @@ def _wsl_path(path: Path, distro: str) -> str:
 
 
 def validate_ghidra_log(text: str, address: int) -> dict[str, Any]:
-    """Validate a contiguous Allegrex body from the existing read-only Ghidra script."""
-    def marker(name: str) -> str | None:
-        matches = re.findall(rf"\b{re.escape(name)}=([^\s()]+)", text)
-        return matches[-1] if matches else None
-
+    """Validate the complete, contiguous instruction listing emitted by Ghidra."""
     try:
-        start = int(marker("SETO_FUNCTION_BODY_START") or "", 16)
-        end = int(marker("SETO_FUNCTION_BODY_END") or "", 16)
-        requested_start = int(marker("SETO_FUNCTION_START") or "", 0)
-        addresses = int(marker("SETO_FUNCTION_BODY_ADDRESSES") or "")
-        ranges = int(marker("SETO_FUNCTION_BODY_RANGES") or "")
-        unit = int(marker("SETO_ADDRESSABLE_UNIT_SIZE") or "")
-    except ValueError as exc:
-        raise ValueError("Ghidra log is missing exact function-body markers") from exc
-    size = end - start
-    instruction_marker = marker("SETO_INSTRUCTION_COUNT")
-    instructions = (
-        int(instruction_marker)
-        if instruction_marker is not None
-        else len(re.findall(r"\bSETO_INSN=", text))
+        marker_names = (
+            "SETO_LANGUAGE",
+            "SETO_FUNCTION_START",
+            "SETO_FUNCTION_END",
+            "SETO_FUNCTION_BODY_START",
+            "SETO_FUNCTION_BODY_END",
+            "SETO_FUNCTION_BODY_ADDRESSES",
+            "SETO_FUNCTION_BODY_RANGES",
+            "SETO_ADDRESSABLE_UNIT_SIZE",
+            "SETO_BOUNDARY_STATUS",
+            "SETO_DECOMP_STATUS",
+            "SETO_INSTRUCTION_COUNT",
+        )
+        markers: dict[str, str] = {}
+        for name in marker_names:
+            matches = re.findall(rf"(?m)^\s*{re.escape(name)}=([^\s]+)\s*$", text)
+            if len(matches) != 1:
+                raise ValueError("missing or duplicate marker")
+            markers[name] = matches[0]
+        start = int(markers["SETO_FUNCTION_BODY_START"], 16)
+        end = int(markers["SETO_FUNCTION_BODY_END"], 16)
+        function_end = int(markers["SETO_FUNCTION_END"], 16)
+        requested_start = int(markers["SETO_FUNCTION_START"], 0)
+        addresses = int(markers["SETO_FUNCTION_BODY_ADDRESSES"])
+        ranges = int(markers["SETO_FUNCTION_BODY_RANGES"])
+        unit = int(markers["SETO_ADDRESSABLE_UNIT_SIZE"])
+        instruction_count = int(markers["SETO_INSTRUCTION_COUNT"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Ghidra evidence does not prove one exact Allegrex function boundary"
+        ) from exc
+
+    raw_instruction_markers = re.findall(r"(?m)^\s*SETO_INSN=", text)
+    instruction_rows = re.findall(
+        r"(?m)^\s*SETO_INSN=(0x[0-9a-fA-F]+)\s+SIZE=(\d+)\s*$", text
     )
+    try:
+        instructions = [(int(item, 16), int(size)) for item, size in instruction_rows]
+    except ValueError as exc:
+        raise ValueError(
+            "Ghidra evidence does not prove one exact Allegrex function boundary"
+        ) from exc
+    size = end - start
     if (
-        marker("SETO_LANGUAGE") != "Allegrex:LE:32:default"
-        or marker("SETO_BOUNDARY_STATUS") != "EXACT"
-        or marker("SETO_DECOMP_STATUS") != "OK"
+        markers["SETO_LANGUAGE"] != "Allegrex:LE:32:default"
+        or markers["SETO_BOUNDARY_STATUS"] != "EXACT"
+        or markers["SETO_DECOMP_STATUS"] != "OK"
         or start != address
         or requested_start != address
+        or function_end != end
+        or start % 4
         or size <= 0
         or size % 4
         or addresses != size
         or ranges != 1
         or unit != 1
-        or instructions != size // 4
+        or len(raw_instruction_markers) != len(instruction_rows)
+        or len(instructions) != instruction_count
+        or instruction_count != size // 4
+        or any(
+            instruction_address != start + index * 4 or instruction_size != 4
+            for index, (instruction_address, instruction_size) in enumerate(instructions)
+        )
     ):
         raise ValueError("Ghidra evidence does not prove one exact Allegrex function boundary")
     return {
@@ -1820,7 +2011,7 @@ def validate_ghidra_log(text: str, address: int) -> dict[str, Any]:
         "start": f"0x{start:x}",
         "end": f"0x{end:x}",
         "size_bytes": size,
-        "instruction_count": instructions,
+        "instruction_count": instruction_count,
     }
 
 

@@ -14,6 +14,8 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressRangeIterator;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.InstructionIterator;
 
 public class SetoAnalyzeEntry extends GhidraScript {
     @Override
@@ -53,12 +55,36 @@ public class SetoAnalyzeEntry extends GhidraScript {
         Address bodyStart = function.getBody().getMinAddress();
         Address bodyEnd = function.getBody().getMaxAddress().add(1);
         long size = bodyEnd.subtract(bodyStart);
+        long instructionCount = 0;
+        Address nextInstruction = bodyStart;
+        boolean instructionCoverage = bodyAddresses > 0;
+        InstructionIterator instructions = currentProgram.getListing()
+            .getInstructions(function.getBody(), true);
+        while (instructions.hasNext()) {
+            Instruction instruction = instructions.next();
+            Address instructionAddress = instruction.getAddress();
+            int instructionSize = instruction.getLength();
+            println("SETO_INSN=0x" + Long.toHexString(instructionAddress.getOffset())
+                + " SIZE=" + instructionSize);
+            if (!instructionAddress.equals(nextInstruction)
+                || (instructionAddress.getOffset() & 3L) != 0
+                || instructionSize != 4) {
+                instructionCoverage = false;
+            }
+            nextInstruction = instructionAddress.add(instructionSize);
+            instructionCount++;
+        }
+        println("SETO_INSTRUCTION_COUNT=" + instructionCount);
         boolean exact = addressableUnitSize == 1
             && function.getEntryPoint().equals(start)
             && bodyStart.equals(start)
             && singleRange
+            && bodyRanges == 1
             && bodyAddresses == size
-            && (size & 3) == 0;
+            && (size & 3) == 0
+            && instructionCoverage
+            && nextInstruction.equals(bodyEnd)
+            && instructionCount == size / 4;
 
         println("SETO_FUNCTION_END=" + bodyEnd);
         println("SETO_FUNCTION_BODY_START=" + bodyStart);
@@ -84,6 +110,5 @@ public class SetoAnalyzeEntry extends GhidraScript {
         } finally {
             decompiler.dispose();
         }
-        println("SETO_INSTRUCTION_COUNT=" + (bodyAddresses / 4));
     }
 }

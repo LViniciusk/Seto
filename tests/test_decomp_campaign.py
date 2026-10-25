@@ -71,6 +71,85 @@ def strict_report(address: str = "0x1000") -> dict[str, object]:
     }
 
 
+def fake_opencode_command(tmp_path: Path, worker_script: Path | None = None) -> list[str]:
+    """A strict no-provider CLI double: API-created sessions are required for run."""
+    wrapper = tmp_path / "fake_opencode_wrapper.py"
+    wrapper.write_text(
+        "import json, os, pathlib, subprocess, sys, uuid\n"
+        "args = sys.argv[1:]\n"
+        "worker = None\n"
+        "if args and pathlib.Path(args[0]).is_file(): worker = args.pop(0)\n"
+        "state_path = pathlib.Path('.fake-opencode-sessions.json')\n"
+        "state = json.loads(state_path.read_text()) if state_path.exists() else {'sessions': {}, 'created': [], 'runs': []}\n"
+        "def save(): state_path.write_text(json.dumps(state))\n"
+        "if args[:2] == ['api', 'post'] and args[2] == '/api/session':\n"
+        " payload = json.loads(args[args.index('--data') + 1])\n"
+        " session_id = 'ses_test' + uuid.uuid4().hex\n"
+        " location = payload['location']['directory']\n"
+        " state['sessions'][session_id] = {'location': location}\n"
+        " state['created'].append(session_id)\n"
+        " save(); print(json.dumps({'data': {'id': session_id, 'location': {'directory': location}}})); raise SystemExit(0)\n"
+        "if args[:2] == ['api', 'get'] and args[2].startswith('/api/session/'):\n"
+        " session_id = args[2].rsplit('/', 1)[-1]\n"
+        " if session_id not in state['sessions']:\n"
+        "  sys.stdout.write('{\"_tag\":\"SessionNotFoundError\"}\\n')\n"
+        "  sys.stderr.write('HTTP 404 Not Found\\n')\n"
+        "  raise SystemExit(1)\n"
+        " print(json.dumps({'data': {'id': session_id, 'location': {'directory': state['sessions'][session_id]['location']}}})); raise SystemExit(0)\n"
+        "if args and args[0] == 'run':\n"
+        " session_id = args[args.index('--session') + 1]\n"
+        " if session_id not in state['sessions']:\n"
+        "  sys.stdout.write('{\"_tag\":\"SessionNotFoundError\"}\\n')\n"
+        "  sys.stderr.write('HTTP 404 Not Found\\n')\n"
+        "  raise SystemExit(1)\n"
+        " state['runs'].append(session_id); save()\n"
+        " if worker:\n"
+        "  result = subprocess.run([sys.executable, worker, *args])\n"
+        "  raise SystemExit(result.returncode)\n"
+        " print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{'next_experiment':'test checkpoint'}})}))\n"
+        " raise SystemExit(0)\n"
+        "sys.stderr.write('unsupported OpenCode invocation')\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    command = [sys.executable, str(wrapper)]
+    if worker_script is not None:
+        command.append(str(worker_script))
+    return command
+
+
+def ghidra_log(
+    *,
+    start: int = 0x1000,
+    end: int = 0x1010,
+    body_addresses: int = 16,
+    ranges: int = 1,
+    instruction_count: int = 4,
+    instruction_addresses: list[int] | None = None,
+    instruction_sizes: list[int] | None = None,
+) -> str:
+    addresses = instruction_addresses or list(range(start, end, 4))
+    sizes = instruction_sizes or [4] * len(addresses)
+    rows = [
+        "SETO_LANGUAGE=Allegrex:LE:32:default",
+        f"SETO_FUNCTION_START=0x{start:x}",
+        f"SETO_FUNCTION_END={end:08x}",
+        f"SETO_FUNCTION_BODY_START={start:08x}",
+        f"SETO_FUNCTION_BODY_END={end:08x}",
+        f"SETO_FUNCTION_BODY_ADDRESSES={body_addresses}",
+        f"SETO_FUNCTION_BODY_RANGES={ranges}",
+        "SETO_ADDRESSABLE_UNIT_SIZE=1",
+        "SETO_BOUNDARY_STATUS=EXACT",
+        "SETO_DECOMP_STATUS=OK",
+        f"SETO_INSTRUCTION_COUNT={instruction_count}",
+    ]
+    rows.extend(
+        f"SETO_INSN=0x{address:x} SIZE={size}"
+        for address, size in zip(addresses, sizes)
+    )
+    return "\n".join(rows)
+
+
 def test_sqlite_claim_is_atomic_and_each_task_has_one_owner(tmp_path: Path) -> None:
     store = CampaignStore(tmp_path / "queue.sqlite3")
     store.seed([candidate("0x1000")])
@@ -180,26 +259,35 @@ def test_only_complete_matcher_evidence_can_be_called_matched() -> None:
 
 
 def test_ghidra_log_requires_one_exact_contiguous_allegrex_body() -> None:
-    log = "\n".join(
-        [
-            "SETO_LANGUAGE=Allegrex:LE:32:default",
-            "SETO_FUNCTION_START=0x1000",
-            "SETO_FUNCTION_BODY_START=00001000",
-            "SETO_FUNCTION_BODY_END=00001010",
-            "SETO_FUNCTION_BODY_ADDRESSES=16",
-            "SETO_FUNCTION_BODY_RANGES=1",
-            "SETO_ADDRESSABLE_UNIT_SIZE=1",
-            "SETO_BOUNDARY_STATUS=EXACT",
-            "SETO_DECOMP_STATUS=OK",
-            *(f"SETO_INSN=0000{address:04x} nop" for address in range(0x1000, 0x1010, 4)),
-        ]
-    )
+    log = ghidra_log()
     evidence = validate_ghidra_log(log, 0x1000)
     assert evidence["size_bytes"] == 16
     assert evidence["instruction_count"] == 4
 
     with pytest.raises(ValueError, match="exact Allegrex"):
         validate_ghidra_log(log.replace("SETO_FUNCTION_BODY_RANGES=1", "SETO_FUNCTION_BODY_RANGES=2"), 0x1000)
+
+
+def test_ghidra_log_rejects_a_truncated_instruction_listing() -> None:
+    log = ghidra_log().replace("SETO_INSN=0x100c SIZE=4", "")
+    with pytest.raises(ValueError, match="exact Allegrex"):
+        validate_ghidra_log(log, 0x1000)
+
+
+def test_ghidra_log_rejects_discontinuous_instruction_addresses() -> None:
+    log = ghidra_log(instruction_addresses=[0x1000, 0x1004, 0x100C, 0x1010])
+    with pytest.raises(ValueError, match="exact Allegrex"):
+        validate_ghidra_log(log, 0x1000)
+
+
+def test_ghidra_log_rejects_instruction_size_and_count_inconsistencies() -> None:
+    wrong_size = ghidra_log(instruction_sizes=[4, 4, 2, 4])
+    wrong_count = ghidra_log(instruction_count=5)
+    duplicate_marker = ghidra_log() + "\nSETO_BOUNDARY_STATUS=EXACT"
+    missing_listing = ghidra_log().replace("SETO_INSN=0x1008 SIZE=4\n", "")
+    for log in (wrong_size, wrong_count, duplicate_marker, missing_listing):
+        with pytest.raises(ValueError, match="exact Allegrex"):
+            validate_ghidra_log(log, 0x1000)
 
 
 def test_export_evidence_requires_unique_relocated_nid_and_real_prx_call(tmp_path: Path) -> None:
@@ -272,7 +360,7 @@ def test_unclassified_agent_failure_does_not_fallback_to_other_provider(tmp_path
         path.mkdir()
     runner = CampaignRunner(
         store,
-        opencode_command=[sys.executable, str(simulator)],
+        opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees=worktrees,
         timeout_seconds=5,
     )
@@ -301,6 +389,118 @@ def test_provider_failures_cannot_exceed_candidate_attempt_limit(tmp_path: Path)
     )
     assert store.get_task("0x1000")["status"] == "stalled"
     assert store.claim_next("openai", "openai", max_attempts_per_candidate=1) is None
+
+
+def test_session_creation_uses_the_id_returned_by_the_open_code_api(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"worker": worktree},
+        timeout_seconds=5,
+    )
+    claim = store.claim_next("worker", "openai")
+    assert claim is not None
+    assert claim.session_id is None
+
+    bound = runner._ensure_session(claim, worktree, None)
+    assert bound.session_id.startswith("ses_test")
+    assert store.get_task("0x1000")["session_id"] == bound.session_id
+    assert store.list_attempts()[0]["session_id"] == bound.session_id
+    argv = runner._argv(Worker("worker", "openai", "openai/gpt-6-luna"), bound, "prompt")
+    assert argv[argv.index("--session") + 1] == bound.session_id
+
+
+def test_valid_session_is_reused_when_resuming_with_the_same_provider(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"worker": worktree},
+        timeout_seconds=5,
+    )
+    first = store.claim_next("worker", "openai")
+    assert first is not None
+    bound = runner._ensure_session(first, worktree, None)
+    store.save_checkpoint(bound, {"next_experiment": "resume from checkpoint"})
+    store.fail(bound, Failure(FailureKind.INTERRUPTED))
+
+    resumed = store.claim_next("worker", "openai")
+    assert resumed is not None
+    assert resumed.session_id == bound.session_id
+    reused = runner._ensure_session(resumed, worktree, None)
+    state = json.loads((worktree / ".fake-opencode-sessions.json").read_text())
+    assert reused.session_id == bound.session_id
+    assert state["created"] == [bound.session_id]
+    assert store.get_task("0x1000")["checkpoint"]["next_experiment"] == "resume from checkpoint"
+
+
+def test_provider_fallback_creates_an_independent_session_and_keeps_checkpoint(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="opencode")])
+    worktrees = {name: tmp_path / name for name in ("deepseek", "openai")}
+    for worktree in worktrees.values():
+        worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees=worktrees,
+        timeout_seconds=5,
+    )
+    first = store.claim_next("deepseek", "opencode")
+    assert first is not None
+    bound_first = runner._ensure_session(first, worktrees["deepseek"], None)
+    store.save_checkpoint(bound_first, {"next_experiment": "preserve across provider switch"})
+    store.fail(bound_first, Failure(FailureKind.QUOTA_EXHAUSTED))
+
+    fallback = store.claim_next("openai", "openai")
+    assert fallback is not None
+    assert fallback.session_id is None
+    bound_fallback = runner._ensure_session(fallback, worktrees["openai"], None)
+    assert bound_fallback.session_id != bound_first.session_id
+    assert fallback.checkpoint["next_experiment"] == "preserve across provider switch"
+    assert store.list_attempts()[0]["session_id"] == bound_first.session_id
+    assert store.list_attempts()[1]["session_id"] == bound_fallback.session_id
+
+
+def test_missing_session_is_replaced_once_without_losing_checkpoint(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"worker": worktree},
+        timeout_seconds=5,
+    )
+    first = store.claim_next("worker", "openai")
+    assert first is not None
+    bound = runner._ensure_session(first, worktree, None)
+    store.save_checkpoint(bound, {"next_experiment": "keep progress"})
+    store.fail(bound, Failure(FailureKind.INTERRUPTED))
+
+    state_path = worktree / ".fake-opencode-sessions.json"
+    state = json.loads(state_path.read_text())
+    state["sessions"].pop(bound.session_id)
+    state_path.write_text(json.dumps(state))
+    resumed = store.claim_next("worker", "openai")
+    assert resumed is not None
+    replacement = runner._ensure_session(resumed, worktree, None)
+
+    updated = json.loads(state_path.read_text())
+    assert replacement.session_id != bound.session_id
+    assert updated["created"] == [bound.session_id, replacement.session_id]
+    assert resumed.checkpoint["next_experiment"] == "keep progress"
+    assert store.list_attempts()[1]["session_id"] == replacement.session_id
 
 
 def test_stop_and_resume_preserve_checkpoint_and_reuse_same_provider_session(
@@ -335,7 +535,7 @@ def test_stop_and_resume_preserve_checkpoint_and_reuse_same_provider_session(
 
     runner = CampaignRunner(
         store,
-        opencode_command=[sys.executable, str(simulator)],
+        opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees=worktrees,
         verifier=verifier,
         timeout_seconds=10,
@@ -470,7 +670,7 @@ def test_unverified_inventory_item_must_pass_ghidra_before_matching(tmp_path: Pa
 
     runner = CampaignRunner(
         store,
-        opencode_command=[sys.executable, str(simulator)],
+        opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees={"openai": worktree},
         verifier=verifier,
     )
@@ -514,7 +714,7 @@ def test_best_source_snapshot_survives_a_lower_scoring_retry(tmp_path: Path) -> 
 
     runner = CampaignRunner(
         store,
-        opencode_command=[sys.executable, str(simulator)],
+        opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees={"openai": worktree},
         verifier=verifier,
         checkpoint_repo_root=repo,
@@ -575,7 +775,7 @@ def test_two_simulated_sessions_handle_distinct_tasks_and_quota_fallback(
 
     runner = CampaignRunner(
         store,
-        opencode_command=[sys.executable, str(simulator)],
+        opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees=worktrees,
         verifier=verifier,
         timeout_seconds=5,
