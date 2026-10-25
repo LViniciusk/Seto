@@ -6630,4 +6630,5 @@ Hashes dos experimentos preservados em `build/seto038/`:
   PRX / REA, pré-requisitos GNU MIPSel ausentes ou testes POSIX não aplicáveis
   ao host Windows. `compileall` e `git diff --check`: **clean**. Como não restou
   fonte candidata completa, não havia integração de matching/promote de função
-  recuperada a executar. CI da PR será reportado após o push.
+  recuperada a executar. PR #42 foi aberta sem merge; os oito jobs de CI
+  (Ubuntu/Windows, Python 3.11/3.12, nos eventos de push e PR) passaram.
