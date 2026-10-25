@@ -6759,3 +6759,65 @@ prontidão detectada pelo `doctor` não substitui essas integrações reais.
 - As alterações R2 não iniciam campanha nem mudam SQLite, baselines, scheduler
   ou matcher. Resultado R2: orquestrador **112 passed**, suíte completa
   **947 passed, 44 skipped**, `compileall` clean e `git diff --check` clean.
+
+## SETO-DECOMP-043 — Segundo piloto real de decompilação EBOOT
+
+Uma única janela piloto foi autorizada e executada a partir da `main` pós-PR #43,
+com os worktrees existentes sincronizados por fast-forward para `1a9792c`. Os
+arquivos locais dos worktrees foram preservados; o C experimental pré-existente
+de `0x4217C` permaneceu no worktree DeepSeek. Antes da execução, `doctor`, `plan`
+e `status` foram somente leitura; SQLite estava íntegro, tinha exatamente duas
+tentativas e nenhum worker rodando. Os únicos candidatos `blocked` eram `0x2C28C`
+e `0x4217C`, ambos com boundary exato. Os quatro hashes configurados (EBOOT,
+dois PRXs e triage) conferiram. Luna e DeepSeek passaram `READY`; a política
+restrita dos dois worktrees foi confirmada. AIMemory conectou, mas catálogo e
+disponibilidade de ferramentas permaneceram `UNVERIFIED` e não bloquearam as
+evidências locais.
+
+O objeto ABI-only da geração 1 de `0x4217C` tinha `.text` de apenas 8 bytes e
+não foi usado como resultado da tentativa 2.
+
+Ghidra **12.1.3** e MWCC PSP **3.0.1 build 219** foram verificados. Um smoke
+Ghidra anterior à campanha usou projetos independentes no diretório temporário
+aprovado, sem `_prepare_claim`, caminhos `ghidra-attempt-2` ou escrita no SQLite.
+Ambos os resultados continham as instruções com mnemônicos e o bloco de C. A
+campanha então gerou e validou seus próprios logs da tentativa 2.
+
+| Candidato / modelo / worker / sessão / tentativa | Boundary e evidência | Fonte C / SHA-256 | `.text` MWCC | Resultado integral / divergência / próximo passo |
+|---|---|---|---|---|
+| `0x2C28C` — `openai/gpt-6-luna` / `openai` / `ses_e8c6931dbffegdQ52d6EAchFWw` / **2** | 112 bytes, 28 instruções, `EXACT`; Ghidra attempt 2, SHA-256 `9f2fd732360e8838a8689007b0234fa03e723deb9afed90f0b4801d5ff2e666e`; hipótese histórica hash-verificada | `decomp/src/eboot/func_0002C28C.c` no worktree; `0d01ed9e18e747fcb910d30d745f46012c20b070df2b3bf25294e57701740b4a` | 112 bytes / 28 words | **NONMATCHING, 26/28**, duas validações independentes determinísticas (object SHA-256 idêntico: `c7dc375ccbda6365e14bd7af5ac3ef5a6b1b1d92ce5dc7cb9f134813c739276e`). Primeira divergência em `0x2C2C4`: o objeto usa `bnel` e `lhu` no delay slot, contra `bne`/`nop`; o word seguinte diverge em `0x2C2C8`. Próximo passo: ajustar a expressão C para preservar o branch normal e o slot vazio, sem alterar semântica. |
+| `0x4217C` — `opencode/deepseek-v4.1-flash-free` / `deepseek` / `ses_e8c697332ffeRLvsg1ke0QEFCM` / **2** | 176 bytes, 44 instruções, `EXACT`; Ghidra attempt 2, SHA-256 `426ec54db1e8184d08cfa18ed690fd813b5f0dfe2f842088aa89a509f396aa9f`; quatro calls e frame `0xC60` inspecionados | `decomp/src/eboot/func_0004217C.c` no worktree; `88fb4d67ed6dc40c930c1c15246a4ef5a177011d3a32ab1760f89b6a9ad1e15a` | **Nenhum objeto**: compilação falhou antes de gerar `.text` | **Sem veredito de matching**. Duas validações com `scripts/match_function.py` falharam no MWCC: `stdarg.h` não existe na instalação e `MWCIncludes` está ausente; nenhum objeto 176-byte foi produzido, então não foi declarado `NONMATCHING` nem `INCONCLUSIVE`. Próximo passo apenas em janela autorizada futura: fornecer suporte varargs compatível com este MWCC e então revalidar a função integral; sem inventar protótipos/layout. Fonte permanece provisional, sem promoção. |
+
+### Defeito reproduzido, TDD e estado final
+
+- O worker DeepSeek produziu fonte e um checkpoint JSON válido em bloco Markdown
+  multilinha, mas `_extract_checkpoint()` rejeitou o fence final e o piloto
+  registrou `checkpoint_invalid` antes do matcher. A leitura read-only da sessão
+  recuperou o objeto válido; o hash foi calculado pelo orquestrador. RED reproduziu
+  o problema com o envelope JSON real do OpenCode. GREEN usa `JSONDecoder.raw_decode`
+  para extrair o objeto e ignorar o fence/trailing text. O teste cobre esse formato.
+  O histórico SQLite não foi reescrito após a campanha: `0x4217C` permanece
+  `blocked` com o diagnóstico original, embora a resposta esteja recuperável e a
+  correção tenha sido feita para execuções futuras.
+- SQLite final: integridade `ok`, **4/4 tentativas cumulativas**, sem workers
+  `running`. `0x2C28C` está `pending` (tentativa 2 `pending`, melhor resultado
+  preservado como 26/28 `NONMATCHING`); `0x4217C` está `blocked` pela falha de
+  checkpoint. As duas tentativas históricas e as sessões/checkpoints anteriores
+  foram preservados. A janela piloto foi encerrada; **nenhuma nova campanha ou
+  inferência será iniciada**.
+- Nenhum candidato foi `MATCHED`, revalidado para promoção ou promovido. Baselines
+  permaneceram **EBOOT 8 MATCHED / 206 instruções** e **PRXs 16 MATCHED / 912
+  instruções**. Resultado geral: **sucesso parcial** pela compilação integral e
+  evidência objetiva de 26/28 em `0x2C28C`; `0x4217C` continua sem comparação.
+
+### Validação SETO-DECOMP-043
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_decomp_campaign.py` | **113 passed** |
+| Suíte completa, Windows / Python 3.12 | **948 passed, 44 skipped** |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+| Ghidra real | dois smoke tests isolados + duas análises da campanha, boundaries e listings completos |
+| MWCC/matcher real | Luna: duas compilações e comparações completas determinísticas; DeepSeek: duas falhas de compilação por `stdarg.h` ausente |
+| Tentativas/modelos | exatamente duas novas tentativas, Luna e DeepSeek; total cumulativo 4; nenhuma execução adicional |
