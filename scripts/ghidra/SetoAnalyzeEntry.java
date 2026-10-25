@@ -65,7 +65,7 @@ public class SetoAnalyzeEntry extends GhidraScript {
             Address instructionAddress = instruction.getAddress();
             int instructionSize = instruction.getLength();
             println("SETO_INSN=0x" + Long.toHexString(instructionAddress.getOffset())
-                + " SIZE=" + instructionSize);
+                + " SIZE=" + instructionSize + " " + instruction);
             if (!instructionAddress.equals(nextInstruction)
                 || (instructionAddress.getOffset() & 3L) != 0
                 || instructionSize != 4) {
@@ -104,6 +104,9 @@ public class SetoAnalyzeEntry extends GhidraScript {
             DecompileResults results = decompiler.decompileFunction(function, 60, monitor);
             if (results.decompileCompleted() && results.getDecompiledFunction() != null) {
                 println("SETO_DECOMP_STATUS=OK");
+                println("SETO_DECOMP_C_BEGIN");
+                println(results.getDecompiledFunction().getC());
+                println("SETO_DECOMP_C_END");
             } else {
                 println("SETO_DECOMP_STATUS=FAILED");
             }
