@@ -28,8 +28,9 @@ checkpoint, blockers, provider attempts, and whether token/cost totals were
 available. No OpenAI or DeepSeek inference was made in SETO-DECOMP-039 or 040;
 the 040 database has zero attempts and no measurable token/cost usage.
 
-`doctor` checks OpenCode version/catalog/auth, AIMemory MCP, WSL Python, Ghidra,
-MWCC, and wibo without invoking a model. Current machine findings:
+`doctor` checks OpenCode version/catalog/auth/model metadata, AIMemory MCP, WSL
+Python, Ghidra, MWCC, and wibo without invoking a model. Current machine
+findings:
 
 | Capability | Result |
 |---|---|
@@ -39,9 +40,9 @@ MWCC, and wibo without invoking a model. Current machine findings:
 | Ghidra | READY — 12.1.3; WSL has no Java, so the installed Windows `analyzeHeadless.bat` launcher and Corretto 25 are used |
 | MWCC / wibo | READY — MWCC PSP 3.0.1 build 219 and wibo 1.2.0 in the local WSL profile |
 | OpenAI model | Catalog available and auth is stored, but the auth mode is unknown. GPT-6 Luna can be billable; included subscription usage is not verified, so **BLOCKED** |
-| DeepSeek Free | Exact Free model is in the catalog, but OpenCode provider auth is not listed and execution is unverified, so **BLOCKED** |
-| Worker agent | `seto-decomp-worker` is discovered and its effective policy is restricted: shell/external paths denied; edits limited to candidate C and campaign build paths; AIMemory query/read only |
-| Campaign | **BLOCKED** — no worker is READY; `enabled`, provider/access reviews, usage modes, and productive expansion authorization are false/unverified |
+| DeepSeek Free | **READY in the ignored R3 pilot profile** — exact model metadata proves `apiKey=public`, active/enabled status, and zero input/output/cache cost; operator access was independently confirmed |
+| Worker agent | `seto-decomp-worker` is discovered and its effective policy is restricted in both checkout and campaign worktree: shell/external paths denied; edits limited to candidate C and campaign build paths; AIMemory query/read only |
+| Campaign | Pilot prepared but **not started**. Versioned defaults remain disabled; only the local R3 profile enables the verified Free worker and still requires explicit `run --confirm` |
 
 OpenCode's [provider guide](https://opencode.ai/v2/docs/providers) distinguishes
 ChatGPT-plan sign-in from API-key usage; its [Console model guide](https://opencode.ai/v2/docs/console/models)
@@ -53,21 +54,23 @@ proof that this project can execute the DeepSeek Free model.
 The repository does not copy or edit the existing global OpenCode/AIMemory
 configuration. The broad legacy project default is overridden for campaign
 sessions by `.opencode/agents/seto-decomp-worker.md`; `doctor` inspects OpenCode's
-effective agent rules rather than trusting that file alone. Workers have no
-shell, subagent, or external-directory permission and can edit only candidate
+effective agent rules rather than trusting that file alone. The R3 review
+checked the effective rules in both the checkout and actual campaign worktree.
+Workers have no shell, subagent, or external-directory permission and can edit only candidate
 sources/campaign artifacts. Worktree preflight rechecks AIMemory connectivity.
 Workers may query/read AIMemory but may not write or message it. No credentials,
 media, or dumps are recorded in AIMemory or the campaign ledger.
 
 ## A future, separately authorized run
 
-SETO-DECOMP-040 made **zero model requests**. Do not enable execution until an
-operator verifies and explicitly records one provider's exact account/cost
-mode. Stored authentication alone does not make OpenAI READY; DeepSeek's catalog
-entry alone does not prove access. The configured workers are exactly:
+SETO-DECOMP-040 made **zero model requests**. Stored authentication alone does
+not make OpenAI READY; DeepSeek's catalog entry alone does not prove access.
+The R3 preflight accepts the exact DeepSeek Free model only when current
+`/api/model` metadata proves public auth, active/enabled state and zero cost,
+and the operator has separately verified access. The configured workers are:
 
 * `openai/gpt-6-luna` via provider `openai` (requires proven subscription-included usage; API-key/billable mode is rejected)
-* `opencode/deepseek-v4.1-flash-free` via provider `opencode` (requires stored auth and verified exact Free usage)
+* `opencode/deepseek-v4.1-flash-free` via provider `opencode` (requires exact public model metadata, verified access, and exact Free usage)
 
 After that evidence exists, set only the corresponding worker's
 `usage_mode` (`subscription_included` for OpenAI or `free` for the exact
@@ -209,12 +212,13 @@ disabled and no model inference:
   object SHA-256 `81b5ac578ed3b4ee12f4c448f0f9f3d0b6b5d3e28b0803a1f8d4457942dc5924`.
   This only rechecked an already certified source and is not campaign progress.
 
-SETO-DECOMP-040 status (2026-10-25), no model inference:
+SETO-DECOMP-040 status before R3 (2026-10-25), no model inference:
 
 - OpenAI: **BLOCKED** — catalog available/auth stored, but stored auth does not
   identify a subscription-included route; additional cost cannot be excluded.
-- DeepSeek Free: **BLOCKED** — catalog available, provider auth not listed;
-  execution is not verified.
+- DeepSeek Free was then **BLOCKED** — the earlier preflight required a stored
+  auth-list entry and did not consume `/api/model` metadata. R3 supersedes this
+  readiness result for the exact public Free model.
 - Worker policy: effective OpenCode rules audited; shell, external directories,
   broad edits and subagents denied. AIMemory access is query/read only.
 - Pilot defaults: targets `0x2C28C` + `0x4217C`, up to 4 attempts / 30 minutes;
@@ -224,3 +228,39 @@ SETO-DECOMP-040 status (2026-10-25), no model inference:
   source qualified for promotion in this blocked run.
 - Test and real-toolchain results are recorded in the 040 section of
   `docs/decomp-progress.md`.
+
+## SETO-DECOMP-040-R3 — DeepSeek Free pilot readiness (2026-10-25)
+
+- `_opencode_preflight()` reads JSON from `opencode api get /api/model` and
+  accepts public auth only for the exact allowlisted
+  `opencode/deepseek-v4.1-flash-free` entry. It requires one unambiguous
+  metadata record, `settings.apiKey="public"`, `status="active"`,
+  `enabled=true`, and complete zero-valued input/output/cache pricing. Missing,
+  malformed, contradictory or nonzero metadata remains BLOCKED. OpenAI retains
+  its stored-auth and explicit subscription-included cost checks.
+- Local `doctor` result: DeepSeek Free **READY** with public metadata and
+  `usage_mode=free`; OpenAI **BLOCKED** (`usage_mode=unknown`, access unverified,
+  additional cost not excluded). The effective restricted worker policy and
+  AIMemory MCP passed in both checkout and campaign worktree. AIMemory 3.1.1,
+  WSL Python 3.12.3, Ghidra, MWCC and wibo are READY.
+- The ignored `config/decomp_campaign.run.local.toml` is limited to one worker,
+  two total attempts, 30 minutes and targets only `0x2C28C` / `0x4217C`.
+  It keeps OpenAI unknown/false and leaves `continuous`, `pilot_verified`, and
+  productive expansion disabled. The versioned defaults in
+  `config/decomp_campaign.toml` are unchanged.
+- **No campaign was started and no inference was made during preparation.**
+  `status` still reports zero model-process attempts, 0 matched functions, and
+  0 matched instructions.
+  After the operator explicitly confirms, the one-shot pilot command is:
+
+  ```powershell
+  py -3.12 scripts/decomp_campaign.py --config config/decomp_campaign.run.local.toml run --confirm --allow-free-model-usage --max-tasks 2
+  ```
+
+- TDD RED reproduced the defect: the preflight never queried `/api/model`, so
+  the valid public/no-stored-auth case failed. GREEN now covers public zero-cost
+  readiness, nonzero/incomplete or
+  missing/invalid/contradictory metadata, OpenAI remaining BLOCKED, and denied
+  worker permissions. Targeted tests: **14 passed**; orchestrator suite:
+  **55 passed**; full suite: **890 passed, 44 skipped**. `compileall` and
+  `git diff --check` are clean. EBOOT remains **8/206** and PRXs **16/912**.
