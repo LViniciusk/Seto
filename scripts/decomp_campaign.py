@@ -260,6 +260,154 @@ def _safe_text(value: Any, limit: int = 4000) -> str:
     return text[:limit]
 
 
+def _sanitize_match_checkpoint(value: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    text_fields = {
+        "status",
+        "source_sha256",
+        "object_sha256",
+        "report_path",
+        "producer_worker_id",
+        "producer_provider",
+        "producer_session_id",
+        "origin_kind",
+        "worker_id",
+        "source_path",
+        "first_divergence_address",
+        "first_divergence_candidate",
+        "first_divergence_original",
+        "first_divergence_reason",
+    }
+    integer_fields = {
+        "matching_words",
+        "total_words",
+        "difference_count",
+        "producer_attempt_number",
+        "first_divergence_word_index",
+    }
+    for key, item in value.items():
+        if key in text_fields and isinstance(item, str):
+            if key in {"source_sha256", "object_sha256"} and item and not HEX_SHA256.fullmatch(item):
+                continue
+            if key in {"report_path", "source_path"}:
+                normalized = item.replace("\\", "/")
+                if not normalized.startswith("build/decomp-campaign/") or ".." in Path(normalized).parts:
+                    continue
+            if key == "worker_id" and not re.fullmatch(r"[a-z0-9-]+", item):
+                continue
+            summary[key] = _safe_text(item, 500)
+        elif key in integer_fields and isinstance(item, int) and not isinstance(item, bool):
+            summary[key] = item
+        elif key == "difference_indices" and isinstance(item, list):
+            summary[key] = [
+                item_value
+                for item_value in item[:100]
+                if isinstance(item_value, int) and not isinstance(item_value, bool)
+            ]
+        elif key == "object_sha256s" and isinstance(item, list):
+            summary[key] = [
+                item_value
+                for item_value in item[:2]
+                if isinstance(item_value, str) and HEX_SHA256.fullmatch(item_value)
+            ]
+        elif key in {"report_paths", "limitations"} and isinstance(item, list):
+            values = []
+            for item_value in item[:10]:
+                if not isinstance(item_value, str):
+                    continue
+                normalized = item_value.replace("\\", "/")
+                if key == "report_paths" and (
+                    not normalized.startswith("build/decomp-campaign/")
+                    or ".." in Path(normalized).parts
+                ):
+                    continue
+                values.append(_safe_text(item_value, 500 if key == "report_paths" else 1000))
+            summary[key] = values
+    return summary
+
+
+def _match_checkpoint_summary(
+    result: dict[str, Any], *, fallback_report_path: str | None = None
+) -> dict[str, Any]:
+    reports = result.get("reports")
+    reports = reports if isinstance(reports, list) else []
+    first_report = next((item for item in reports if isinstance(item, dict)), {})
+    match = first_report.get("match")
+    match = match if isinstance(match, dict) else {}
+    differences = match.get("differences")
+    differences = differences if isinstance(differences, list) else []
+    indices = [
+        item.get("word_index", item.get("index"))
+        for item in differences
+        if isinstance(item, dict)
+        and isinstance(item.get("word_index", item.get("index")), int)
+        and not isinstance(item.get("word_index", item.get("index")), bool)
+    ][:100]
+    difference = differences[0] if differences and isinstance(differences[0], dict) else {}
+    difference_address = difference.get("address")
+    if isinstance(difference_address, int) and not isinstance(difference_address, bool):
+        difference_address = f"0x{difference_address:x}"
+    origin = result.get("campaign_origin")
+    origin = origin if isinstance(origin, dict) else {}
+    builds = result.get("build_sha256")
+    builds = builds if isinstance(builds, list) else []
+    report_paths = [
+        item["report_path"]
+        for item in reports
+        if isinstance(item, dict) and isinstance(item.get("report_path"), str)
+    ][:2]
+    if not report_paths:
+        if fallback_report_path:
+            report_paths = [fallback_report_path]
+        else:
+            try:
+                origin_worker = str(origin["worker_id"])
+                origin_attempt = int(origin["attempt_number"])
+                origin_address = int(str(first_report.get("address", result.get("address"))), 0)
+            except (KeyError, TypeError, ValueError):
+                origin_worker = ""
+                origin_attempt = 0
+                origin_address = -1
+            if re.fullmatch(r"[a-z0-9-]+", origin_worker) and origin_attempt > 0 and origin_address >= 0:
+                report_paths = [
+                    f"build/decomp-campaign/{origin_worker}/{origin_address:x}/"
+                    f"attempt-{origin_attempt}/verify-{verify}/func_{origin_address:08X}.match.json"
+                    for verify in (1, 2)
+                ]
+    summary: dict[str, Any] = {
+        "status": result.get("status", first_report.get("status", "NONMATCHING")),
+        "matching_words": result.get("matching_words", match.get("matching_words", -1)),
+        "total_words": result.get("total_words", match.get("total_words", -1)),
+        "difference_count": match.get(
+            "difference_count", len(differences) if isinstance(differences, list) else 0
+        ),
+        "difference_indices": indices,
+        "source_sha256": result.get("source_sha256", ""),
+        "object_sha256": builds[0] if builds else first_report.get("provenance", {}).get("object_sha256", ""),
+        "object_sha256s": builds,
+        "report_path": report_paths[0] if report_paths else fallback_report_path or "",
+        "report_paths": report_paths,
+        "producer_worker_id": origin.get("worker_id", ""),
+        "producer_provider": origin.get("provider", ""),
+        "producer_session_id": origin.get("session_id", ""),
+        "producer_attempt_number": origin.get("attempt_number", -1),
+        "limitations": match.get("limitations", []),
+    }
+    if difference:
+        summary.update(
+            {
+                "first_divergence_address": difference_address,
+                "first_divergence_word_index": difference.get(
+                    "word_index", difference.get("index", -1)
+                ),
+                "first_divergence_candidate": difference.get("candidate", ""),
+                "first_divergence_original": difference.get("original", ""),
+                "first_divergence_reason": difference.get("reason", ""),
+            }
+        )
+    return _sanitize_match_checkpoint(summary)
+
+
 def _matcher_failure_is_incomplete(exc: Exception) -> bool:
     """Recognize bounded-output failures without retaining the exception text."""
     if isinstance(exc, MatcherIncomplete):
@@ -289,6 +437,8 @@ def _sanitize_checkpoint(
             "ghidra_log_sha256",
             "boundary_status",
             "best_match",
+            "last_attempt",
+            "local_experiments",
             "evidence_paths",
             "historical_hypothesis",
             "last_diagnostic",
@@ -314,28 +464,24 @@ def _sanitize_checkpoint(
             result[key] = [_safe_text(item, 1000) for item in value[:40]]
         elif key == "evidence_paths" and isinstance(value, list):
             result[key] = [_safe_text(item, 500) for item in value[:40]]
-        elif key == "best_match" and isinstance(value, dict):
-            fields = {
-                "status",
-                "matching_words",
-                "total_words",
-                "difference_count",
-                "difference_indices",
-                "source_sha256",
-                "object_sha256",
-                "report_path",
-            }
-            result[key] = {
-                item_key: (
-                    [_safe_text(item, 100) for item in item_value[:100]]
-                    if item_key == "difference_indices" and isinstance(item_value, list)
-                    else _safe_text(item_value, 500)
-                    if isinstance(item_value, str)
-                    else item_value
-                )
-                for item_key, item_value in value.items()
-                if item_key in fields and isinstance(item_value, (str, int, list))
-            }
+        elif key in {"best_match", "last_attempt"} and isinstance(value, dict):
+            result[key] = _sanitize_match_checkpoint(value)
+        elif key == "local_experiments" and isinstance(value, list):
+            experiments = []
+            for item in value[:8]:
+                if not isinstance(item, dict) or item.get("origin_kind") != "local_experiment":
+                    continue
+                summary = _sanitize_match_checkpoint(item)
+                if (
+                    summary.get("status") == "MATCHED"
+                    and summary.get("worker_id")
+                    and summary.get("source_path")
+                    and summary.get("source_sha256")
+                    and len(summary.get("report_paths", [])) == 2
+                    and len(summary.get("object_sha256s", [])) == 2
+                ):
+                    experiments.append(summary)
+            result[key] = experiments
         elif key == "historical_hypothesis" and isinstance(value, dict):
             status = value.get("status")
             if status == "available":
@@ -760,6 +906,24 @@ class CampaignStore:
                 provider=provider,
                 session_id=session_id,
             )
+            checkpoint = json.loads(row["checkpoint_json"])
+            best_result = json.loads(row["best_result_json"])
+            if isinstance(best_result, dict) and best_result:
+                saved_best = checkpoint.get("best_match")
+                builds = best_result.get("build_sha256")
+                fallback_path = None
+                if (
+                    isinstance(saved_best, dict)
+                    and saved_best.get("source_sha256") == best_result.get("source_sha256")
+                    and isinstance(builds, list)
+                    and builds
+                    and saved_best.get("object_sha256") == builds[0]
+                    and isinstance(saved_best.get("report_path"), str)
+                ):
+                    fallback_path = saved_best["report_path"]
+                checkpoint["best_match"] = _match_checkpoint_summary(
+                    best_result, fallback_report_path=fallback_path
+                )
             claim = Claim(
                 address=row["address"],
                 size_bytes=int(row["size_bytes"]),
@@ -771,7 +935,7 @@ class CampaignStore:
                 session_id=session_id,
                 attempt_number=attempt_number,
                 lease_until=lease_until,
-                checkpoint=json.loads(row["checkpoint_json"]),
+                checkpoint=checkpoint,
                 evidence=json.loads(row["evidence_json"]),
             )
             db.commit()
@@ -931,43 +1095,32 @@ class CampaignStore:
                             if key in previous_checkpoint:
                                 checkpoint[key] = previous_checkpoint[key]
                 if isinstance(best, dict):
-                    best_reports = best.get("reports", [])
-                    matcher = (
-                        best_reports[-1].get("match", {})
-                        if isinstance(best_reports, list)
-                        and best_reports
-                        and isinstance(best_reports[-1], dict)
-                        else {}
+                    previous_match = previous_checkpoint.get("best_match")
+                    previous_builds = previous.get("build_sha256", [])
+                    previous_report_path = None
+                    if (
+                        isinstance(previous_match, dict)
+                        and previous_match.get("source_sha256") == best.get("source_sha256")
+                        and isinstance(previous_builds, list)
+                        and previous_builds
+                        and previous_match.get("object_sha256") == previous_builds[0]
+                        and isinstance(previous_match.get("report_path"), str)
+                    ):
+                        previous_report_path = previous_match["report_path"]
+                    checkpoint["best_match"] = _match_checkpoint_summary(
+                        best, fallback_report_path=previous_report_path
                     )
-                    differences = matcher.get("differences", [])
-                    difference_indices = []
-                    if isinstance(differences, list):
-                        for difference in differences[:100]:
-                            if isinstance(difference, dict):
-                                index = difference.get("word_index", difference.get("index"))
-                                if isinstance(index, int):
-                                    difference_indices.append(index)
-                    best_source = best.get("source_sha256")
-                    best_object = best.get("build_sha256", [])
-                    checkpoint["best_match"] = {
-                        "status": best.get("status", "NONMATCHING"),
-                        "matching_words": int(best.get("matching_words", -1)),
-                        "total_words": int(best.get("total_words", size // 4)),
-                        "difference_count": int(matcher.get("difference_count", len(differences) if isinstance(differences, list) else 0)),
-                        "difference_indices": difference_indices,
-                        "source_sha256": best_source if isinstance(best_source, str) else "",
-                        "object_sha256": best_object[0] if isinstance(best_object, list) and best_object else "",
-                        "report_path": f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-1/func_{claim.numeric_address:08X}.match.json",
-                    }
-                    limitations = matcher.get("limitations", [])
-                    checkpoint["limitations"] = limitations if isinstance(limitations, list) else []
-                    evidence_paths = [
-                        f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-1/func_{claim.numeric_address:08X}.match.json",
-                        f"build/decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-2/func_{claim.numeric_address:08X}.match.json",
-                    ]
+                    checkpoint["last_attempt"] = _match_checkpoint_summary(attempt_result)
+                    evidence_paths = []
                     if isinstance(checkpoint.get("ghidra_log_path"), str):
                         evidence_paths.insert(0, f"build/{checkpoint['ghidra_log_path']}")
-                    checkpoint["evidence_paths"] = evidence_paths
+                    for summary in (checkpoint["best_match"], checkpoint["last_attempt"]):
+                        if not isinstance(summary, dict):
+                            continue
+                        paths = summary.get("report_paths", [])
+                        if isinstance(paths, list):
+                            evidence_paths.extend(path for path in paths if isinstance(path, str))
+                    checkpoint["evidence_paths"] = list(dict.fromkeys(evidence_paths))[:40]
             encoded_checkpoint = _json_dump(checkpoint)
             if len(encoded_checkpoint) > 128_000:
                 raise ValueError("checkpoint metadata exceeds 128 KiB")
@@ -1182,6 +1335,164 @@ class CampaignStore:
             )
             db.commit()
 
+    def retry_blocked_addresses(self, addresses: Sequence[str]) -> list[str]:
+        """Unblock only named, lease-free blocked tasks without rewriting history."""
+        normalized: list[str] = []
+        for value in addresses:
+            try:
+                numeric = int(str(value).strip(), 0)
+            except ValueError as exc:
+                raise ValueError(f"invalid retry address: {value}") from exc
+            if not 0 <= numeric <= 0xFFFFFFFF:
+                raise ValueError(f"invalid retry address: {value}")
+            address = f"0x{numeric:x}"
+            if address in normalized:
+                raise ValueError(f"duplicate retry address: {address}")
+            normalized.append(address)
+        if not normalized:
+            raise ValueError("selective retry requires at least one address")
+
+        now = time.time()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for address in normalized:
+                row = db.execute(
+                    "SELECT status,owner,lease_until FROM candidates WHERE address=?",
+                    (address,),
+                ).fetchone()
+                if row is None or row["status"] != "blocked":
+                    raise ValueError(f"retry address is not a blocked candidate: {address}")
+                if row["owner"] is not None or (
+                    row["lease_until"] is not None and float(row["lease_until"]) > now
+                ):
+                    raise ValueError(f"retry address still has an active lease: {address}")
+            for address in normalized:
+                changed = db.execute(
+                    "UPDATE candidates SET status='pending',updated_at=? "
+                    "WHERE address=? AND status='blocked' AND owner IS NULL",
+                    (now, address),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError(f"retry address changed while validating its lease: {address}")
+            db.commit()
+        return normalized
+
+    def record_local_match_experiment(
+        self,
+        address: str,
+        *,
+        worker_id: str,
+        worktree: Path,
+        source_relative: str,
+        report_relatives: Sequence[str],
+    ) -> dict[str, Any]:
+        """Attach a deterministic local matcher result without changing campaign attempts or best."""
+        try:
+            numeric_address = int(address, 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("local experiment address must be hexadecimal") from exc
+        address = f"0x{numeric_address:x}"
+        if not re.fullmatch(r"[a-z0-9-]+", worker_id):
+            raise ValueError("local experiment worker id is invalid")
+        experiment_prefix = f"decomp-campaign/experiments/{address.removeprefix('0x')}/"
+        source_relative = source_relative.replace("\\", "/")
+        if not source_relative.startswith(experiment_prefix):
+            raise ValueError("local experiment source must remain in its build experiment directory")
+        if len(report_relatives) != 2:
+            raise ValueError("a local matched experiment requires two independent matcher reports")
+        normalized_reports = [item.replace("\\", "/") for item in report_relatives]
+        if any(not item.startswith(experiment_prefix) for item in normalized_reports):
+            raise ValueError("local experiment reports must remain beside their build experiment")
+
+        task = self.get_task(address)
+        if task["boundary_status"] != "EXACT":
+            raise ValueError("local matcher experiments require an exact campaign boundary")
+        source = campaign_build_path(worktree, source_relative)
+        if source.is_symlink() or not source.is_file() or source.stat().st_size > 1_000_000:
+            raise ValueError("local experiment source is missing, unsafe, or too large")
+        source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+        reports = []
+        for relative in normalized_reports:
+            report_path = campaign_build_path(worktree, relative)
+            if report_path.is_symlink() or not report_path.is_file() or report_path.stat().st_size > 2_000_000:
+                raise ValueError("local experiment matcher report is missing, unsafe, or too large")
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            _validate_complete_matcher_report(
+                report,
+                expected_address=numeric_address,
+                expected_size=int(task["size_bytes"]),
+                expected_source_sha256=source_sha256,
+            )
+            if not is_strict_match(
+                report,
+                expected_address=numeric_address,
+                expected_size=int(task["size_bytes"]),
+            ):
+                raise ValueError("local experiment must be a complete MATCHED result")
+            reports.append(report)
+        object_hashes = [report["provenance"]["object_sha256"] for report in reports]
+        if object_hashes[0] != object_hashes[1]:
+            raise ValueError("local matched experiment is not deterministic across both builds")
+
+        report_paths = [f"build/{item}" for item in normalized_reports]
+        summary = _sanitize_match_checkpoint(
+            {
+                "origin_kind": "local_experiment",
+                "worker_id": worker_id,
+                "source_path": f"build/{source_relative}",
+                "source_sha256": source_sha256,
+                "status": "MATCHED",
+                "matching_words": reports[0]["match"]["matching_words"],
+                "total_words": reports[0]["match"]["total_words"],
+                "difference_count": 0,
+                "difference_indices": [],
+                "object_sha256": object_hashes[0],
+                "object_sha256s": object_hashes,
+                "report_path": report_paths[0],
+                "report_paths": report_paths,
+                "producer_worker_id": worker_id,
+                "producer_provider": "local-mwcc-matcher",
+                "producer_session_id": "",
+                "producer_attempt_number": 0,
+            }
+        )
+
+        now = time.time()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status,boundary_status,owner,lease_until,checkpoint_json FROM candidates WHERE address=?",
+                (address,),
+            ).fetchone()
+            if row is None or row["boundary_status"] != "EXACT":
+                raise ValueError("local experiment candidate is missing or no longer EXACT")
+            if row["status"] == "running" or row["owner"] is not None or (
+                row["lease_until"] is not None and float(row["lease_until"]) > now
+            ):
+                raise ValueError("cannot record a local experiment while the candidate has an active lease")
+            checkpoint = json.loads(row["checkpoint_json"])
+            experiments = checkpoint.get("local_experiments", [])
+            experiments = experiments if isinstance(experiments, list) else []
+            for existing in experiments:
+                if isinstance(existing, dict) and existing.get("source_sha256") == source_sha256:
+                    if existing == summary:
+                        db.commit()
+                        return summary
+                    raise ValueError("a different local experiment record already uses this source hash")
+            if len(experiments) >= 8:
+                raise ValueError("local experiment checkpoint is full")
+            checkpoint["local_experiments"] = [*experiments, summary]
+            encoded = _json_dump(_sanitize_checkpoint(checkpoint, trusted_evidence=True))
+            if len(encoded) > 128_000:
+                raise ValueError("checkpoint metadata exceeds 128 KiB")
+            db.execute(
+                "UPDATE candidates SET checkpoint_json=?,updated_at=? WHERE address=?",
+                (encoded, now, address),
+            )
+            self._event(db, "local_experiment_recorded", address=address, worker_id=worker_id)
+            db.commit()
+        return summary
+
     def get_task(self, address: str) -> dict[str, Any]:
         with self._connect() as db:
             row = db.execute("SELECT * FROM candidates WHERE address=?", (address.lower(),)).fetchone()
@@ -1376,11 +1687,22 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
             "best_source_sha256",
             "best_source_snapshot",
             "best_match",
+            "last_attempt",
+            "local_experiments",
             "ghidra_log_path",
             "historical_hypothesis",
         )
         if key in checkpoint
     }
+    local_experiments = compact_checkpoint.get("local_experiments")
+    if isinstance(local_experiments, list):
+        compact_checkpoint["local_experiments"] = [
+            item
+            for item in local_experiments
+            if isinstance(item, dict)
+            and item.get("worker_id") == claim.worker_id
+            and item.get("status") == "MATCHED"
+        ]
     return (
         "Reconstruct only this EBOOT function in the isolated worker worktree. Treat local "
         "MIPS instructions and full-object matcher results as primary evidence; Ghidra's C "
@@ -1388,10 +1710,15 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
         "complete Ghidra log at the checkpoint path: it contains the verified boundary, "
         "instruction disassembly, and decompiled C. Then inspect "
         "build/seto035/export-triage.json for the export/NID, proven call sites, relocations, "
-        "and references; follow only evidence paths actually present in the supplied task "
-        "evidence. Review the current candidate source and the best prior checkpoint/source "
-        "hash before changing anything, preserving a stronger hypothesis and recording the "
-        "first causal divergence. A supplied historical hypothesis is explicitly NONMATCHING "
+         "and references; follow only evidence paths actually present in the supplied task "
+         "evidence. Review the current candidate source and the best prior checkpoint/source "
+         "hash before changing anything. `best_match` is the strongest verified result; "
+         "`last_attempt` is the latest result and may be worse. Read their exact matcher report "
+         "paths and preserve a stronger hypothesis while recording the first causal divergence. "
+         "Local matcher experiments are separate worktree evidence, not the campaign best: read "
+         "only listed source/report paths, keep them unchanged, and let the orchestrator verify "
+         "any source you adopt. "
+         "A supplied historical hypothesis is explicitly NONMATCHING "
         "and not certified; use it as a lead only and never promote it automatically.\n\n"
         "AIMemory retrieval via memory_query/memory_read_page is optional supporting context. "
         "Use it only if those read-only tools are actually available; if retrieval is unavailable, "
@@ -2003,9 +2330,12 @@ class CampaignRunner:
     ) -> list[dict[str, Any]]:
         reports: list[dict[str, Any]] = []
         for number in (1, 2):
+            relative_out = (
+                f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
+                f"/attempt-{claim.attempt_number}/verify-{number}"
+            )
             out = campaign_build_path(
-                worktree,
-                f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-{number}",
+                worktree, relative_out
             )
             out.mkdir(parents=True, exist_ok=True)
             result = _run_process(
@@ -2038,7 +2368,11 @@ class CampaignRunner:
                 if deadline is not None and time.monotonic() >= deadline:
                     raise CampaignInterrupted
                 raise ValueError("production matcher build/compare timed out")
-            reports.append(_parse_match_report(result.returncode, result.stdout))
+            report = _parse_match_report(result.returncode, result.stdout)
+            report["report_path"] = (
+                f"build/{relative_out}/func_{claim.numeric_address:08X}.match.json"
+            )
+            reports.append(report)
         return reports
 
     def _run_matcher_wsl(
@@ -2056,7 +2390,10 @@ class CampaignRunner:
         worktree_wsl = _wsl_path(worktree, distro)
         reports: list[dict[str, Any]] = []
         for number in (1, 2):
-            relative_out = f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}/verify-{number}"
+            relative_out = (
+                f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
+                f"/attempt-{claim.attempt_number}/verify-{number}"
+            )
             out = campaign_build_path(worktree, relative_out)
             out.mkdir(parents=True, exist_ok=True)
             out_wsl = _wsl_path(out, distro)
@@ -2099,7 +2436,11 @@ class CampaignRunner:
                 if deadline is not None and time.monotonic() >= deadline:
                     raise CampaignInterrupted
                 raise ValueError("production matcher build/compare timed out")
-            reports.append(_parse_match_report(result.returncode, result.stdout))
+            report = _parse_match_report(result.returncode, result.stdout)
+            report["report_path"] = (
+                f"build/{relative_out}/func_{claim.numeric_address:08X}.match.json"
+            )
+            reports.append(report)
         return reports
 
     def _run_claim(self, worker: Worker, claim: Claim, deadline: float | None) -> str:
@@ -2199,6 +2540,8 @@ class CampaignRunner:
                 "best_source_sha256",
                 "best_source_snapshot",
                 "best_match",
+                "last_attempt",
+                "local_experiments",
             ):
                 if key in claim.checkpoint:
                     checkpoint[key] = claim.checkpoint[key]
@@ -2760,7 +3103,7 @@ def _append_promotion_documentation(repo_root: Path, record: dict[str, Any]) -> 
     if path.is_symlink() or not path.is_file():
         raise ValueError("decompilation progress documentation is missing or unsafe")
     existing = path.read_text(encoding="utf-8")
-    heading = "## SETO-DECOMP-040 — Promoções certificadas"
+    heading = "## SETO-DECOMP-044 — Promoções certificadas"
     address = record["address"]
     source_hash = record["source_sha256"]
     session_id = record["session_id"]
@@ -3114,6 +3457,36 @@ def select_ready_workers(
         for worker_id in workers
         if states.get(worker_id, {}).get("ready") is True
     ][:max_workers]
+
+
+def _normalize_candidate_addresses(
+    values: Sequence[str] | None,
+    candidates: Sequence[Candidate],
+    *,
+    required: bool,
+) -> list[str] | None:
+    if values is None:
+        if required:
+            raise ValueError("at least one --candidate-address is required for productive execution")
+        return None
+    if not values:
+        raise ValueError("candidate-address filter cannot be empty")
+    inventory_addresses = {candidate.address.lower() for candidate in candidates}
+    normalized: list[str] = []
+    for value in values:
+        try:
+            numeric = int(str(value).strip(), 0)
+        except ValueError as exc:
+            raise ValueError(f"invalid candidate address: {value}") from exc
+        if not 0 <= numeric <= 0xFFFFFFFF:
+            raise ValueError(f"invalid candidate address: {value}")
+        address = f"0x{numeric:x}"
+        if address not in inventory_addresses:
+            raise ValueError(f"candidate address is outside the inventory: {address}")
+        if address in normalized:
+            raise ValueError(f"duplicate candidate address: {address}")
+        normalized.append(address)
+    return normalized
 
 
 def worker_agent_policy_is_restricted(
@@ -4066,6 +4439,12 @@ def build_parser() -> argparse.ArgumentParser:
     resume = subparsers.add_parser("resume", help="recover expired leases and clear a clean stop")
     resume.add_argument("--recover-expired", action="store_true")
     resume.add_argument("--retry-blocked", action="store_true", help="explicitly retry blocked tasks after fixing their cause")
+    resume.add_argument(
+        "--retry-address",
+        action="append",
+        default=None,
+        help="explicitly retry only this blocked inventory address; repeatable",
+    )
     stop = subparsers.add_parser("stop", help="request safe shutdown of running workers")
     run = subparsers.add_parser("run", help="execute only after a separate explicit authorization")
     run.add_argument("--confirm", action="store_true", help="confirm this model execution campaign")
@@ -4073,7 +4452,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--productive", action="store_true", help="expand beyond the pilot after verified authorization")
     run.add_argument("--allow-openai-usage", action="store_true", help="confirm use of the configured OpenAI account")
     run.add_argument("--allow-free-model-usage", action="store_true", help="confirm requests to the exact allowlisted free model")
-    run.add_argument("--max-tasks", type=int, default=None)
+    run.add_argument(
+        "--candidate-address",
+        action="append",
+        default=None,
+        help="restrict productive execution to explicit inventory addresses; repeatable",
+    )
+    run.add_argument("--max-tasks", type=int, default=None, help="cumulative SQLite attempt ceiling")
     return parser
 
 
@@ -4127,19 +4512,46 @@ def main(argv: list[str] | None = None) -> int:
             _print_json({"stop_requested": True})
             return 0
         if args.command == "resume":
-            recovered = store.recover_expired() if args.recover_expired else 0
-            store.resume()
+            if args.retry_blocked and args.retry_address is not None:
+                raise ValueError("choose either --retry-blocked or selective --retry-address")
+            if args.retry_address is not None and args.recover_expired:
+                raise ValueError("run --recover-expired separately before selective retry")
+            retried_addresses: list[str] = []
+            if args.retry_address is not None:
+                retried_addresses = _normalize_candidate_addresses(
+                    args.retry_address, candidates, required=True
+                ) or []
+                retried_addresses = store.retry_blocked_addresses(retried_addresses)
+                recovered = 0
+            else:
+                recovered = store.recover_expired() if args.recover_expired else 0
+                store.resume()
             if args.retry_blocked:
                 with store._connect() as db:
                     db.execute(
                         "UPDATE candidates SET status='pending',updated_at=? WHERE status='blocked'",
                         (time.time(),),
                     )
-            _print_json({"resumed": True, "expired_leases_recovered": recovered})
+            if args.retry_address is not None:
+                store.resume()
+            _print_json(
+                {
+                    "resumed": True,
+                    "expired_leases_recovered": recovered,
+                    "retried_addresses": retried_addresses,
+                }
+            )
             return 0
         if args.command == "run":
             if not args.confirm:
                 raise ValueError("run requires --confirm; preparation commands never start model sessions")
+            productive_candidate_addresses = None
+            if args.productive:
+                productive_candidate_addresses = _normalize_candidate_addresses(
+                    args.candidate_address, candidates, required=True
+                )
+            elif args.candidate_address is not None:
+                raise ValueError("--candidate-address requires --productive")
             if args.continuous and not config.get("execution", {}).get("continuous", False):
                 raise ValueError("continuous mode is disabled in config")
             if args.continuous and not args.productive:
@@ -4216,7 +4628,7 @@ def main(argv: list[str] | None = None) -> int:
             ]
             limits = config["limits"]
             if args.productive:
-                candidate_addresses = None
+                candidate_addresses = productive_candidate_addresses
                 phase_max_tasks = int(limits["max_tasks"])
                 phase_duration = float(limits["max_duration_seconds"])
             else:
@@ -4256,7 +4668,25 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--max-tasks cannot exceed the configured campaign limit")
             if max_tasks > phase_max_tasks:
                 raise ValueError("--max-tasks cannot exceed the active pilot/productive phase limit")
-            outcome = runner.run(workers, max_tasks=max_tasks)
+            if max_tasks <= 0:
+                raise ValueError("--max-tasks must be positive")
+            attempts_used = sum(sum(outcomes.values()) for outcomes in store.attempt_summary().values())
+            if attempts_used > max_tasks:
+                raise ValueError(
+                    f"cumulative attempt ceiling {max_tasks} is below the SQLite total {attempts_used}"
+                )
+            remaining_attempts = max_tasks - attempts_used
+            if remaining_attempts:
+                # `CampaignRunner` passes this value to SQLite's atomic
+                # max_total_attempts guard, so it must remain the cumulative
+                # ceiling (not the remaining per-process budget).
+                outcome = runner.run(workers, max_tasks=max_tasks)
+            else:
+                outcome = {
+                    "attempted": 0,
+                    "outcomes": {},
+                    "stopped": store.stop_requested(),
+                }
             _print_json(outcome)
             return 0
         return 2
