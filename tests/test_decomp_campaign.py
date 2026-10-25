@@ -791,6 +791,40 @@ def test_unclassified_agent_failure_does_not_fallback_to_other_provider(tmp_path
     assert store.provider_status("opencode") == "active"
 
 
+def test_worker_can_continue_from_local_evidence_when_aimemory_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    simulator = tmp_path / "local_evidence_only.py"
+    simulator.write_text(
+        "import json, pathlib\n"
+        "source = pathlib.Path('decomp/src/eboot/func_00001000.c')\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text('void func_00001000(void) { return; }\\n')\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{"
+        "'next_experiment':'inspect the proven call site',"
+        "'limitations':['AIMemory tools unavailable; using local evidence only']}})}))\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, simulator),
+        worktrees={"openai": worktree},
+        verifier=lambda *_args: {"status": "BOUNDARY_VALIDATED"},
+    )
+
+    result = runner.run([Worker("openai", "openai", "openai/gpt-6-luna")], max_tasks=1)
+
+    assert result["attempted"] == 1
+    assert store.get_task("0x1000")["status"] == "pending"
+    assert store.get_task("0x1000")["checkpoint"]["next_experiment"] == (
+        "inspect the proven call site"
+    )
+
+
 def test_successful_worker_without_candidate_source_preserves_checkpoint_and_diagnosis(
     tmp_path: Path,
 ) -> None:
@@ -1911,6 +1945,14 @@ def test_single_worker_pilot_is_capped_at_two_attempts_and_keeps_candidates() ->
     assert config["pilot"]["candidate_addresses"] == ["0x2c28c", "0x4217c"]
 
 
+def test_campaign_uses_native_opencode_cli_for_api_and_session_calls() -> None:
+    config = load_config(
+        Path(__file__).resolve().parents[1] / "config" / "decomp_campaign.toml"
+    )
+
+    assert config["opencode"]["command"] == ["opencode"]
+
+
 def test_worker_permission_audit_rejects_global_allow_and_shell_access() -> None:
     agent = {
         "id": "seto-decomp-worker",
@@ -1935,7 +1977,12 @@ def test_worker_permission_audit_rejects_global_allow_and_shell_access() -> None
             {"action": "read", "resource": "*.env.*", "effect": "deny"},
         ],
     }
-    assert worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
+    assert any(
+        rule["action"] == "execute" and rule["effect"] == "allow"
+        for rule in agent["permissions"]
+    )
+    # Regression for PR #43: the prior audit treated execute:allow as acceptable.
+    assert not worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
     agent["permissions"].append({"action": "shell", "resource": "*", "effect": "allow"})
     assert not worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
     assert not worker_agent_policy_is_restricted([], "missing-agent")
@@ -1951,12 +1998,19 @@ def _restricted_worker_agent(*, query_action: str = "ai-memory_memory_query") ->
             {"action": "grep", "resource": "*", "effect": "allow"},
             {"action": "edit", "resource": "decomp/src/eboot/func_*.c", "effect": "allow"},
             {"action": "edit", "resource": "build/decomp-campaign/*", "effect": "allow"},
-            {"action": "execute", "resource": "*", "effect": "allow"},
             {"action": query_action, "resource": "*", "effect": "allow"},
             {"action": "ai-memory_memory_read_page", "resource": "*", "effect": "allow"},
+            {"action": "execute", "resource": "*", "effect": "deny"},
+            {"action": "shell", "resource": "*", "effect": "deny"},
+            {"action": "http", "resource": "*", "effect": "deny"},
+            {"action": "http_request", "resource": "*", "effect": "deny"},
+            {"action": "webfetch", "resource": "*", "effect": "deny"},
+            {"action": "websearch", "resource": "*", "effect": "deny"},
+            {"action": "browser", "resource": "*", "effect": "deny"},
+            {"action": "external_directory", "resource": "*", "effect": "deny"},
+            {"action": "subagent", "resource": "*", "effect": "deny"},
             {"action": "read", "resource": "*.env", "effect": "deny"},
             {"action": "read", "resource": "*.env.*", "effect": "deny"},
-            {"action": "browser", "resource": "*", "effect": "deny"},
         ],
     }
 
@@ -1970,32 +2024,78 @@ def test_worker_permission_audit_uses_real_mcp_ids_and_allows_only_read_tools() 
     assert isinstance(permissions, list)
 
     def effect(action: str) -> str | None:
-        matches = [item["effect"] for item in permissions if item["action"] == action]
-        return matches[-1] if matches else None
+        result = None
+        for item in permissions:
+            if item["action"] in {"*", action}:
+                result = item["effect"]
+        return result
 
     assert effect("ai-memory_memory_query") == "allow"
     assert effect("ai-memory_memory_read_page") == "allow"
-    assert effect("ai-memory_memory_write_page") is None
-    assert effect("ai-memory_memory_message_send") is None
-    assert effect("shell") is None
-    assert effect("subagent") is None
+    assert effect("ai-memory_memory_write_page") == "deny"
+    assert effect("ai-memory_memory_message_send") == "deny"
+    assert effect("ai-memory_memory_delete_page") == "deny"
+    assert effect("execute") == "deny"
+    assert effect("shell") == "deny"
+    assert effect("http") == "deny"
+    assert effect("http_request") == "deny"
+    assert effect("webfetch") == "deny"
+    assert effect("websearch") == "deny"
+    assert effect("browser") == "deny"
+    assert effect("external_directory") == "deny"
+    assert effect("subagent") == "deny"
 
 
 def test_worker_permission_audit_rejects_misnamed_tools_and_unsafe_overrides() -> None:
     wrong_name = _restricted_worker_agent(query_action="ai_memory_memory_query")
     assert not worker_agent_policy_is_restricted([wrong_name], "seto-decomp-worker")
 
-    no_code_mode = _restricted_worker_agent()
-    no_code_mode["permissions"] = [
-        rule for rule in no_code_mode["permissions"] if rule["action"] != "execute"
-    ]
-    assert not worker_agent_policy_is_restricted([no_code_mode], "seto-decomp-worker")
-
     write_enabled = _restricted_worker_agent()
     write_enabled["permissions"].append(
         {"action": "ai-memory_memory_write_page", "resource": "*", "effect": "allow"}
     )
     assert not worker_agent_policy_is_restricted([write_enabled], "seto-decomp-worker")
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"action": "execute", "resource": "*", "effect": "allow"},
+        {"action": "shell", "resource": "*", "effect": "allow"},
+        {"action": "http", "resource": "*", "effect": "allow"},
+        {"action": "webfetch", "resource": "*", "effect": "allow"},
+        {"action": "websearch", "resource": "*", "effect": "allow"},
+        {"action": "browser", "resource": "*", "effect": "allow"},
+        {"action": "http_request", "resource": "*", "effect": "allow"},
+        {"action": "ai-memory_*", "resource": "*", "effect": "allow"},
+        {"action": "*", "resource": "*", "effect": "allow"},
+    ],
+)
+def test_worker_policy_rejects_permissive_execution_and_network_overrides(
+    override: dict[str, str],
+) -> None:
+    agent = _restricted_worker_agent()
+    agent["permissions"].append(override)
+
+    assert not worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
+
+
+def test_effective_permission_preflight_rejects_execute_allow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _restricted_worker_agent()
+    agent["permissions"].append(
+        {"action": "execute", "resource": "*", "effect": "allow"}
+    )
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, json.dumps([agent]), "")
+
+    monkeypatch.setattr(decomp_campaign_module.subprocess, "run", fake_run)
+
+    assert not decomp_campaign_module._effective_worker_policy_ready(
+        ["opencode"], tmp_path, "seto-decomp-worker"
+    )
 
 
 def test_ai_memory_connected_is_not_misreported_as_tool_availability() -> None:
@@ -2045,6 +2145,22 @@ def test_ai_memory_exposure_requires_session_tool_introspection_for_ready() -> N
 
     assert report["registered_tools"] == "READY"
     assert report["available_to_agent"] == "READY"
+
+
+def test_ai_memory_exposure_blocks_extra_tools_even_when_read_tools_are_present() -> None:
+    report = decomp_campaign_module._ai_memory_exposure_report(
+        "✓ ai-memory  connected\n",
+        registered_tool_names=["memory_query", "memory_read_page"],
+        worker_permissions_ready=True,
+        effective_tool_names=[
+            "ai-memory_memory_query",
+            "ai-memory_memory_read_page",
+            "ai-memory_memory_write_page",
+        ],
+    )
+
+    assert report["registered_tools"] == "READY"
+    assert report["available_to_agent"] == "BLOCKED"
 
 
 def test_full_inconclusive_matcher_report_is_complete_and_retains_its_status() -> None:
@@ -2676,6 +2792,7 @@ def test_two_simulated_sessions_handle_distinct_tasks_and_quota_fallback(
     first_claims = [item for item in attempts if item["attempt_number"] == 1]
     assert {item["address"] for item in first_claims} == {"0x1000", "0x2000"}
     assert {item["worker_id"] for item in first_claims} == {"deepseek", "openai"}
+    assert len({item["session_id"] for item in first_claims}) == 2
     fallback = [item for item in attempts if item["address"] == "0x1000"]
     assert [item["provider"] for item in fallback] == ["opencode", "openai"]
     assert store.provider_status("opencode") == "suspended_quota"

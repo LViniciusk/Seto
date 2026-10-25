@@ -6652,8 +6652,9 @@ não promove hipóteses e não muda scheduler, matcher ou critérios de certific
   equivalência.
 - AIMemory é contexto suplementar opcional. O worker só recebe permissões para
   `memory_query` e `memory_read_page`; escrita, mensagens, exclusão, shell e
-  subagentes continuam negados por deny-by-default. A permissão `execute` é a
-  necessária ao Code Mode, não uma autorização para operações AIMemory adicionais.
+  subagentes continuam negados por deny-by-default. `execute`, ferramentas de
+  rede e acesso externo também são negados explicitamente; a política efetiva é
+  auditada antes de declarar o worker pronto.
 - No OpenCode **2.1.4**, `mcp list` confirma a conexão, mas não inspeciona o
   catálogo efetivamente anexado a uma sessão ativa. `doctor` agora separa os
   estados: conexão **CONNECTED**, permissões do worker **READY**, catálogo de
@@ -6709,8 +6710,8 @@ não promove hipóteses e não muda scheduler, matcher ou critérios de certific
 
 | Gate | Resultado |
 |---|---|
-| `tests/test_decomp_campaign.py` | **99 passed** |
-| Suíte completa, Windows / Python 3.12 | **934 passed, 44 skipped** |
+| `tests/test_decomp_campaign.py` | **112 passed** |
+| Suíte completa, Windows / Python 3.12 | **947 passed, 44 skipped** |
 | `compileall -q src scripts tests` | clean |
 | `git diff --check` | clean |
 | `doctor`, `plan`, `status` | executados sem iniciar modelo; readiness e limites acima |
@@ -6719,3 +6720,42 @@ não promove hipóteses e não muda scheduler, matcher ou critérios de certific
 Os skips da suíte completa são integrações opt-in de EBOOT/PRX/REA, ferramentas
 GNU MIPSel ausentes ou gates POSIX/WSL que não se aplicam ao host Windows. A
 prontidão detectada pelo `doctor` não substitui essas integrações reais.
+
+### SETO-DECOMP-042-R2 — launcher AIMemory e isolamento do worker
+
+- A instalação local é AIMemory **3.1.1** e OpenCode **2.1.4**. `ai-memory run
+  --help` confirma que `run opencode <argumentos>` encaminha argumentos nativos,
+  mas também seleciona/retoma um workstream e faz auto-wire de hooks/MCP. O
+  `config/decomp_campaign.run.local.toml` permanece em `command = ["opencode"]`:
+  o orquestrador chama `api`, `debug` e `run --session` diretamente, portanto
+  substituir o prefixo pelo launcher não foi comprovado compatível e poderia
+  alterar a seleção/reutilização de workstreams. Nenhum launcher ou modelo foi
+  iniciado nesta verificação.
+- `opencode debug config` nos dois worktrees confirma que os processos diretos
+  carregam a instalação persistente `ai-memory` do config global do usuário; a
+  conexão não prova a lista de ferramentas de uma sessão. A instalação atual
+  não define `codemode`, portanto mantém o padrão Code Mode. A versão 2.1.4
+  aceitou `codemode: false` em um config remoto fictício de loopback, sem
+  conexão; segundo a documentação V2, isso expõe ferramentas diretamente.
+- Não foi gravado um override de campanha: OpenCode substitui por inteiro o
+  objeto de servidor homônimo em uma configuração de maior precedência. O
+  override precisaria repetir endpoint e autenticação, que hoje estão no config
+  global; copiá-la para os worktrees ou alterar o global ampliaria o escopo e
+  não preservaria o isolamento de outros agentes. Assim, a exposição real das
+  duas ferramentas permanece **UNVERIFIED**; AIMemory é opcional e a evidência
+  local é suficiente para continuar.
+- O `doctor` read-only, executado com o código atualizado para o checkout e cada
+  config de worktree, confirmou nos três diretórios conexão MCP **CONNECTED**,
+  política efetiva **READY**, catálogo e exposição em sessão **UNVERIFIED**.
+  Nenhum modelo foi iniciado; os worktrees mantiveram seus estados de prontidão
+  de provedor locais.
+- RED reproduziu a aceitação histórica de `execute: allow`; GREEN endureceu a
+  auditoria para exigir deny-by-default, negar execução, shell, HTTP/rede,
+  subagentes e acessos externos, aceitar somente os dois grants exatos de leitura
+  AIMemory e rejeitar overrides permissivos. O diagnóstico agora requer igualdade
+  exata com as duas ferramentas permitidas antes de reportar disponibilidade
+  **READY**; conexão isolada continua **UNVERIFIED**. Também foram cobertos o
+  fallback local, os comandos nativos da campanha e a separação de sessões.
+- As alterações R2 não iniciam campanha nem mudam SQLite, baselines, scheduler
+  ou matcher. Resultado R2: orquestrador **112 passed**, suíte completa
+  **947 passed, 44 skipped**, `compileall` clean e `git diff --check` clean.

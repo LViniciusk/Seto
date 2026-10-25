@@ -20,15 +20,39 @@ permissions:
   - action: edit
     resource: "build/decomp-campaign/*"
     effect: allow
-  - action: execute
-    resource: "*"
-    effect: allow
   - action: ai-memory_memory_query
     resource: "*"
     effect: allow
   - action: ai-memory_memory_read_page
     resource: "*"
     effect: allow
+  - action: execute
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: http
+    resource: "*"
+    effect: deny
+  - action: http_request
+    resource: "*"
+    effect: deny
+  - action: webfetch
+    resource: "*"
+    effect: deny
+  - action: websearch
+    resource: "*"
+    effect: deny
+  - action: browser
+    resource: "*"
+    effect: deny
+  - action: external_directory
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
   - action: read
     resource: "*.env"
     effect: deny

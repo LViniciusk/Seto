@@ -3119,7 +3119,7 @@ def select_ready_workers(
 def worker_agent_policy_is_restricted(
     agents: list[dict[str, Any]], agent_id: str
 ) -> bool:
-    """Audit OpenCode's effective agent rules; workers get no shell or broad writes."""
+    """Require local-only worker access and exact read-only AIMemory tool grants."""
     matches = [agent for agent in agents if agent.get("id") == agent_id]
     if len(matches) != 1 or not isinstance(matches[0].get("permissions"), list):
         return False
@@ -3134,6 +3134,20 @@ def worker_agent_policy_is_restricted(
     ]
     if not deny_indices:
         return False
+    denied_actions = {
+        (action, "*", "deny")
+        for action in (
+            "execute",
+            "shell",
+            "http",
+            "http_request",
+            "webfetch",
+            "websearch",
+            "browser",
+            "external_directory",
+            "subagent",
+        )
+    }
     allowed_overrides = {
         ("*", "*", "deny"),
         ("read", "*", "allow"),
@@ -3141,15 +3155,11 @@ def worker_agent_policy_is_restricted(
         ("grep", "*", "allow"),
         ("edit", "decomp/src/eboot/func_*.c", "allow"),
         ("edit", "build/decomp-campaign/*", "allow"),
-        ("execute", "*", "allow"),
         ("ai-memory_memory_query", "*", "allow"),
         ("ai-memory_memory_read_page", "*", "allow"),
-        ("external_directory", "*", "deny"),
-        ("subagent", "*", "deny"),
         ("read", "*.env", "deny"),
         ("read", "*.env.*", "deny"),
-        ("browser", "*", "deny"),
-    }
+    } | denied_actions
     for rule in rules[deny_indices[-1] :]:
         if not isinstance(rule, dict) or (
             rule.get("action"), rule.get("resource"), rule.get("effect")
@@ -3176,13 +3186,19 @@ def worker_agent_policy_is_restricted(
         and effect("edit", "*") == "deny"
         and effect("edit", "decomp/src/eboot/func_00002C28C.c") == "allow"
         and effect("edit", "build/decomp-campaign/openai/2c28c/result.json") == "allow"
-        and effect("execute", "*") == "allow"
+        and effect("execute", "*") == "deny"
+        and effect("http", "*") == "deny"
+        and effect("http_request", "*") == "deny"
+        and effect("webfetch", "*") == "deny"
+        and effect("websearch", "*") == "deny"
+        and effect("browser", "*") == "deny"
         and effect("subagent", "*") == "deny"
         and effect("ai-memory_memory_query", "*") == "allow"
         and effect("ai-memory_memory_read_page", "*") == "allow"
         and effect("ai-memory_memory_write_page", "*") == "deny"
         and effect("ai-memory_memory_message_send", "*") == "deny"
         and effect("ai-memory_memory_delete_page", "*") == "deny"
+        and effect("ai-memory_memory_message_pop", "*") == "deny"
         and effect("read", "private/credentials.env") == "deny"
         and effect("read", "private/credentials.env.local") == "deny"
     )
@@ -3814,7 +3830,7 @@ def _ai_memory_exposure_report(
         available = "UNVERIFIED"
     else:
         effective_ids = {str(name).strip() for name in effective_tool_names}
-        available = "READY" if expected_names <= effective_ids else "BLOCKED"
+        available = "READY" if effective_ids == expected_names else "BLOCKED"
     return {
         "connection": "CONNECTED" if connected else "DISCONNECTED",
         "registered_tools": registered,
