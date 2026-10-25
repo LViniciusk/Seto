@@ -1103,7 +1103,7 @@ def _mock_opencode_preflight(
     api_stdout: str | None = None,
 ) -> dict[str, object]:
     config = {
-        "opencode": {"command": ["opencode"]},
+        "opencode": {"command": ["opencode-test-double"]},
         "models": {
             "allowlist": [
                 "openai/gpt-6-luna",
