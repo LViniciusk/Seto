@@ -52,7 +52,7 @@ def candidate(address: str, *, preferred_provider: str | None = None) -> Candida
     )
 
 
-def strict_report(address: str = "0x1000") -> dict[str, object]:
+def strict_report(address: str = "0x1000", *, word_count: int = 4) -> dict[str, object]:
     numeric_address = int(address, 0)
     return {
         "status": "MATCHED",
@@ -68,8 +68,8 @@ def strict_report(address: str = "0x1000") -> dict[str, object]:
         },
         "match": {
             "status": "MATCHED",
-            "matching_words": 4,
-            "total_words": 4,
+            "matching_words": word_count,
+            "total_words": word_count,
             "difference_count": 0,
             "differences": [],
             "limitations": [],
@@ -159,57 +159,91 @@ def ghidra_log(
     return "\n".join(rows)
 
 
-def promotable_campaign(tmp_path: Path) -> tuple[CampaignStore, dict[str, object], Path, str]:
+def promotable_campaign(
+    tmp_path: Path, *, certified_retry: bool = True
+) -> tuple[CampaignStore, dict[str, object], Path, str]:
     repo = tmp_path / "repo"
     repo.mkdir(parents=True)
     store = CampaignStore(repo / "build" / "campaign.sqlite3")
-    store.seed([candidate("0x1000")])
+    store.seed(
+        [
+            Candidate(
+                address="0x1000",
+                size_bytes=28 * 4,
+                nid="0x12345678",
+                priority=50,
+                boundary_status="EXACT",
+                evidence={"source": "tied certification test"},
+            )
+        ]
+    )
     claim = store.claim_next("openai", "openai")
     assert claim is not None
-    claim = store.bind_session(claim, "ses_test_promotion")
+    claim = store.bind_session(claim, "ses_test_nonmatching")
 
     worker_root = campaign_build_path(repo, "decomp-campaign/worktrees/openai")
     log_relative = "decomp-campaign/openai/1000/evidence/ghidra-attempt-1.log"
     log_path = campaign_build_path(worker_root, log_relative)
     log_path.parent.mkdir(parents=True)
-    log_path.write_text(ghidra_log(), encoding="utf-8")
+    log_text = ghidra_log(end=0x1070, body_addresses=28 * 4, instruction_count=28)
+    log_path.write_text(log_text, encoding="utf-8")
     log_hash = hashlib.sha256(log_path.read_bytes()).hexdigest()
-    boundary = validate_ghidra_log(ghidra_log(), 0x1000)
-
-    source_content = b"int func_00001000(void) { return 1; }\n"
-    source_hash = hashlib.sha256(source_content).hexdigest()
-    source_relative = f"decomp-campaign/checkpoints/00001000/{source_hash}.c"
-    source_path = campaign_build_path(repo, source_relative)
-    source_path.parent.mkdir(parents=True)
-    source_path.write_bytes(source_content)
-
-    reports = [strict_report(), strict_report()]
-    for report in reports:
-        report["provenance"]["source_sha256"] = source_hash  # type: ignore[index]
-    result = {
-        "status": "MATCHED",
-        "source_sha256": source_hash,
-        "source_snapshot_path": source_relative,
-        "ghidra_log_sha256": log_hash,
-        "ghidra_boundary": boundary,
-        "matching_words": 4,
-        "total_words": 4,
-        "build_sha256": ["b" * 64, "b" * 64],
-        "reports": reports,
-    }
+    boundary = validate_ghidra_log(log_text, 0x1000)
     checkpoint = {
         "ghidra_log_path": log_relative,
         "ghidra_log_sha256": log_hash,
         "boundary_status": "EXACT",
     }
-    store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
-    assert store.complete(
-        claim,
-        checkpoint,
-        result,
-        max_attempts_without_progress=3,
-        max_attempts_per_candidate=8,
-    ) == "matched"
+
+    source_hash = ""
+    attempt_statuses = ["NONMATCHING", "MATCHED"] if certified_retry else ["NONMATCHING"]
+    for attempt_index, attempt_status in enumerate(attempt_statuses, start=1):
+        source_content = (
+            b"int func_00001000(void) { return -1; }\n"
+            if attempt_status == "NONMATCHING"
+            else b"int func_00001000(void) { return 1; }\n"
+        )
+        source_hash = hashlib.sha256(source_content).hexdigest()
+        source_relative = f"decomp-campaign/checkpoints/00001000/{source_hash}.c"
+        source_path = campaign_build_path(repo, source_relative)
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_bytes(source_content)
+
+        reports = [strict_report(word_count=28), strict_report(word_count=28)]
+        for report in reports:
+            report["provenance"]["source_sha256"] = source_hash  # type: ignore[index]
+        if attempt_status == "NONMATCHING":
+            for report in reports:
+                report["status"] = "NONMATCHING"
+                report["verified_decompilation"] = False
+                report["match"]["status"] = "NONMATCHING"  # type: ignore[index]
+                report["match"]["limitations"] = ["relocation evidence is incomplete"]  # type: ignore[index]
+                report["match"]["relocation_issues"] = ["unresolved relocation"]  # type: ignore[index]
+
+        result = {
+            "status": attempt_status,
+            "source_sha256": source_hash,
+            "source_snapshot_path": source_relative,
+            "ghidra_log_sha256": log_hash,
+            "ghidra_boundary": boundary,
+            "matching_words": 28,
+            "total_words": 28,
+            "build_sha256": ["b" * 64, "b" * 64],
+            "reports": reports,
+        }
+        store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+        assert store.complete(
+            claim,
+            checkpoint,
+            result,
+            max_attempts_without_progress=3,
+            max_attempts_per_candidate=8,
+        ) == ("matched" if attempt_status == "MATCHED" else "pending")
+
+        if attempt_index < len(attempt_statuses):
+            claim = store.claim_next("openai", "openai")
+            assert claim is not None
+            claim = store.bind_session(claim, "ses_test_promotion")
 
     eboot_path = repo / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
     eboot_path.parent.mkdir(parents=True)
@@ -437,6 +471,54 @@ def test_promotion_preflight_checks_snapshots_reports_ghidra_and_conflicts(tmp_p
     context["destination"].parent.mkdir(parents=True, exist_ok=True)
     context["destination"].write_text("conflicting certified source", encoding="utf-8")
     with pytest.raises(ValueError, match="conflicts"):
+        _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
+
+
+def test_equal_score_certification_replaces_best_attempt_and_is_promotable(
+    tmp_path: Path,
+) -> None:
+    store, config, repo, certified_hash = promotable_campaign(tmp_path)
+    task = store.get_task("0x1000")
+    result = task["best_result"]
+    checkpoint = task["checkpoint"]
+
+    assert task["status"] == "matched"
+    assert task["attempts_without_progress"] == 0
+    assert result["status"] == "MATCHED"
+    assert result["source_sha256"] == certified_hash
+    assert result["campaign_origin"] == {
+        "attempt_number": 2,
+        "worker_id": "openai",
+        "provider": "openai",
+        "session_id": "ses_test_promotion",
+    }
+    assert result["build_sha256"] == ["b" * 64, "b" * 64]
+    assert all(
+        report["provenance"]["source_sha256"] == certified_hash
+        for report in result["reports"]
+    )
+    assert checkpoint["best_source_sha256"] == certified_hash
+    assert checkpoint["best_match"]["status"] == "MATCHED"
+    assert checkpoint["best_match"]["source_sha256"] == certified_hash
+    assert checkpoint["best_match"]["object_sha256"] == "b" * 64
+    snapshot = campaign_build_path(repo, checkpoint["best_source_snapshot"])
+    assert hashlib.sha256(snapshot.read_bytes()).hexdigest() == certified_hash
+
+    context = _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
+    assert context["source_hash"] == certified_hash
+    assert context["origin"] == result["campaign_origin"]
+
+
+def test_28_of_28_nonmatching_best_attempt_is_not_promotable(tmp_path: Path) -> None:
+    store, config, repo, _source_hash = promotable_campaign(
+        tmp_path, certified_retry=False
+    )
+    task = store.get_task("0x1000")
+
+    assert task["status"] == "pending"
+    assert task["best_result"]["status"] == "NONMATCHING"
+    assert task["best_result"]["matching_words"] == 28
+    with pytest.raises(ValueError, match="MATCHED"):
         _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
 
 
@@ -1165,9 +1247,14 @@ def test_best_source_snapshot_survives_a_lower_scoring_retry(tmp_path: Path) -> 
     )
     result = runner.run([Worker("openai", "openai", "openai/gpt-6-luna")], max_tasks=2)
     assert result["attempted"] == 2
-    checkpoint = store.get_task("0x1000")["checkpoint"]
+    task = store.get_task("0x1000")
+    checkpoint = task["checkpoint"]
     best_hash = hashlib.sha256(b"version-one").hexdigest()
     assert checkpoint["best_source_sha256"] == best_hash
+    assert task["best_result"]["source_sha256"] == best_hash
+    assert task["best_result"]["matching_words"] == 2
+    assert task["best_result"]["campaign_origin"]["attempt_number"] == 1
+    assert checkpoint["best_match"]["source_sha256"] == best_hash
     snapshot = repo / "build" / checkpoint["best_source_snapshot"]
     assert snapshot.read_text(encoding="utf-8") == "version-one"
 

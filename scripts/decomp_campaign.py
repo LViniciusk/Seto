@@ -759,7 +759,21 @@ class CampaignStore:
             previous_checkpoint = json.loads(row["checkpoint_json"])
             score = int(verification.get("matching_words", -1))
             previous_score = int(previous.get("matching_words", -1))
-            improved = score > previous_score
+            attempt_certified = is_deterministic_match(
+                verification,
+                expected_address=claim.numeric_address,
+                expected_size=size,
+            )
+            previous_certified = is_deterministic_match(
+                previous,
+                expected_address=claim.numeric_address,
+                expected_size=size,
+            )
+            improved = (
+                attempt_certified and not previous_certified
+            ) or (
+                attempt_certified == previous_certified and score > previous_score
+            )
             attempt_result = dict(verification)
             attempt_result["campaign_origin"] = {
                 "attempt_number": claim.attempt_number,
@@ -828,11 +842,7 @@ class CampaignStore:
                 raise ValueError("checkpoint metadata exceeds 128 KiB")
             if boundary_only:
                 status = "pending"
-            elif is_deterministic_match(
-                verification,
-                expected_address=claim.numeric_address,
-                expected_size=size,
-            ):
+            elif attempt_certified:
                 status = "matched"
             elif int(row["attempt_count"]) >= max_attempts_per_candidate:
                 status = "stalled"
