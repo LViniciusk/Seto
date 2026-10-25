@@ -29,6 +29,7 @@ from decomp_campaign import (  # noqa: E402
     load_config,
     prepare_worker_worktrees,
     _assert_worker_changes_scoped,
+    _extract_checkpoint,
     validate_export_evidence,
     validate_ghidra_log,
     validate_model_id,
@@ -789,6 +790,29 @@ def test_unclassified_agent_failure_does_not_fallback_to_other_provider(tmp_path
         "code": "context_unavailable",
     }
     assert store.provider_status("opencode") == "active"
+
+
+def test_extract_checkpoint_accepts_fenced_multiline_json() -> None:
+    text = (
+        "Worker summary.\n\n```json\n"
+        "{\n"
+        '  "checkpoint": {\n'
+        '    "next_experiment": "compare the full object",\n'
+        '    "limitations": [],\n'
+        '    "evidence_paths": []\n'
+        "  }\n"
+        "}\n"
+        "```\n"
+    )
+    output = json.dumps({"type": "text", "text": text})
+
+    checkpoint = _extract_checkpoint(output)
+
+    assert checkpoint == {
+        "next_experiment": "compare the full object",
+        "limitations": [],
+        "evidence_paths": [],
+    }
 
 
 def test_worker_can_continue_from_local_evidence_when_aimemory_is_unavailable(

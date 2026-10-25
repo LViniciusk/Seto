@@ -1356,7 +1356,7 @@ def _extract_checkpoint(output: str) -> dict[str, Any]:
             if not match:
                 continue
             try:
-                value = json.loads(text[match.start() :])
+                value, _ = json.JSONDecoder().raw_decode(text, match.start())
             except json.JSONDecodeError:
                 continue
         if isinstance(value, dict) and isinstance(value.get("checkpoint"), dict):
