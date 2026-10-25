@@ -770,6 +770,7 @@ def test_unclassified_agent_failure_does_not_fallback_to_other_provider(tmp_path
         store,
         opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees=worktrees,
+        verifier=lambda *_args: {},
         timeout_seconds=5,
     )
     result = runner.run(
@@ -782,7 +783,136 @@ def test_unclassified_agent_failure_does_not_fallback_to_other_provider(tmp_path
     assert result["attempted"] == 1
     assert store.get_task("0x1000")["status"] == "blocked"
     assert [attempt["provider"] for attempt in store.list_attempts()] == ["opencode"]
+    assert store.list_attempts()[0]["outcome"] == "context_unavailable"
+    assert store.get_task("0x1000")["checkpoint"]["last_diagnostic"] == {
+        "stage": "context",
+        "code": "context_unavailable",
+    }
     assert store.provider_status("opencode") == "active"
+
+
+def test_successful_worker_without_candidate_source_preserves_checkpoint_and_diagnosis(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    simulator = tmp_path / "success_without_source.py"
+    simulator.write_text(
+        "import json\n"
+        "checkpoint = {'next_experiment':'inspect block delay slot', 'limitations':['Ghidra evidence only']}\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':checkpoint})}))\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, simulator),
+        worktrees={"openai": worktree},
+        verifier=lambda *_args: pytest.fail("matcher must not run without a source"),
+    )
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+
+    assert runner._run_claim(Worker("openai", "openai", "openai/gpt-6-luna"), claim, None) == "blocked"
+
+    task = store.get_task("0x1000")
+    attempt = store.list_attempts()[0]
+    assert task["status"] == "blocked"
+    assert task["checkpoint"]["next_experiment"] == "inspect block delay slot"
+    assert task["checkpoint"]["limitations"] == ["Ghidra evidence only"]
+    assert task["checkpoint"]["last_diagnostic"] == {
+        "stage": "worker_return",
+        "code": "candidate_source_missing",
+    }
+    assert attempt["outcome"] == "candidate_source_missing"
+    assert attempt["failure_kind"] == "agent_error"
+    with store._connect() as db:
+        event_kinds = [row[0] for row in db.execute("SELECT kind FROM events ORDER BY id")]
+    assert "candidate_source_missing" in event_kinds
+
+
+def test_successful_worker_with_incomplete_matcher_result_is_local_error_without_leaks(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    simulator = tmp_path / "source_with_checkpoint.py"
+    simulator.write_text(
+        "import json\n"
+        "checkpoint = {'next_experiment':'recover missing function body', 'limitations':['compiled object has only 8 bytes']}\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':checkpoint})}))\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worker"
+    source = worktree / "decomp" / "src" / "eboot" / "func_00001000.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void func_00001000(void) { return; }\n", encoding="utf-8")
+
+    def matcher_incomplete(*_args):
+        raise ValueError("candidate .text is 8 bytes; private token sk-sensitive-secret")
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, simulator),
+        worktrees={"openai": worktree},
+        verifier=matcher_incomplete,
+    )
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+
+    assert runner._run_claim(Worker("openai", "openai", "openai/gpt-6-luna"), claim, None) == "blocked"
+
+    task = store.get_task("0x1000")
+    attempt = store.list_attempts()[0]
+    assert task["status"] == "blocked"
+    assert task["checkpoint"]["next_experiment"] == "recover missing function body"
+    assert task["checkpoint"]["limitations"] == ["compiled object has only 8 bytes"]
+    assert task["checkpoint"]["last_diagnostic"] == {
+        "stage": "matcher",
+        "code": "matcher_incomplete",
+    }
+    assert attempt["outcome"] == "matcher_incomplete"
+    assert attempt["failure_kind"] == "agent_error"
+    persisted = json.dumps(task["checkpoint"]) + json.dumps(attempt)
+    assert "sk-sensitive-secret" not in persisted
+    assert "8 bytes" in persisted  # safe, agent-provided limitation is retained
+
+
+def test_unknown_local_exception_is_classified_without_persisting_message(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    simulator = tmp_path / "source_with_checkpoint.py"
+    simulator.write_text(
+        "import json\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{'next_experiment':'retry'}})}))\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worker"
+    source = worktree / "decomp" / "src" / "eboot" / "func_00001000.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void func_00001000(void) { return; }\n", encoding="utf-8")
+
+    def broken_verifier(*_args):
+        raise RuntimeError("private path C:/Users/private/secret-token")
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, simulator),
+        worktrees={"openai": worktree},
+        verifier=broken_verifier,
+    )
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+    runner._run_claim(Worker("openai", "openai", "openai/gpt-6-luna"), claim, None)
+
+    task = store.get_task("0x1000")
+    assert task["checkpoint"]["last_diagnostic"] == {
+        "stage": "internal",
+        "code": "internal_error",
+    }
+    assert "C:/Users/private" not in json.dumps(task["checkpoint"])
+    assert "secret-token" not in json.dumps(task["checkpoint"])
 
 
 def test_provider_failures_cannot_exceed_candidate_attempt_limit(tmp_path: Path) -> None:
@@ -963,6 +1093,9 @@ def test_stop_and_resume_preserve_checkpoint_and_reuse_same_provider_session(
         "if not marker.exists():\n"
         " marker.write_text('started')\n"
         " time.sleep(30)\n"
+        "source = pathlib.Path('decomp/src/eboot/func_00001000.c')\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text('void func_00001000(void) { return; }\\n')\n"
         "text = json.dumps({'checkpoint': {'next_experiment': 'resume safely'}})\n"
         "print(json.dumps({'type': 'text', 'text': text}))\n",
         encoding="utf-8",
@@ -1785,14 +1918,17 @@ def test_worker_permission_audit_rejects_global_allow_and_shell_access() -> None
             {"action": "*", "resource": "*", "effect": "allow"},
             {"action": "*", "resource": "*", "effect": "deny"},
             {"action": "read", "resource": "*", "effect": "allow"},
+            {"action": "glob", "resource": "*", "effect": "allow"},
+            {"action": "grep", "resource": "*", "effect": "allow"},
             {
                 "action": "edit",
                 "resource": "decomp/src/eboot/func_*.c",
                 "effect": "allow",
             },
             {"action": "edit", "resource": "build/decomp-campaign/*", "effect": "allow"},
-            {"action": "ai_memory_memory_query", "resource": "*", "effect": "allow"},
-            {"action": "ai_memory_memory_read_page", "resource": "*", "effect": "allow"},
+            {"action": "execute", "resource": "*", "effect": "allow"},
+            {"action": "ai-memory_memory_query", "resource": "*", "effect": "allow"},
+            {"action": "ai-memory_memory_read_page", "resource": "*", "effect": "allow"},
             {"action": "external_directory", "resource": "*", "effect": "deny"},
             {"action": "subagent", "resource": "*", "effect": "deny"},
             {"action": "read", "resource": "*.env", "effect": "deny"},
@@ -1803,6 +1939,497 @@ def test_worker_permission_audit_rejects_global_allow_and_shell_access() -> None
     agent["permissions"].append({"action": "shell", "resource": "*", "effect": "allow"})
     assert not worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
     assert not worker_agent_policy_is_restricted([], "missing-agent")
+
+
+def _restricted_worker_agent(*, query_action: str = "ai-memory_memory_query") -> dict[str, object]:
+    return {
+        "id": "seto-decomp-worker",
+        "permissions": [
+            {"action": "*", "resource": "*", "effect": "deny"},
+            {"action": "read", "resource": "*", "effect": "allow"},
+            {"action": "glob", "resource": "*", "effect": "allow"},
+            {"action": "grep", "resource": "*", "effect": "allow"},
+            {"action": "edit", "resource": "decomp/src/eboot/func_*.c", "effect": "allow"},
+            {"action": "edit", "resource": "build/decomp-campaign/*", "effect": "allow"},
+            {"action": "execute", "resource": "*", "effect": "allow"},
+            {"action": query_action, "resource": "*", "effect": "allow"},
+            {"action": "ai-memory_memory_read_page", "resource": "*", "effect": "allow"},
+            {"action": "read", "resource": "*.env", "effect": "deny"},
+            {"action": "read", "resource": "*.env.*", "effect": "deny"},
+            {"action": "browser", "resource": "*", "effect": "deny"},
+        ],
+    }
+
+
+def test_worker_permission_audit_uses_real_mcp_ids_and_allows_only_read_tools() -> None:
+    agent = _restricted_worker_agent()
+
+    assert worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
+
+    permissions = agent["permissions"]
+    assert isinstance(permissions, list)
+
+    def effect(action: str) -> str | None:
+        matches = [item["effect"] for item in permissions if item["action"] == action]
+        return matches[-1] if matches else None
+
+    assert effect("ai-memory_memory_query") == "allow"
+    assert effect("ai-memory_memory_read_page") == "allow"
+    assert effect("ai-memory_memory_write_page") is None
+    assert effect("ai-memory_memory_message_send") is None
+    assert effect("shell") is None
+    assert effect("subagent") is None
+
+
+def test_worker_permission_audit_rejects_misnamed_tools_and_unsafe_overrides() -> None:
+    wrong_name = _restricted_worker_agent(query_action="ai_memory_memory_query")
+    assert not worker_agent_policy_is_restricted([wrong_name], "seto-decomp-worker")
+
+    no_code_mode = _restricted_worker_agent()
+    no_code_mode["permissions"] = [
+        rule for rule in no_code_mode["permissions"] if rule["action"] != "execute"
+    ]
+    assert not worker_agent_policy_is_restricted([no_code_mode], "seto-decomp-worker")
+
+    write_enabled = _restricted_worker_agent()
+    write_enabled["permissions"].append(
+        {"action": "ai-memory_memory_write_page", "resource": "*", "effect": "allow"}
+    )
+    assert not worker_agent_policy_is_restricted([write_enabled], "seto-decomp-worker")
+
+
+def test_ai_memory_connected_is_not_misreported_as_tool_availability() -> None:
+    report = decomp_campaign_module._ai_memory_exposure_report(
+        "✓ ai-memory  connected\n",
+        registered_tool_names=None,
+        worker_permissions_ready=True,
+    )
+
+    assert report == {
+        "connection": "CONNECTED",
+        "registered_tools": "UNVERIFIED",
+        "worker_permissions": "READY",
+        "available_to_agent": "UNVERIFIED",
+    }
+
+
+@pytest.mark.parametrize(
+    ("names", "permissions_ready", "registered", "available"),
+    [
+        ([], True, "BLOCKED", "BLOCKED"),
+        (["memory_query", "read_page"], True, "BLOCKED", "BLOCKED"),
+        (["memory_query", "memory_read_page"], False, "READY", "BLOCKED"),
+        (["memory_query", "memory_read_page"], True, "READY", "UNVERIFIED"),
+    ],
+)
+def test_ai_memory_exposure_checks_catalog_names_and_permissions(
+    names: list[str], permissions_ready: bool, registered: str, available: str
+) -> None:
+    report = decomp_campaign_module._ai_memory_exposure_report(
+        "✓ ai-memory  connected\n",
+        registered_tool_names=names,
+        worker_permissions_ready=permissions_ready,
+    )
+
+    assert report["registered_tools"] == registered
+    assert report["available_to_agent"] == available
+
+
+def test_ai_memory_exposure_requires_session_tool_introspection_for_ready() -> None:
+    report = decomp_campaign_module._ai_memory_exposure_report(
+        "✓ ai-memory  connected\n",
+        registered_tool_names=["memory_query", "memory_read_page"],
+        worker_permissions_ready=True,
+        effective_tool_names=["ai-memory_memory_query", "ai-memory_memory_read_page"],
+    )
+
+    assert report["registered_tools"] == "READY"
+    assert report["available_to_agent"] == "READY"
+
+
+def test_full_inconclusive_matcher_report_is_complete_and_retains_its_status() -> None:
+    report = strict_report(word_count=3)
+    report["function"] = "func_00001000"
+    report["status"] = "INCONCLUSIVE"
+    report["verified_decompilation"] = False
+    report["match"].update(
+        status="INCONCLUSIVE",
+        total_words=4,
+        limitations=["unresolved data identity"],
+    )
+
+    decomp_campaign_module._validate_complete_matcher_report(
+        report,
+        expected_address=0x1000,
+        expected_size=16,
+        expected_source_sha256="a" * 64,
+    )
+
+
+def test_incomplete_matcher_report_is_rejected_before_score_persistence() -> None:
+    report = strict_report(word_count=2)
+    report["function"] = "func_00001000"
+    report["status"] = "NONMATCHING"
+    report["verified_decompilation"] = False
+    report["match"].update(
+        status="NONMATCHING",
+        total_words=2,
+        difference_count=0,
+        relocation_issues=["size mismatch: candidate is shorter"],
+    )
+
+    with pytest.raises(decomp_campaign_module.MatcherIncomplete):
+        decomp_campaign_module._validate_complete_matcher_report(
+            report,
+            expected_address=0x1000,
+            expected_size=16,
+            expected_source_sha256="a" * 64,
+        )
+
+
+def test_checkpoint_sanitizer_preserves_only_known_diagnostic_codes() -> None:
+    safe = decomp_campaign_module._sanitize_checkpoint(
+        {
+            "last_diagnostic": {"stage": "matcher", "code": "matcher_incomplete"},
+            "ignored": "private path",
+        },
+        trusted_evidence=True,
+    )
+    unsafe = decomp_campaign_module._sanitize_checkpoint(
+        {"last_diagnostic": {"stage": "matcher", "code": "private token"}},
+        trusted_evidence=True,
+    )
+
+    assert safe == {"last_diagnostic": {"stage": "matcher", "code": "matcher_incomplete"}}
+    assert unsafe == {}
+
+
+def _historical_test_spec(path: str, content: bytes) -> dict[str, object]:
+    return {
+        "source_path": path,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "function": "func_00001000",
+        "matching_words": 26,
+        "total_words": 28,
+        "first_divergence": {
+            "address": "0x1004",
+            "candidate": "bnel with lhu in the delay slot",
+            "original": "bne followed by nop",
+        },
+    }
+
+
+def test_historical_hypothesis_is_hash_identity_checked_and_worker_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hypothesis = b"void func_00001000(void) { return; }\n"
+    repo = tmp_path / "repo"
+    source = campaign_build_path(repo, "seto038/hypothesis.c")
+    source.parent.mkdir(parents=True)
+    source.write_bytes(hypothesis)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "HISTORICAL_HYPOTHESES",
+        {"0x1000": _historical_test_spec("seto038/hypothesis.c", hypothesis)},
+    )
+    claims = [
+        replace(
+            Claim("0x1000", 112, "0x12345678", 1, "EXACT", worker, "openai", None, 1, 0, {}, {}),
+            worker_id=worker,
+        )
+        for worker in ("openai", "deepseek")
+    ]
+    for claim in claims:
+        (tmp_path / claim.worker_id).mkdir()
+
+    evidence = [
+        decomp_campaign_module._copy_known_historical_hypothesis(
+            repo, tmp_path / claim.worker_id, claim
+        )
+        for claim in claims
+    ]
+
+    assert [item["status"] for item in evidence] == ["available", "available"]
+    assert evidence[0]["sha256"] == hashlib.sha256(hypothesis).hexdigest()
+    assert evidence[0]["matching_words"] == 26
+    assert evidence[0]["total_words"] == 28
+    assert evidence[0]["first_divergence"]["address"] == "0x1004"
+    paths = [tmp_path / claim.worker_id / evidence[index]["path"] for index, claim in enumerate(claims)]
+    assert paths[0] != paths[1]
+    assert all(path.read_bytes() == hypothesis for path in paths)
+    assert all("NONMATCHING" in evidence[index]["classification"] for index in range(2))
+
+
+@pytest.mark.parametrize("failure", ["missing", "hash", "identity", "external", "symlink"])
+def test_historical_hypothesis_invalid_provenance_degrades_without_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    content = b"void func_00001000(void) { return; }\n"
+    repo = tmp_path / "repo"
+    source_path = "seto038/hypothesis.c"
+    source_content = b"void func_00002000(void) { return; }\n" if failure == "identity" else content
+    expected_hash = hashlib.sha256(source_content).hexdigest()
+    source = campaign_build_path(repo, source_path)
+    source.parent.mkdir(parents=True)
+    expected_identity = "func_00001000"
+    if failure != "missing":
+        source.write_bytes(source_content)
+    if failure == "hash":
+        expected_hash = "0" * 64
+    if failure == "external":
+        source_path = "../outside.c"
+    if failure == "symlink":
+        redirected = repo / "build" / "redirect"
+        redirected.symlink_to(tmp_path, target_is_directory=True)
+        source_path = "redirect/hypothesis.c"
+        redirected_source = tmp_path / "hypothesis.c"
+        redirected_source.write_bytes(content)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "HISTORICAL_HYPOTHESES",
+        {
+            "0x1000": {
+                "source_path": source_path,
+                "sha256": expected_hash,
+                "function": expected_identity,
+                "matching_words": 26,
+                "total_words": 28,
+                "first_divergence": {"address": "0x1004"},
+            }
+        },
+    )
+    worktree = tmp_path / "worker"
+    claim = Claim("0x1000", 112, "0x12345678", 1, "EXACT", "openai", "openai", None, 1, 0, {}, {})
+
+    evidence = decomp_campaign_module._copy_known_historical_hypothesis(repo, worktree, claim)
+
+    assert evidence["status"] == "unavailable"
+    assert evidence["reason"] in {
+        "missing",
+        "hash_mismatch",
+        "identity_mismatch",
+        "unsafe_path",
+    }
+    assert not (worktree / "build" / "decomp-campaign" / "openai" / "1000" / "evidence" / "historical" / "hypothesis.c").exists()
+
+
+def test_historical_hypothesis_conflict_does_not_overwrite_existing_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"void func_00001000(void) { return; }\n"
+    repo = tmp_path / "repo"
+    source = campaign_build_path(repo, "seto038/hypothesis.c")
+    source.parent.mkdir(parents=True)
+    source.write_bytes(content)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "HISTORICAL_HYPOTHESES",
+        {"0x1000": _historical_test_spec("seto038/hypothesis.c", content)},
+    )
+    worktree = tmp_path / "worker"
+    claim = Claim("0x1000", 112, "0x12345678", 1, "EXACT", "openai", "openai", None, 1, 0, {}, {})
+    destination = worktree / "build" / "decomp-campaign" / "openai" / "1000" / "evidence" / "historical" / "hypothesis.c"
+    destination.parent.mkdir(parents=True)
+    destination.write_text("existing different artifact", encoding="utf-8")
+    original = destination.read_bytes()
+
+    evidence = decomp_campaign_module._copy_known_historical_hypothesis(repo, worktree, claim)
+
+    assert evidence["status"] == "unavailable"
+    assert evidence["reason"] == "destination_conflict"
+    assert destination.read_bytes() == original
+
+
+def test_historical_hypothesis_removes_a_partial_copy_after_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"void func_00001000(void) { return; }\n"
+    repo = tmp_path / "repo"
+    source = campaign_build_path(repo, "seto038/hypothesis.c")
+    source.parent.mkdir(parents=True)
+    source.write_bytes(content)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "HISTORICAL_HYPOTHESES",
+        {"0x1000": _historical_test_spec("seto038/hypothesis.c", content)},
+    )
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    claim = Claim("0x1000", 112, "0x12345678", 1, "EXACT", "openai", "openai", None, 1, 0, {}, {})
+    destination = (
+        worktree
+        / "build"
+        / "decomp-campaign"
+        / "openai"
+        / "1000"
+        / "evidence"
+        / "historical"
+        / "hypothesis.c"
+    )
+    original_open = Path.open
+
+    class FailingWriter:
+        def __init__(self, output) -> None:
+            self.output = output
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.output.close()
+
+        def fileno(self):
+            return self.output.fileno()
+
+        def write(self, data: bytes) -> int:
+            self.output.write(data[:4])
+            self.output.flush()
+            raise OSError("simulated disk-full during copy")
+
+        def flush(self) -> None:
+            self.output.flush()
+
+    def failing_open(path: Path, *args, **kwargs):
+        output = original_open(path, *args, **kwargs)
+        if path == destination and args and args[0] == "xb":
+            return FailingWriter(output)
+        return output
+
+    monkeypatch.setattr(Path, "open", failing_open)
+
+    evidence = decomp_campaign_module._copy_known_historical_hypothesis(repo, worktree, claim)
+
+    assert evidence == {"status": "unavailable", "reason": "copy_failed"}
+    assert not destination.exists()
+
+
+def test_historical_hypothesis_keeps_better_checkpoint_and_source_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"void func_00001000(void) { return; }\n"
+    repo = tmp_path / "repo"
+    historical = campaign_build_path(repo, "seto038/hypothesis.c")
+    historical.parent.mkdir(parents=True)
+    historical.write_bytes(content)
+    history_spec = _historical_test_spec("seto038/hypothesis.c", content)
+    history_spec["matching_words"] = 3
+    history_spec["total_words"] = 4
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "HISTORICAL_HYPOTHESES",
+        {"0x1000": history_spec},
+    )
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    candidate_source = worktree / "decomp" / "src" / "eboot" / "func_00001000.c"
+    candidate_source.parent.mkdir(parents=True)
+    candidate_source.write_text("older worker source\n", encoding="utf-8")
+    best_source = b"void func_00001000(void) { return 1; }\n"
+    best_hash = hashlib.sha256(best_source).hexdigest()
+    snapshot_relative = f"decomp-campaign/checkpoints/00001000/{best_hash}.c"
+    snapshot = campaign_build_path(repo, snapshot_relative)
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_bytes(best_source)
+
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+    checkpoint = {
+        "best_source_sha256": best_hash,
+        "best_source_snapshot": snapshot_relative,
+        "best_match": {"status": "NONMATCHING", "matching_words": 3, "total_words": 4},
+    }
+    store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+    claim = replace(claim, checkpoint=checkpoint)
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"openai": worktree},
+        checkpoint_repo_root=repo,
+    )
+
+    prepared = runner._attach_historical_hypothesis(worktree, claim)
+    runner._restore_best_source(worktree, prepared)
+
+    assert prepared.checkpoint["best_source_sha256"] == best_hash
+    assert prepared.checkpoint["best_source_snapshot"] == snapshot_relative
+    assert prepared.checkpoint["historical_hypothesis"]["classification"] == (
+        "NONMATCHING / not certified"
+    )
+    assert candidate_source.read_bytes() == best_source
+
+
+def test_status_report_exposes_only_the_bounded_diagnostic(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+    store.fail(
+        claim,
+        Failure(
+            FailureKind.AGENT_ERROR,
+            diagnostic_stage="matcher",
+            diagnostic_code="matcher_incomplete",
+        ),
+    )
+    config = {
+        "execution": {},
+        "worktrees": {"root": "build/decomp-campaign/worktrees"},
+        "workers": {"openai": {"provider": "openai"}},
+    }
+
+    report = decomp_campaign_module._status_report(store, config, tmp_path)
+
+    assert report["blockers"] == [
+        {
+            "address": "0x1000",
+            "status": "blocked",
+            "diagnostic": {"stage": "matcher", "code": "matcher_incomplete"},
+        }
+    ]
+
+
+def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
+    claim = Claim(
+        "0x2c28c",
+        112,
+        "0x7187E0F0",
+        85,
+        "EXACT",
+        "openai",
+        "openai",
+        "ses-test",
+        2,
+        0,
+        {
+            "ghidra_log_path": "build/decomp-campaign/openai/2c28c/evidence/ghidra-attempt-2.log",
+            "historical_hypothesis": {
+                "status": "available",
+                "path": "build/decomp-campaign/openai/2c28c/evidence/historical/hypothesis.c",
+                "classification": "NONMATCHING / not certified",
+                "matching_words": 26,
+                "total_words": 28,
+                "first_divergence": {"address": "0x2c2c4"},
+            },
+            "best_match": {"status": "NONMATCHING", "difference_indices": [9]},
+            "next_experiment": "inspect delay slot",
+        },
+        {},
+    )
+
+    prompt = decomp_campaign_module._prompt(claim, claim.checkpoint, Path("worker"))
+
+    assert "ghidra-attempt-2.log" in prompt
+    assert "SetoAnalyzeEntry" in prompt or "28" in prompt
+    assert "build/seto035/export-triage.json" in prompt
+    assert "relocation" in prompt.lower() and "call site" in prompt.lower()
+    assert "NONMATCHING / not certified" in prompt
+    assert "0x2c2c4" in prompt
+    assert "26" in prompt and "28" in prompt
+    assert "optional" in prompt.lower()
+    assert "if retrieval is unavailable, report that limitation" in prompt
+    assert "first use" not in prompt.lower()
 
 
 def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
@@ -1887,7 +2514,10 @@ def test_unverified_inventory_item_must_pass_ghidra_before_matching(tmp_path: Pa
     )
     simulator = tmp_path / "boundary_then_match.py"
     simulator.write_text(
-        "import json, sys\n"
+        "import json, pathlib, sys\n"
+        "source = pathlib.Path('decomp/src/eboot/func_00001000.c')\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text('void func_00001000(void) { return; }\\n')\n"
         "text = json.dumps({'checkpoint': {'next_experiment': 'preserve exact boundary'}})\n"
         "print(json.dumps({'type': 'text', 'text': text}))\n",
         encoding="utf-8",
@@ -1993,13 +2623,18 @@ def test_two_simulated_sessions_handle_distinct_tasks_and_quota_fallback(
 
     simulator = tmp_path / "fake_opencode.py"
     simulator.write_text(
-        "import json, sys, time\n"
+        "import json, pathlib, sys, time\n"
         "args = sys.argv[1:]\n"
         "model = args[args.index('--model') + 1]\n"
         "time.sleep(0.08)\n"
         "if model.startswith('opencode/'):\n"
         " sys.stderr.write('insufficient_quota token=sk-supersecret')\n"
         " raise SystemExit(1)\n"
+        "title = args[args.index('--title') + 1].split()\n"
+        "address = int(title[2], 0)\n"
+        "source = pathlib.Path('decomp/src/eboot') / f'func_{address:08X}.c'\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text(f'void func_{address:08X}(void) {{ return; }}\\n')\n"
         "text = json.dumps({'checkpoint': {'next_experiment': 'retry from saved source'}})\n"
         "print(json.dumps({'type': 'text', 'text': text}))\n",
         encoding="utf-8",
