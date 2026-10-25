@@ -49,9 +49,13 @@ def test_ghidra_evidence_requires_exact_allegrex_body_and_instruction_count() ->
         _log(0x33D10, 0x33D4C).replace(
             "SETO_FUNCTION_BODY_RANGES=1", "SETO_FUNCTION_BODY_RANGES=2"
         ),
+        _log(0x33D10, 0x33D4C).replace(
+            "SETO_ADDRESSABLE_UNIT_SIZE=1", "SETO_ADDRESSABLE_UNIT_SIZE=2"
+        ),
         _log(0x33D10, 0x33D4C).rsplit("SETO_INSN=instruction", 1)[0],
+        _log(0x33D10, 0x33D4C) + "\nSETO_INSN=unexpected extra instruction",
     ),
 )
-def test_ghidra_evidence_rejects_unverified_boundaries(text: str) -> None:
+def test_ghidra_evidence_rejects_truncated_or_invalid_boundaries(text: str) -> None:
     with pytest.raises(ValueError, match="Ghidra boundary evidence rejected"):
         parse_ghidra_evidence(text, 0x33D10, 0x33D4C)

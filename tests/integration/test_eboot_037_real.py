@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from scripts import probe_common
+from scripts.triage_eboot_035 import parse_ghidra_evidence
 from seto import elf, exports, imports, mips
 from seto.hashing import sha256_file
 
@@ -82,19 +83,12 @@ def test_037_exports_boundaries_and_two_independent_real_matches() -> None:
         assert candidate.end == address + size
         ghidra_log = evidence_dir / f"{address:x}.log"
         assert ghidra_log.is_file() and not ghidra_log.is_symlink()
-        evidence = ghidra_log.read_text(encoding="utf-8", errors="replace")
-        for marker in (
-            "SETO_LANGUAGE=Allegrex:LE:32:default",
-            f"SETO_FUNCTION_START=0x{address:x}",
-            f"SETO_FUNCTION_END=0x{address + size:x}",
-            f"SETO_FUNCTION_BODY_START={address:08x}",
-            f"SETO_FUNCTION_BODY_END={address + size:08x}",
-            f"SETO_FUNCTION_BODY_ADDRESSES={size}",
-            "SETO_FUNCTION_BODY_RANGES=1",
-            "SETO_BOUNDARY_STATUS=EXACT",
-            "SETO_DECOMP_STATUS=OK",
-        ):
-            assert marker in evidence
+        evidence = parse_ghidra_evidence(
+            ghidra_log.read_text(encoding="utf-8", errors="replace"),
+            address,
+            address + size,
+        )
+        assert evidence["instruction_count"] == size // 4
 
         observed = {}
         for module_name, references in imports_by_module:

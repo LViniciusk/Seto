@@ -6306,7 +6306,7 @@ promovida sem equivalência. Para `0x9C98`, hipóteses estruturais renderam no
 máximo 4/33 com divergências novas, portanto a fonte de produção permanece no
 baseline. `0x33D10` permanece estritamente MATCHED 15/15.
 
-Como expansão alternativa, `0xD28C` (`libehsys/0xD3A120A4`) foi selecionada do
+Como expansão alternativa, `0xD28C` (`libehsys/0x476FD94A`) foi selecionada do
 inventário 035. Ghidra 12.1.3 confirmou `[0xD28C,0xD324)` como corpo Allegrex
 exato de 38 instruções, sem chamadas ou dados globais. As hipóteses C
 compilaram entre 31 e 35 words; o matcher não aceitou comparações truncadas e
@@ -6356,6 +6356,14 @@ Os PRX têm 42, 10 e 2 call sites reais para esses NIDs, respectivamente.
 | `0x37BC8` | `0xCABEA834` | Ghidra confirmou 18 instruções, um helper interno e 10 call sites reais; sem referências a dados. | Reconstruído e **MATCHED 18/18**. |
 | `0x388B4` | `0x5CBB9E43` | Ghidra confirmou 18 instruções, um helper interno e dois call sites reais; sem referências a dados. | Reconstruído e **MATCHED 18/18**. |
 
+Correção de identidade: o endereço `0xD28C` possui um único export comprovado,
+`libehsys/0x476FD94A`, no entry 1/slot 22. O ponteiro está em `0x6CE4C` e sua
+relocação `R_MIPS_32` tem addend válido `0xD28C`; não há alias adicional nesse
+endereço. `libhtml_view.prx` importa esse NID pelo stub `0x8A4` e tem cinco
+call sites reais (`0x458`, `0x470`, `0x488`, `0x4A0`, `0x4F0`). Não há export
+`0xD3A120A4` no endereço nem import/call site desse NID no PRX. O NID antigo em
+SETO-DECOMP-036 foi erro documental, corrigido aqui sem alteração do parser.
+
 Em `0x3F2B0`, a primeira hipótese tratava os limites como comparações unsigned e
 compilava para `sltiu`; os opcodes originais usam `slti`. Tornar explícita a
 conversão após mascarar os 16 bits corrigiu essa divergência causal, mas o CFG
@@ -6380,6 +6388,6 @@ em **16 MATCHED / 912 instruções**.
 - A integração 037 valida origem/hash das mídias, export/NID/relocação,
   fronteiras, Ghidra, call sites PRX, tamanho integral, matching estrito e
   caminhos de saída protegidos nível a nível.
-- Suíte completa Windows/Python 3.12: **833 passed, 43 skipped**; os skips são
+- Suíte completa Windows/Python 3.12 após R2: **835 passed, 43 skipped**; os skips são
   opt-ins de integração ou pré-requisitos específicos de plataforma.
 - `python -m compileall -q src scripts tests` e `git diff --check`: **clean**.
