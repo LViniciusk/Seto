@@ -6471,8 +6471,8 @@ compilada em diretórios independentes. SHA-256 de fonte/objeto:
 
 | Função | Fonte | Objeto |
 |---|---|---|
-| `0x38DB4` | `94a3a6e6686eefbaabb0252be463af0e4a8a40131d940b56db8bf881fc8cc53a` | `81b5ac578ed3b4ee12f4c448f0f9f3d0b6b5d3e28b0803a1f8d4457942dc5924` |
-| `0x36D1C` | `4a491e54a9e946b1f9b35ffc3b75cabc66a58c42677f3efac9116d2769c8e52d` | `dba5dba2595bbe765095d24dc898901093dd17126c56134e633b07e866515110` |
+| `0x38DB4` | `a9a91c2f1b1f2ac0820eb4b8d22fbecb3309b827962b778c9fb93ba97ed736f9` | `81b5ac578ed3b4ee12f4c448f0f9f3d0b6b5d3e28b0803a1f8d4457942dc5924` |
+| `0x36D1C` | `afadd574b82a2cf456d950bb7b23a8f9dcffe36e4c8e46a93c8fc3221f0cbc96` | `dba5dba2595bbe765095d24dc898901093dd17126c56134e633b07e866515110` |
 
 As fontes têm um único `R_MIPS_26` cada, para `func_00031308`; a equivalência
 foi provada com a relocation resolvida, sem limitações, diferenças ou
@@ -6498,3 +6498,70 @@ Hashes dos experimentos preservados em `build/seto038/`:
 - Suíte completa Windows/Python 3.12: **835 passed, 44 skipped**; os skips são
   opt-ins e pré-requisitos específicos de plataforma.
 - `python -m compileall -q src scripts tests` e `git diff --check`: **clean**.
+
+## SETO-DECOMP-040 — campanha EBOOT com integração segura
+
+### Resultado observado
+
+- Nenhuma inferência de modelo foi iniciada; banco 040 permanece com 8 alvos
+  `pending`, 12 `needs_boundary`, zero tentativas, zero funções C reconstruídas
+  nesta campanha e nenhum token/custo observado.
+- OpenAI: **BLOCKED**. `openai/gpt-6-luna` aparece no catálogo e `opencode auth
+  list` mostra OpenAI `stored`, mas não revela a modalidade de autenticação. A
+  conta/rota incluída não foi comprovada e o uso pode gerar cobrança.
+- DeepSeek Free: **BLOCKED**. O modelo exato aparece no catálogo, mas o provider
+  OpenCode não consta em `auth list`; acesso efetivo não foi verificado.
+- Ghidra, MWCC PSP 3.0.1 build 219 e wibo permanecem **READY** no ambiente
+  local. `doctor` agora relata motivos de bloqueio por worker, sem inferir READY
+  a partir apenas de catálogo ou autenticação armazenada.
+- Baselines preservados: **EBOOT 8 MATCHED / 206 instruções** e **PRXs 16
+  MATCHED / 912 instruções**. Nenhuma fonte de produção foi adicionada nesta
+  tarefa.
+
+### Mudanças de fluxo e evidências
+
+- Substituída a barreira de rodadas do scheduler por loops independentes com
+  `Condition`: um worker pode pegar a próxima função antes de outro terminar.
+  O teto global de tentativas é reservado atomicamente em SQLite, inclusive
+  entre dois processos `run`; fila de piloto restringe alvos a `0x2C28C` e
+  `0x4217C`.
+- Preflight seleciona apenas providers READY; autorizações de uso e modo de
+  custo são específicas por worker. O piloto limita-se a quatro tentativas / 30
+  minutos (duas tentativas com apenas um provider); expansão fica bloqueada até
+  revisão do piloto e autorização separada, com teto de 40 tentativas / 2 horas.
+- O agente OpenCode de campanha nega shell, subagentes e diretórios externos,
+  bloqueia edits amplos e só libera fontes `func_*.c`/artefatos de campanha e
+  AIMemory query/read. A auditoria lê as permissões efetivas em `debug agents`,
+  inclusive em cada worktree. Sessões são criadas/retomadas com agente e modelo
+  exatos; sessão legada com agente amplo não é reutilizada.
+- Logs Ghidra só são reutilizados após conferir escopo worker/endereço, boundary
+  exato, SHA-256 e revalidação do EBOOT/export. Cache ausente ou inválido causa
+  nova análise; não é aceito como evidência.
+- `promote --address` exige fonte checkpoint hash-verificada, dois reports
+  completos, origem/session, Ghidra e export íntegros, ausência de conflito e
+  executa dois novos builds MWCC/matcher antes de copiar a fonte. Registra
+  sessão, hashes e resultado na documentação. Nenhuma promoção foi elegível
+  durante esta execução bloqueada.
+
+### Testes e regressões
+
+- TDD RED/GREEN: o teste do worker rápido falhou com agendamento por rodadas;
+  após os loops independentes passou. O teste concorrente observou seis tentativas
+  para limite três antes da reserva SQLite; depois passou com exatamente três.
+  A retomada de sessão com agente `build` e o relatório matcher com `provenance`
+  inválido também falharam primeiro e passaram após as correções. Os testes de
+  READY/custo e auditoria de permissões foram adicionados antes dos helpers
+  correspondentes; a primeira coleta falhou por símbolos ainda ausentes e a
+  bateria passou após a implementação.
+- Suíte completa Windows / Python 3.12: **875 passed, 44 skipped**.
+- `compileall` e `git diff --check`: **clean**.
+- Integração real 038 em WSL2/Python 3.12.3: corpo de
+  `test_038_exports_boundaries_and_two_independent_real_matches` executado
+  integralmente; WSL não tem pytest instalado, então o harness de marcação foi
+  substituído por chamada direta da função, sem mocks de Ghidra, MWCC, matcher,
+  mídia ou dados. Os dois fontes certificados foram recompilados e comparados
+  duas vezes cada: `0x38DB4` 63/63, objeto
+  `81b5ac578ed3b4ee12f4c448f0f9f3d0b6b5d3e28b0803a1f8d4457942dc5924`; e
+  `0x36D1C` 28/28, objeto
+  `dba5dba2595bbe765095d24dc898901093dd17126c56134e633b07e866515110`.
+  Isso revalida o baseline existente, não acrescenta progresso à campanha 040.

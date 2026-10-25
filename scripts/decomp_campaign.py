@@ -13,6 +13,7 @@ import argparse
 import concurrent.futures
 import datetime as dt
 import email.utils
+import fnmatch
 import hashlib
 import json
 import os
@@ -104,6 +105,7 @@ class Worker:
     worker_id: str
     provider: str
     model: str
+    agent: str = "seto-decomp-worker"
 
 
 @dataclass(frozen=True)
@@ -292,6 +294,8 @@ def is_strict_match(
     try:
         match = report["match"]
         provenance = report["provenance"]
+        if not isinstance(match, dict) or not isinstance(provenance, dict):
+            return False
         expected_words = expected_size // 4
         return bool(
             report.get("status") == "MATCHED"
@@ -311,7 +315,7 @@ def is_strict_match(
             and match.get("limitations") == []
             and match.get("relocation_issues") == []
         )
-    except (KeyError, TypeError, ValueError):
+    except (AttributeError, KeyError, TypeError, ValueError):
         return False
 
 
@@ -366,6 +370,40 @@ def campaign_build_path(repo_root: Path, relative: str | Path) -> Path:
     except ValueError as exc:
         raise ValueError("build path escapes the allowed build tree") from exc
     return target
+
+
+def validated_cached_ghidra_boundary(
+    worktree: Path, claim: Claim
+) -> dict[str, Any] | None:
+    """Reuse only a hash-checked exact Ghidra log bound to this worker and address."""
+    log_relative = claim.checkpoint.get("ghidra_log_path")
+    log_digest = claim.checkpoint.get("ghidra_log_sha256")
+    if log_relative is None and log_digest is None:
+        return None
+    if (
+        claim.boundary_status != "EXACT"
+        or not isinstance(log_relative, str)
+        or not isinstance(log_digest, str)
+        or not HEX_SHA256.fullmatch(log_digest)
+    ):
+        raise ValueError("cached Ghidra checkpoint is incomplete or not bound to an exact boundary")
+    address = claim.address.removeprefix("0x").lower()
+    expected_root = f"decomp-campaign/{claim.worker_id}/{address}/evidence/"
+    normalized = log_relative.replace("\\", "/")
+    if not normalized.startswith(expected_root) or not re.fullmatch(
+        re.escape(expected_root) + r"ghidra-attempt-[1-9][0-9]*\.log", normalized
+    ):
+        raise ValueError("cached Ghidra checkpoint path is outside this worker/address evidence")
+    log_path = campaign_build_path(worktree, normalized)
+    if log_path.is_symlink() or not log_path.is_file() or log_path.stat().st_size > 2_000_000:
+        raise ValueError("cached Ghidra evidence is missing, unsafe, or too large")
+    content = log_path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != log_digest:
+        raise ValueError("cached Ghidra evidence hash does not match its checkpoint")
+    boundary = validate_ghidra_log(content.decode("utf-8", errors="replace"), claim.numeric_address)
+    if boundary["size_bytes"] != claim.size_bytes:
+        raise ValueError("cached Ghidra boundary conflicts with the exact candidate size")
+    return boundary
 
 
 class CampaignStore:
@@ -500,11 +538,18 @@ class CampaignStore:
         *,
         lease_seconds: float = 1800,
         max_attempts_per_candidate: int = 8,
+        max_total_attempts: int | None = None,
+        eligible_addresses: Sequence[str] | None = None,
         now: float | None = None,
     ) -> Claim | None:
         now = time.time() if now is None else now
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if max_total_attempts is not None:
+                total_attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+                if total_attempts >= max_total_attempts:
+                    db.commit()
+                    return None
             db.execute(
                 "INSERT OR IGNORE INTO providers(provider,status,updated_at) VALUES (?,'active',?)",
                 (provider, now),
@@ -528,13 +573,23 @@ class CampaignStore:
                    WHERE status IN ('pending','needs_boundary') AND attempt_count>=?""",
                 (now, max_attempts_per_candidate),
             )
+            address_clause = ""
+            parameters: list[Any] = [now, max_attempts_per_candidate, provider]
+            if eligible_addresses is not None:
+                normalized_addresses = sorted({item.lower() for item in eligible_addresses})
+                if not normalized_addresses:
+                    db.commit()
+                    return None
+                address_clause = " AND address IN (" + ",".join("?" for _ in normalized_addresses) + ")"
+                parameters.extend(normalized_addresses)
             row = db.execute(
                 """SELECT * FROM candidates
                 WHERE status IN ('pending','needs_boundary') AND available_at<=?
                   AND attempt_count<?
-                  AND (preferred_provider IS NULL OR preferred_provider=?)
-                ORDER BY priority DESC,attempt_count ASC,address ASC LIMIT 1""",
-                (now, max_attempts_per_candidate, provider),
+                  AND (preferred_provider IS NULL OR preferred_provider=?)"""
+                + address_clause
+                + " ORDER BY priority DESC,attempt_count ASC,address ASC LIMIT 1",
+                parameters,
             ).fetchone()
             if row is None:
                 db.commit()
@@ -705,7 +760,14 @@ class CampaignStore:
             score = int(verification.get("matching_words", -1))
             previous_score = int(previous.get("matching_words", -1))
             improved = score > previous_score
-            best = verification if improved or not previous else previous
+            attempt_result = dict(verification)
+            attempt_result["campaign_origin"] = {
+                "attempt_number": claim.attempt_number,
+                "worker_id": claim.worker_id,
+                "provider": claim.provider,
+                "session_id": claim.session_id,
+            }
+            best = attempt_result if improved or not previous else previous
             boundary_only = verification.get("status") == "BOUNDARY_VALIDATED"
             checkpoint = _sanitize_checkpoint(checkpoint, trusted_evidence=True)
             if not boundary_only:
@@ -1161,8 +1223,10 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
         "relevant MIPS/MWCC subsystem; if retrieval is unavailable, report that limitation. "
         "Never write, annotate, or send checkpoints to AIMemory. Keep the candidate C source "
         "at its prescribed path and all auxiliary artifacts in the worker build directory. "
-        "First revalidate the export/NID, references, and exact Ghidra boundary. Compile and compare the complete function "
-        "with scripts/match_function.py and the configured MWCC PSP 3.0.1 toolchain. "
+        "Inspect the export/NID, references, and exact Ghidra boundary evidence already "
+        "generated for this attempt. Do not invoke shell commands: the restricted worker "
+        "agent has no shell permission. The orchestrator compiles and compares the complete "
+        "function with scripts/match_function.py and the configured MWCC PSP 3.0.1 toolchain. "
         "Never claim MATCHED from partial words: the orchestrator independently runs two "
         "full builds before certification. Keep only this function's source and evidence "
         "at the prescribed source path and evidence under its worker build directory. "
@@ -1207,6 +1271,7 @@ class CampaignRunner:
         expected_eboot_sha256: str | None = None,
         checkpoint_repo_root: Path | None = None,
         max_retry_after_seconds: float = 900,
+        candidate_addresses: Iterable[str] | None = None,
     ):
         self.store = store
         self.command = list(opencode_command)
@@ -1224,6 +1289,11 @@ class CampaignRunner:
         self.wsl_distro = wsl_distro
         self.expected_eboot_sha256 = expected_eboot_sha256
         self.max_retry_after_seconds = max(1.0, max_retry_after_seconds)
+        self.candidate_addresses = (
+            None
+            if candidate_addresses is None
+            else {f"0x{int(address, 0):x}" for address in candidate_addresses}
+        )
         self.checkpoint_repo_root = (
             Path(checkpoint_repo_root).resolve(strict=True)
             if checkpoint_repo_root is not None
@@ -1311,20 +1381,27 @@ class CampaignRunner:
         claim: Claim,
         worktree: Path,
         deadline: float | None,
+        *,
+        agent: str = "seto-decomp-worker",
+        model: str | None = None,
     ) -> str:
+        payload: dict[str, Any] = {
+            "title": f"Seto EBOOT {claim.address} {claim.worker_id}",
+            "location": {"directory": str(worktree.resolve())},
+            "agent": agent,
+        }
+        if model is not None:
+            provider_id, separator, model_id = model.partition("/")
+            if not separator or not provider_id or not model_id:
+                raise ValueError("worker model must use provider/model form")
+            payload["model"] = {"providerID": provider_id, "id": model_id}
         result = self._api_request(
             worktree,
             [
                 "post",
                 "/api/session",
                 "--data",
-                json.dumps(
-                    {
-                        "title": f"Seto EBOOT {claim.address} {claim.worker_id}",
-                        "location": {"directory": str(worktree.resolve())},
-                    },
-                    separators=(",", ":"),
-                ),
+                json.dumps(payload, separators=(",", ":")),
             ],
             deadline,
         )
@@ -1337,7 +1414,13 @@ class CampaignRunner:
         return session_id
 
     def _ensure_session(
-        self, claim: Claim, worktree: Path, deadline: float | None
+        self,
+        claim: Claim,
+        worktree: Path,
+        deadline: float | None,
+        *,
+        agent: str = "seto-decomp-worker",
+        model: str | None = None,
     ) -> Claim:
         """Reuse an existing provider session, or create/bind one via the V2 API."""
         session_id = claim.session_id
@@ -1350,6 +1433,15 @@ class CampaignRunner:
                 if (
                     self._session_id(data.get("id")) == session_id
                     and self._same_location(data, worktree)
+                    and data.get("agent") == agent
+                    and (
+                        model is None
+                        or data.get("model")
+                        == {
+                            "providerID": model.partition("/")[0],
+                            "id": model.partition("/")[2],
+                        }
+                    )
                 ):
                     return claim
             elif not (
@@ -1358,7 +1450,9 @@ class CampaignRunner:
             ):
                 raise ValueError("OpenCode could not validate the saved session")
 
-        session_id = self._create_session(claim, worktree, deadline)
+        session_id = self._create_session(
+            claim, worktree, deadline, agent=agent, model=model
+        )
         return self.store.bind_session(claim, session_id)
 
     def _argv(self, worker: Worker, claim: Claim, prompt: str) -> list[str]:
@@ -1369,6 +1463,8 @@ class CampaignRunner:
             "run",
             "--model",
             worker.model,
+            "--agent",
+            worker.agent,
             "--format",
             "json",
             "--session",
@@ -1454,6 +1550,14 @@ class CampaignRunner:
             if observed != self.expected_eboot_sha256.lower():
                 raise ValueError("local EBOOT hash differs from the certified baseline")
         validate_export_evidence(triage, claim.address, claim.nid)
+        try:
+            cached_boundary = validated_cached_ghidra_boundary(worktree, claim)
+        except ValueError:
+            # An invalid cache is never trusted; the current attempt will request
+            # a fresh Ghidra proof below instead of stranding the candidate.
+            cached_boundary = None
+        if cached_boundary is not None:
+            return replace(claim, checkpoint=dict(claim.checkpoint))
         if os.name == "nt":
             if not self.ghidra_windows_home:
                 raise ValueError("machine-local Windows Ghidra home is not configured")
@@ -1582,7 +1686,10 @@ class CampaignRunner:
             raise ValueError("Ghidra log must remain in this worker's function build directory")
         if log_path.is_symlink() or not log_path.is_file() or log_path.stat().st_size > 2_000_000:
             raise ValueError("Ghidra evidence log is absent, unsafe, or too large")
-        boundary = validate_ghidra_log(log_path.read_text(encoding="utf-8", errors="replace"), claim.numeric_address)
+        log_content = log_path.read_bytes()
+        if hashlib.sha256(log_content).hexdigest() != checkpoint.get("ghidra_log_sha256"):
+            raise ValueError("Ghidra evidence changed after the orchestrator checkpointed its hash")
+        boundary = validate_ghidra_log(log_content.decode("utf-8", errors="replace"), claim.numeric_address)
         triage_path = worktree / "build" / "seto035" / "export-triage.json"
         if triage_path.is_symlink() or not triage_path.is_file():
             raise ValueError("local real-triage report is missing in the worker worktree")
@@ -1767,7 +1874,9 @@ class CampaignRunner:
         try:
             if self.auto_preflight:
                 claim = self._prepare_claim(worktree, claim, deadline)
-            claim = self._ensure_session(claim, worktree, deadline)
+            claim = self._ensure_session(
+                claim, worktree, deadline, agent=worker.agent, model=worker.model
+            )
             self._restore_best_source(worktree, claim)
             protected_before = _file_manifest(worktree) if self.auto_preflight else {}
             changes_before = _worktree_status_snapshot(worktree) if self.auto_preflight else {}
@@ -1858,6 +1967,8 @@ class CampaignRunner:
     def run(self, workers: Sequence[Worker], *, max_tasks: int) -> dict[str, Any]:
         if max_tasks <= 0:
             raise ValueError("max_tasks must be positive")
+        if len({worker.worker_id for worker in workers}) != len(workers):
+            raise ValueError("worker identifiers must be unique")
         for worker in workers:
             validate_model_id(worker.model, {"openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"})
             if worker.worker_id not in self.worktrees:
@@ -1871,34 +1982,86 @@ class CampaignRunner:
             else time.monotonic() + self.max_duration_seconds
         )
         outcomes: list[str] = []
-        try:
-            while len(outcomes) < max_tasks and not self.store.stop_requested():
-                if deadline is not None and time.monotonic() >= deadline:
-                    break
-                # Reserve a distinct task for each available worker before the
-                # round starts. Re-check only after every process exits so that
-                # quota fallback released by the last process is never stranded.
-                round_claims: list[tuple[Worker, Claim]] = []
-                for worker in workers:
-                    if len(outcomes) + len(round_claims) >= max_tasks:
-                        break
+        condition = threading.Condition()
+        attempts_started = 0
+        attempts_claiming = 0
+        attempts_active = 0
+        completion_generation = 0
+
+        def stop_or_expired() -> bool:
+            return self.store.stop_requested() or (
+                deadline is not None and time.monotonic() >= deadline
+            )
+
+        def worker_loop(worker: Worker) -> None:
+            nonlocal attempts_started, attempts_claiming, attempts_active
+            nonlocal completion_generation
+            while True:
+                with condition:
+                    while True:
+                        if stop_or_expired() or attempts_started >= max_tasks:
+                            return
+                        if attempts_started + attempts_claiming < max_tasks:
+                            attempts_claiming += 1
+                            break
+                        if attempts_active == 0 and attempts_claiming == 0:
+                            return
+                        condition.wait()
+
+                try:
                     claim = self.store.claim_next(
                         worker.worker_id,
                         worker.provider,
                         lease_seconds=self.lease_seconds,
                         max_attempts_per_candidate=self.max_attempts_per_candidate,
+                        max_total_attempts=max_tasks,
+                        eligible_addresses=self.candidate_addresses,
                     )
+                except BaseException:
+                    with condition:
+                        attempts_claiming -= 1
+                        condition.notify_all()
+                    raise
+
+                with condition:
+                    attempts_claiming -= 1
                     if claim is not None:
-                        round_claims.append((worker, claim))
-                if not round_claims:
-                    break
-                with concurrent.futures.ThreadPoolExecutor(max_workers=len(round_claims)) as pool:
-                    futures = [
-                        pool.submit(self._run_claim, worker, claim, deadline)
-                        for worker, claim in round_claims
-                    ]
+                        attempts_started += 1
+                        attempts_active += 1
+                        condition.notify_all()
+                    else:
+                        observed_generation = completion_generation
+                        condition.notify_all()
+                        # A different worker may finish, hit quota, and release a
+                        # task for this provider. Sleep on that state transition;
+                        # do not wait for every worker in a scheduling round.
+                        while (
+                            completion_generation == observed_generation
+                            and (attempts_active > 0 or attempts_claiming > 0)
+                        ) and not stop_or_expired() and attempts_started < max_tasks:
+                            condition.wait()
+                        if attempts_active == 0 and attempts_claiming == 0:
+                            if completion_generation == observed_generation:
+                                return
+                        continue
+
+                try:
+                    outcome = self._run_claim(worker, claim, deadline)
+                finally:
+                    with condition:
+                        attempts_active -= 1
+                        completion_generation += 1
+                        condition.notify_all()
+                with condition:
+                    outcomes.append(outcome)
+                    condition.notify_all()
+
+        try:
+            if workers:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(workers)) as pool:
+                    futures = [pool.submit(worker_loop, worker) for worker in workers]
                     for future in futures:
-                        outcomes.append(future.result())
+                        future.result()
         except KeyboardInterrupt:
             self.store.request_stop()
             raise
@@ -2053,6 +2216,256 @@ def validate_export_evidence(path: Path, address: str, nid: str) -> None:
         raise ValueError("candidate lacks real importing call sites or has table limitations")
 
 
+def _promotion_context(
+    store: CampaignStore,
+    repo_root: Path,
+    config: dict[str, Any],
+    address: str,
+) -> dict[str, Any]:
+    """Validate every persisted input before fresh integration builds are run."""
+    try:
+        numeric_address = int(address, 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("promotion address must be hexadecimal") from exc
+    if not 0 <= numeric_address <= 0xFFFFFFFF:
+        raise ValueError("promotion address is outside the 32-bit EBOOT address space")
+    task_address = f"0x{numeric_address:x}"
+    task = store.get_task(task_address)
+    if task["status"] != "matched" or task["boundary_status"] != "EXACT":
+        raise ValueError("only an EXACT, campaign-certified MATCHED function can be promoted")
+    size_bytes = int(task["size_bytes"])
+    source_hash = task["checkpoint"].get("best_source_sha256")
+    snapshot_relative = task["checkpoint"].get("best_source_snapshot")
+    result = task["best_result"]
+    if not isinstance(result, dict):
+        raise ValueError("campaign has no structured best result")
+    if not isinstance(source_hash, str) or not HEX_SHA256.fullmatch(source_hash):
+        raise ValueError("campaign checkpoint has no valid best-source SHA-256")
+    expected_snapshot = f"decomp-campaign/checkpoints/{numeric_address:08x}/{source_hash}.c"
+    if snapshot_relative != expected_snapshot or result.get("source_snapshot_path") != expected_snapshot:
+        raise ValueError("best-source checkpoint path does not match its address/hash")
+    source = campaign_build_path(repo_root, expected_snapshot)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("best-source checkpoint is missing or unsafe")
+    if hashlib.sha256(source.read_bytes()).hexdigest() != source_hash:
+        raise ValueError("best-source checkpoint hash does not match its contents")
+    if not is_deterministic_match(
+        result,
+        expected_address=numeric_address,
+        expected_size=size_bytes,
+    ):
+        raise ValueError("stored best result is not a complete deterministic MATCHED result")
+    if any(
+        report.get("provenance", {}).get("source_sha256") != source_hash
+        for report in result["reports"]
+    ):
+        raise ValueError("stored matcher reports do not certify the checkpoint source hash")
+
+    origin = result.get("campaign_origin")
+    if not isinstance(origin, dict):
+        raise ValueError("best result is missing campaign worker/session provenance")
+    worker_id = origin.get("worker_id")
+    worker_config = config.get("workers", {}).get(worker_id)
+    session_id = origin.get("session_id")
+    if (
+        not isinstance(worker_id, str)
+        or not isinstance(worker_config, dict)
+        or origin.get("provider") != worker_config.get("provider")
+        or not isinstance(session_id, str)
+        or not re.fullmatch(r"ses_[A-Za-z0-9_-]+", session_id)
+        or not isinstance(origin.get("attempt_number"), int)
+        or origin["attempt_number"] <= 0
+    ):
+        raise ValueError("campaign worker/session provenance is invalid")
+
+    worker_root_rel = Path(config["worktrees"]["root"]).relative_to("build") / worker_id
+    worker_root = campaign_build_path(repo_root, worker_root_rel)
+    if worker_root.is_symlink() or not worker_root.is_dir():
+        raise ValueError("origin worker worktree is missing or unsafe")
+    evidence_claim = Claim(
+        address=task_address,
+        size_bytes=size_bytes,
+        nid=task["nid"],
+        priority=int(task["priority"]),
+        boundary_status=task["boundary_status"],
+        worker_id=worker_id,
+        provider=str(origin["provider"]),
+        session_id=session_id,
+        attempt_number=int(origin.get("attempt_number", 0)),
+        lease_until=0,
+        checkpoint=task["checkpoint"],
+        evidence=task["evidence"],
+    )
+    boundary = validated_cached_ghidra_boundary(worker_root, evidence_claim)
+    if boundary is None or result.get("ghidra_boundary") != boundary:
+        raise ValueError("best result lacks matching hash-checked exact Ghidra evidence")
+    if result.get("ghidra_log_sha256") != task["checkpoint"].get("ghidra_log_sha256"):
+        raise ValueError("Ghidra report hash differs from the campaign checkpoint")
+
+    eboot = repo_root / config["inputs"]["eboot"]
+    triage = repo_root / config["inputs"]["triage_report"]
+    if any(path.is_symlink() or not path.is_file() for path in (eboot, triage)):
+        raise ValueError("private EBOOT or export/import triage is missing or unsafe")
+    if hashlib.sha256(eboot.read_bytes()).hexdigest() != config["inputs"]["eboot_sha256"].lower():
+        raise ValueError("private EBOOT hash differs from the campaign baseline")
+    validate_export_evidence(triage, task_address, task["nid"])
+
+    destination = _safe_worktree_path(
+        repo_root, Path("decomp/src/eboot") / f"func_{numeric_address:08X}.c"
+    )
+    if destination.is_symlink():
+        raise ValueError("certified source destination is a symlink")
+    if destination.exists():
+        if not destination.is_file():
+            raise ValueError("certified source destination is not a regular file")
+        existing_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
+        if existing_hash != source_hash:
+            raise ValueError("promotion conflicts with an existing certified source")
+    return {
+        "address": task_address,
+        "numeric_address": numeric_address,
+        "size_bytes": size_bytes,
+        "nid": task["nid"],
+        "source_hash": source_hash,
+        "source": source,
+        "destination": destination,
+        "origin": origin,
+        "result": result,
+        "boundary": boundary,
+        "worker_root": worker_root,
+    }
+
+
+def _append_promotion_documentation(repo_root: Path, record: dict[str, Any]) -> None:
+    path = repo_root / "docs" / "decomp-progress.md"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("decompilation progress documentation is missing or unsafe")
+    existing = path.read_text(encoding="utf-8")
+    heading = "## SETO-DECOMP-040 — Promoções certificadas"
+    address = record["address"]
+    source_hash = record["source_sha256"]
+    session_id = record["session_id"]
+    object_hashes = ", ".join(record["object_sha256"])
+    entry = (
+        f"- `{address}` — {record['size_bytes'] // 4} instruções, source SHA-256 "
+        f"`{source_hash}`; origem `{record['worker_id']}` / sessão `{session_id}`; "
+        f"dois builds MWCC certificados: `{object_hashes}`.\n"
+    )
+    if heading in existing:
+        section_start = existing.index(heading)
+        section_end = existing.find("\n## ", section_start + len(heading))
+        section = existing[section_start:] if section_end < 0 else existing[section_start:section_end]
+        previous = [line for line in section.splitlines() if line.startswith(f"- `{address}` ")]
+        if previous:
+            if len(previous) == 1 and source_hash in previous[0] and session_id in previous[0]:
+                return
+            raise ValueError("progress documentation already records a conflicting promotion")
+        section_suffix = existing[section_end:] if section_end >= 0 else ""
+        updated = existing[:section_start] + section.rstrip() + "\n" + entry + section_suffix
+    else:
+        updated = existing.rstrip() + "\n\n" + heading + "\n\n" + entry
+    temporary = path.with_name(path.name + ".promotion.tmp")
+    if temporary.exists() or temporary.is_symlink():
+        raise ValueError("refusing to overwrite a progress-documentation temporary")
+    try:
+        temporary.write_text(updated, encoding="utf-8", newline="\n")
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def promote_campaign_source(
+    store: CampaignStore,
+    config: dict[str, Any],
+    repo_root: Path,
+    address: str,
+) -> dict[str, Any]:
+    """Revalidate a stored candidate with two new MWCC builds, then integrate it."""
+    repo_root = repo_root.resolve(strict=True)
+    context = _promotion_context(store, repo_root, config, address)
+    if store.stop_requested():
+        raise ValueError("campaign stop is active; clear it before source integration")
+    source = context["source"]
+    destination = context["destination"]
+    source_hash = context["source_hash"]
+    numeric_address = context["numeric_address"]
+    eboot = repo_root / config["inputs"]["eboot"]
+    mwcc_config = repo_root / config["toolchain"]["mwcc_config"]
+    matcher = repo_root / "scripts" / "match_function.py"
+    if any(path.is_symlink() or not path.is_file() for path in (mwcc_config, matcher)):
+        raise ValueError("local MWCC configuration or production matcher is missing or unsafe")
+    origin = context["origin"]
+    claim = Claim(
+        address=context["address"],
+        size_bytes=context["size_bytes"],
+        nid=context["nid"],
+        priority=0,
+        boundary_status="EXACT",
+        worker_id="integration",
+        provider=str(origin["provider"]),
+        session_id=str(origin["session_id"]),
+        attempt_number=int(origin["attempt_number"]),
+        lease_until=0,
+        checkpoint={},
+        evidence={},
+    )
+    verifier = CampaignRunner(
+        store,
+        opencode_command=["opencode"],
+        worktrees={"integration": repo_root},
+        output_limit=int(config["limits"]["max_output_bytes"]),
+        wsl_distro=config["toolchain"]["wsl_distro"],
+    )
+    if os.name == "nt":
+        reports = verifier._run_matcher_wsl(
+            repo_root, claim, source, eboot, mwcc_config, matcher
+        )
+    else:
+        reports = verifier._run_matcher_native(
+            repo_root, claim, source, eboot, mwcc_config, matcher
+        )
+    objects = [str(report.get("provenance", {}).get("object_sha256", "")) for report in reports]
+    if not all(
+        is_strict_match(
+            report,
+            expected_address=numeric_address,
+            expected_size=context["size_bytes"],
+        )
+        and report.get("provenance", {}).get("source_sha256") == source_hash
+        for report in reports
+    ) or len(objects) != 2 or objects[0] != objects[1]:
+        raise ValueError("fresh promotion builds did not produce two deterministic full MATCHED reports")
+
+    already_present = destination.is_file()
+    if not already_present:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("promotion destination appeared during integration")
+        try:
+            with destination.open("xb") as output, source.open("rb") as input_stream:
+                shutil.copyfileobj(input_stream, output)
+            if destination.is_symlink() or hashlib.sha256(destination.read_bytes()).hexdigest() != source_hash:
+                raise ValueError("promoted source failed its post-copy hash check")
+        except BaseException:
+            if destination.is_file() and not destination.is_symlink():
+                destination.unlink()
+            raise
+
+    record = {
+        "address": context["address"],
+        "size_bytes": context["size_bytes"],
+        "source_sha256": source_hash,
+        "object_sha256": objects,
+        "worker_id": origin["worker_id"],
+        "session_id": origin["session_id"],
+        "already_present": already_present,
+        "status": "MATCHED",
+    }
+    _append_promotion_documentation(repo_root, record)
+    return record
+
+
 def load_inventory(path: Path) -> tuple[list[Candidate], dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 1 or not isinstance(payload.get("candidates"), list):
@@ -2074,7 +2487,172 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
         raise ValueError("model allowlist must be a non-empty list")
     if len(models) != len(set(models)):
         raise ValueError("model allowlist contains duplicates")
+    limits = value.get("limits", {})
+    if not 1 <= int(limits.get("max_workers", 0)) <= 2:
+        raise ValueError("campaign max_workers must stay within the two-worker task limit")
+    if not 1 <= int(limits.get("max_tasks", 0)) <= 40:
+        raise ValueError("campaign max_tasks must stay within the 40-attempt task limit")
+    if not 1 <= int(limits.get("max_duration_seconds", 0)) <= 7200:
+        raise ValueError("campaign duration must stay within the two-hour task limit")
+    pilot = value.get("pilot", {})
+    if not 1 <= int(pilot.get("max_tasks", 0)) <= 4:
+        raise ValueError("pilot max_tasks must stay within four attempts")
+    if not 1 <= int(pilot.get("max_duration_seconds", 0)) <= 1800:
+        raise ValueError("pilot duration must stay within 30 minutes")
+    try:
+        pilot_addresses = [f"0x{int(item, 0):x}" for item in pilot["candidate_addresses"]]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("pilot candidate addresses must be hexadecimal") from exc
+    if set(pilot_addresses) != {"0x2c28c", "0x4217c"} or len(pilot_addresses) != 2:
+        raise ValueError("pilot must remain scoped to 0x2C28C and 0x4217C")
+    for worker_id, worker in value.get("workers", {}).items():
+        if not re.fullmatch(r"[a-z0-9-]+", worker_id):
+            raise ValueError("worker identifiers may contain only lowercase letters, digits, and hyphens")
+        if not re.fullmatch(r"[a-z0-9-]+", str(worker.get("agent", ""))):
+            raise ValueError(f"worker {worker_id} must name a valid restricted agent")
+        if worker.get("usage_mode", "unknown") not in {
+            "unknown",
+            "subscription_included",
+            "free",
+        }:
+            raise ValueError(f"worker {worker_id} has an unsupported usage_mode")
     return value
+
+
+def worker_readiness(
+    worker: dict[str, Any], observed: dict[str, Any], allowed_models: Iterable[str]
+) -> dict[str, Any]:
+    """Require catalog, auth, explicit cost-mode verification, and restricted tools."""
+    blockers: list[str] = []
+    model = worker.get("model")
+    provider = worker.get("provider")
+    if model not in set(allowed_models):
+        blockers.append("model_not_allowlisted")
+    if observed.get("catalog") != "available":
+        blockers.append("model_not_in_catalog")
+    if observed.get("auth") != "stored":
+        blockers.append("provider_auth_not_listed")
+    if worker.get("access_verified") is not True:
+        blockers.append("provider_access_unverified")
+    usage_mode = worker.get("usage_mode")
+    if usage_mode == "unknown":
+        blockers.append("usage_mode_unverified")
+    if provider == "openai":
+        if usage_mode != "subscription_included":
+            blockers.append("additional_cost_not_excluded")
+    elif provider == "opencode":
+        if (
+            usage_mode != "free"
+            or model != "opencode/deepseek-v4.1-flash-free"
+            or worker.get("free_model_only") is not True
+        ):
+            blockers.append("exact_free_usage_not_verified")
+    else:
+        blockers.append("provider_not_supported")
+    if observed.get("agent_policy") is not True:
+        blockers.append("worker_permissions_not_restricted")
+    return {"ready": not blockers, "blockers": blockers}
+
+
+def select_ready_workers(
+    workers: dict[str, dict[str, Any]],
+    states: dict[str, dict[str, Any]],
+    *,
+    max_workers: int,
+) -> list[str]:
+    """Select only preflight-READY providers, preserving configured order."""
+    if max_workers <= 0:
+        raise ValueError("max_workers must be positive")
+    return [
+        worker_id
+        for worker_id in workers
+        if states.get(worker_id, {}).get("ready") is True
+    ][:max_workers]
+
+
+def worker_agent_policy_is_restricted(
+    agents: list[dict[str, Any]], agent_id: str
+) -> bool:
+    """Audit OpenCode's effective agent rules; workers get no shell or broad writes."""
+    matches = [agent for agent in agents if agent.get("id") == agent_id]
+    if len(matches) != 1 or not isinstance(matches[0].get("permissions"), list):
+        return False
+    rules = matches[0]["permissions"]
+    deny_indices = [
+        index
+        for index, rule in enumerate(rules)
+        if isinstance(rule, dict)
+        and rule.get("action") == "*"
+        and rule.get("resource") == "*"
+        and rule.get("effect") == "deny"
+    ]
+    if not deny_indices:
+        return False
+    allowed_overrides = {
+        ("*", "*", "deny"),
+        ("read", "*", "allow"),
+        ("glob", "*", "allow"),
+        ("grep", "*", "allow"),
+        ("edit", "decomp/src/eboot/func_*.c", "allow"),
+        ("edit", "build/decomp-campaign/*", "allow"),
+        ("ai_memory_memory_query", "*", "allow"),
+        ("ai_memory_memory_read_page", "*", "allow"),
+        ("external_directory", "*", "deny"),
+        ("subagent", "*", "deny"),
+        ("read", "*.env", "deny"),
+        ("read", "*.env.*", "deny"),
+        ("browser", "*", "deny"),
+    }
+    for rule in rules[deny_indices[-1] :]:
+        if not isinstance(rule, dict) or (
+            rule.get("action"), rule.get("resource"), rule.get("effect")
+        ) not in allowed_overrides:
+            return False
+
+    def effect(action: str, resource: str) -> str | None:
+        result = None
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            action_pattern = str(rule.get("action", "")).casefold()
+            resource_pattern = str(rule.get("resource", "")).replace("\\", "/").casefold()
+            if fnmatch.fnmatchcase(action.casefold(), action_pattern) and fnmatch.fnmatchcase(
+                resource.replace("\\", "/").casefold(), resource_pattern
+            ):
+                result = rule.get("effect")
+        return result
+
+    return (
+        effect("other", "other") == "deny"
+        and effect("shell", "*") == "deny"
+        and effect("external_directory", "*") == "deny"
+        and effect("edit", "*") == "deny"
+        and effect("edit", "decomp/src/eboot/func_00002C28C.c") == "allow"
+        and effect("edit", "build/decomp-campaign/openai/2c28c/result.json") == "allow"
+        and effect("subagent", "*") == "deny"
+        and effect("ai_memory_memory_query", "*") == "allow"
+        and effect("ai_memory_memory_read_page", "*") == "allow"
+        and effect("read", "private/credentials.env") == "deny"
+        and effect("read", "private/credentials.env.local") == "deny"
+    )
+
+
+def _effective_worker_policy_ready(command: list[str], cwd: Path, agent_id: str) -> bool:
+    result = subprocess.run(
+        [*command, "debug", "agents"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        agents = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(agents, list) and worker_agent_policy_is_restricted(agents, agent_id)
 
 
 def _git_output(repo_root: Path, *args: str) -> str:
@@ -2344,23 +2922,42 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     auth = subprocess.run(
         [*command, "auth", "list"], cwd=cwd, capture_output=True, text=True, timeout=60, check=False
     )
+    agents_result = subprocess.run(
+        [*command, "debug", "agents"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
     listed_models = set(catalog.stdout.splitlines()) if catalog.returncode == 0 else set()
     auth_text = auth.stdout if auth.returncode == 0 else ""
+    try:
+        configured_agents = json.loads(agents_result.stdout) if agents_result.returncode == 0 else []
+    except json.JSONDecodeError:
+        configured_agents = []
     worker_states = {}
     for worker_name, item in config.get("workers", {}).items():
         model = validate_model_id(item["model"], config["models"]["allowlist"])
         model_present = model in listed_models
         provider_auth = bool(re.search(rf"(?im)^\s*{re.escape(item['provider'])}\s+.+\bstored\b", auth_text))
-        worker_states[worker_name] = {
+        observation = {
             "model": model,
             "catalog": "available" if model_present else "missing",
             "auth": "stored" if provider_auth else "not-listed",
-            "execution": "unverified",
-            "ready": False,
+            "usage_mode": item.get("usage_mode", "unknown"),
+            "access_verified": item.get("access_verified") is True,
+            "agent_policy": worker_agent_policy_is_restricted(
+                configured_agents if isinstance(configured_agents, list) else [],
+                str(item.get("agent", "")),
+            ),
         }
+        readiness = worker_readiness(item, observation, config["models"]["allowlist"])
+        worker_states[worker_name] = {**observation, **readiness, "execution": "unverified"}
     return {
         "catalog_exit_code": catalog.returncode,
         "auth_exit_code": auth.returncode,
+        "worker_agent_configured": agents_result.returncode == 0,
         "workers": worker_states,
     }
 
@@ -2574,6 +3171,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="seed the local SQLite queue from the reviewed inventory")
     subparsers.add_parser("plan", help="show queued candidates and explicit execution readiness")
     subparsers.add_parser("status", help="show queue/provider/checkpoint status")
+    promote = subparsers.add_parser(
+        "promote", help="recertify one campaign MATCHED source and integrate it safely"
+    )
+    promote.add_argument("--address", required=True, help="hex EBOOT function address")
     resume = subparsers.add_parser("resume", help="recover expired leases and clear a clean stop")
     resume.add_argument("--recover-expired", action="store_true")
     resume.add_argument("--retry-blocked", action="store_true", help="explicitly retry blocked tasks after fixing their cause")
@@ -2581,6 +3182,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="execute only after a separate explicit authorization")
     run.add_argument("--confirm", action="store_true", help="confirm this model execution campaign")
     run.add_argument("--continuous", action="store_true", help="drain the bounded queue until idle or configured limits")
+    run.add_argument("--productive", action="store_true", help="expand beyond the pilot after verified authorization")
     run.add_argument("--allow-openai-usage", action="store_true", help="confirm use of the configured OpenAI account")
     run.add_argument("--allow-free-model-usage", action="store_true", help="confirm requests to the exact allowlisted free model")
     run.add_argument("--max-tasks", type=int, default=None)
@@ -2628,6 +3230,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             _print_json(_status_report(store, config, REPO_ROOT))
             return 0
+        if args.command == "promote":
+            report = promote_campaign_source(store, config, REPO_ROOT, args.address)
+            _print_json(report)
+            return 0
         if args.command == "stop":
             store.request_stop()
             _print_json({"stop_requested": True})
@@ -2648,6 +3254,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("run requires --confirm; preparation commands never start model sessions")
             if args.continuous and not config.get("execution", {}).get("continuous", False):
                 raise ValueError("continuous mode is disabled in config")
+            if args.continuous and not args.productive:
+                raise ValueError("--continuous is reserved for the separately authorized productive campaign")
+            if args.productive and not (
+                config.get("execution", {}).get("pilot_verified", False)
+                and config.get("execution", {}).get("productive_expansion_authorized", False)
+            ):
+                raise ValueError("productive expansion requires a reviewed valid pilot and separate authorization")
             if not config.get("execution", {}).get("enabled", False):
                 raise ValueError("campaign execution is disabled in config; separate authorization is required")
             if not config.get("execution", {}).get("provider_access_verified", False):
@@ -2659,33 +3272,53 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(
                     "worker tool permissions have not been reviewed for unattended execution"
                 )
-            if not args.allow_openai_usage:
-                raise ValueError("run requires --allow-openai-usage for the explicitly configured OpenAI account")
-            if not args.allow_free_model_usage:
-                raise ValueError("run requires --allow-free-model-usage for the exact configured DeepSeek Free model")
             preflight = _doctor(config, config_path)
             if not preflight["mcp_connected"]:
                 raise ValueError("AIMemory MCP is not connected in the current OpenCode project")
-            for name, state in preflight["opencode"]["workers"].items():
-                if state["catalog"] != "available":
-                    raise ValueError(f"configured model for {name} is absent from the OpenCode catalog")
-            openai_state = preflight["opencode"]["workers"].get("openai", {})
-            free_state = preflight["opencode"]["workers"].get("deepseek", {})
-            if openai_state.get("auth") != "stored":
-                raise ValueError("OpenAI provider authentication is not listed as stored")
-            if free_state.get("model") != "opencode/deepseek-v4.1-flash-free":
-                raise ValueError("DeepSeek worker must use the exact allowlisted Free model")
+            ready_names = select_ready_workers(
+                config["workers"],
+                preflight["opencode"]["workers"],
+                max_workers=int(config["limits"]["max_workers"]),
+            )
+            if not ready_names:
+                details = "; ".join(
+                    f"{name}: {','.join(state.get('blockers', [])) or 'not READY'}"
+                    for name, state in preflight["opencode"]["workers"].items()
+                )
+                raise ValueError("no provider passed the READY preflight (" + details + ")")
+            if "openai" in ready_names and not args.allow_openai_usage:
+                raise ValueError("run requires --allow-openai-usage for the READY OpenAI worker")
+            if "deepseek" in ready_names and not args.allow_free_model_usage:
+                raise ValueError("run requires --allow-free-model-usage for the READY exact Free worker")
             if preflight.get("wsl_python") is None or any(
                 state != "READY" for state in preflight.get("toolchain", {}).values()
             ):
                 raise ValueError("WSL2, Ghidra, MWCC, or wibo preflight is BLOCKED")
             if not database_path.exists() or not store.list_tasks():
                 store.seed(candidates)
+            active_config = dict(config)
+            active_config["workers"] = {
+                worker_id: config["workers"][worker_id] for worker_id in ready_names
+            }
             worktrees = prepare_worker_worktrees(
                 REPO_ROOT,
-                config,
+                active_config,
             )
             command = _sanitize_opencode_prefix(list(config["opencode"].get("command", ["opencode"])))
+            policy_blocked = [
+                worker_id
+                for worker_id, worker_config in active_config["workers"].items()
+                if not _effective_worker_policy_ready(
+                    command,
+                    worktrees[worker_id],
+                    worker_config["agent"],
+                )
+            ]
+            if policy_blocked:
+                raise ValueError(
+                    "restricted campaign agent policy is not present in worker worktree(s): "
+                    + ", ".join(policy_blocked)
+                )
             disconnected = [
                 worker_id
                 for worker_id, path in worktrees.items()
@@ -2697,10 +3330,27 @@ def main(argv: list[str] | None = None) -> int:
                     + ", ".join(disconnected)
                 )
             workers = [
-                Worker(worker_id, value["provider"], validate_model_id(value["model"], config["models"]["allowlist"]))
-                for worker_id, value in config["workers"].items()
+                Worker(
+                    worker_id,
+                    value["provider"],
+                    validate_model_id(value["model"], config["models"]["allowlist"]),
+                    value["agent"],
+                )
+                for worker_id, value in active_config["workers"].items()
             ]
             limits = config["limits"]
+            if args.productive:
+                candidate_addresses = None
+                phase_max_tasks = int(limits["max_tasks"])
+                phase_duration = float(limits["max_duration_seconds"])
+            else:
+                pilot = config["pilot"]
+                candidate_addresses = [str(item).lower() for item in pilot["candidate_addresses"]]
+                phase_max_tasks = min(
+                    int(pilot["max_tasks"]),
+                    max(1, len(workers)) * 2,
+                )
+                phase_duration = float(pilot["max_duration_seconds"])
             local_ghidra = tomllib.loads(
                 (REPO_ROOT / config["toolchain"]["ghidra_local_config"]).read_text(encoding="utf-8")
             )["ghidra"]
@@ -2712,7 +3362,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_limit=int(limits["max_output_bytes"]),
                 max_attempts_without_progress=int(limits["max_attempts_without_progress"]),
                 max_attempts_per_candidate=int(limits["max_attempts_per_candidate"]),
-                max_duration_seconds=float(limits["max_duration_seconds"]),
+                max_duration_seconds=phase_duration,
                 lease_seconds=float(limits["lease_seconds"]),
                 ghidra_home=local_ghidra.get("home"),
                 ghidra_windows_home=local_ghidra.get("windows_home"),
@@ -2720,15 +3370,16 @@ def main(argv: list[str] | None = None) -> int:
                 expected_eboot_sha256=config["inputs"]["eboot_sha256"],
                 checkpoint_repo_root=REPO_ROOT,
                 max_retry_after_seconds=float(limits["max_retry_after_seconds"]),
+                candidate_addresses=candidate_addresses,
             )
             if args.max_tasks is None:
-                max_tasks = int(limits["max_tasks"])
-                if not args.continuous:
-                    max_tasks = min(max_tasks, int(limits["max_workers"]))
+                max_tasks = phase_max_tasks
             else:
                 max_tasks = args.max_tasks
             if max_tasks > int(limits["max_tasks"]):
                 raise ValueError("--max-tasks cannot exceed the configured campaign limit")
+            if max_tasks > phase_max_tasks:
+                raise ValueError("--max-tasks cannot exceed the active pilot/productive phase limit")
             outcome = runner.run(workers, max_tasks=max_tasks)
             _print_json(outcome)
             return 0

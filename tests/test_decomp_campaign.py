@@ -6,6 +6,7 @@ import json
 import hashlib
 import subprocess
 import sys
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,6 +31,12 @@ from decomp_campaign import (  # noqa: E402
     validate_export_evidence,
     validate_ghidra_log,
     validate_model_id,
+    select_ready_workers,
+    validated_cached_ghidra_boundary,
+    worker_agent_policy_is_restricted,
+    worker_readiness,
+    _append_promotion_documentation,
+    _promotion_context,
 )
 
 
@@ -86,16 +93,18 @@ def fake_opencode_command(tmp_path: Path, worker_script: Path | None = None) -> 
         " payload = json.loads(args[args.index('--data') + 1])\n"
         " session_id = 'ses_test' + uuid.uuid4().hex\n"
         " location = payload['location']['directory']\n"
-        " state['sessions'][session_id] = {'location': location}\n"
+        " agent = payload.get('agent')\n"
+        " model = payload.get('model')\n"
+        " state['sessions'][session_id] = {'location': location, 'agent': agent, 'model': model}\n"
         " state['created'].append(session_id)\n"
-        " save(); print(json.dumps({'data': {'id': session_id, 'location': {'directory': location}}})); raise SystemExit(0)\n"
+        " save(); print(json.dumps({'data': {'id': session_id, 'location': {'directory': location}, 'agent': agent, 'model': model}})); raise SystemExit(0)\n"
         "if args[:2] == ['api', 'get'] and args[2].startswith('/api/session/'):\n"
         " session_id = args[2].rsplit('/', 1)[-1]\n"
         " if session_id not in state['sessions']:\n"
         "  sys.stdout.write('{\"_tag\":\"SessionNotFoundError\"}\\n')\n"
         "  sys.stderr.write('HTTP 404 Not Found\\n')\n"
         "  raise SystemExit(1)\n"
-        " print(json.dumps({'data': {'id': session_id, 'location': {'directory': state['sessions'][session_id]['location']}}})); raise SystemExit(0)\n"
+        " print(json.dumps({'data': {'id': session_id, 'location': {'directory': state['sessions'][session_id]['location']}, 'agent': state['sessions'][session_id].get('agent'), 'model': state['sessions'][session_id].get('model')}})); raise SystemExit(0)\n"
         "if args and args[0] == 'run':\n"
         " session_id = args[args.index('--session') + 1]\n"
         " if session_id not in state['sessions']:\n"
@@ -148,6 +157,96 @@ def ghidra_log(
         for address, size in zip(addresses, sizes)
     )
     return "\n".join(rows)
+
+
+def promotable_campaign(tmp_path: Path) -> tuple[CampaignStore, dict[str, object], Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    store = CampaignStore(repo / "build" / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+    claim = store.bind_session(claim, "ses_test_promotion")
+
+    worker_root = campaign_build_path(repo, "decomp-campaign/worktrees/openai")
+    log_relative = "decomp-campaign/openai/1000/evidence/ghidra-attempt-1.log"
+    log_path = campaign_build_path(worker_root, log_relative)
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(ghidra_log(), encoding="utf-8")
+    log_hash = hashlib.sha256(log_path.read_bytes()).hexdigest()
+    boundary = validate_ghidra_log(ghidra_log(), 0x1000)
+
+    source_content = b"int func_00001000(void) { return 1; }\n"
+    source_hash = hashlib.sha256(source_content).hexdigest()
+    source_relative = f"decomp-campaign/checkpoints/00001000/{source_hash}.c"
+    source_path = campaign_build_path(repo, source_relative)
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(source_content)
+
+    reports = [strict_report(), strict_report()]
+    for report in reports:
+        report["provenance"]["source_sha256"] = source_hash  # type: ignore[index]
+    result = {
+        "status": "MATCHED",
+        "source_sha256": source_hash,
+        "source_snapshot_path": source_relative,
+        "ghidra_log_sha256": log_hash,
+        "ghidra_boundary": boundary,
+        "matching_words": 4,
+        "total_words": 4,
+        "build_sha256": ["b" * 64, "b" * 64],
+        "reports": reports,
+    }
+    checkpoint = {
+        "ghidra_log_path": log_relative,
+        "ghidra_log_sha256": log_hash,
+        "boundary_status": "EXACT",
+    }
+    store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+    assert store.complete(
+        claim,
+        checkpoint,
+        result,
+        max_attempts_without_progress=3,
+        max_attempts_per_candidate=8,
+    ) == "matched"
+
+    eboot_path = repo / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
+    eboot_path.parent.mkdir(parents=True)
+    eboot_path.write_bytes(b"test eboot")
+    triage_path = repo / "build" / "seto035" / "export-triage.json"
+    triage_path.parent.mkdir(parents=True)
+    triage_path.write_text(
+        json.dumps(
+            {
+                "exports": [
+                    {
+                        "address": "0x1000",
+                        "nid": "0x12345678",
+                        "library": "libehsys",
+                        "pointer_relocation": {
+                            "type": "R_MIPS_32",
+                            "addend_valid": True,
+                            "application_valid": True,
+                            "addend": 0x1000,
+                        },
+                        "importers": [{"call_sites": ["0x20"], "table_limitations": []}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config: dict[str, object] = {
+        "workers": {"openai": {"provider": "openai"}},
+        "worktrees": {"root": "build/decomp-campaign/worktrees"},
+        "inputs": {
+            "eboot": "private/decrypted/ULUS10136_EBOOT.elf",
+            "eboot_sha256": hashlib.sha256(eboot_path.read_bytes()).hexdigest(),
+            "triage_report": "build/seto035/export-triage.json",
+        },
+    }
+    return store, config, repo, source_hash
 
 
 def test_sqlite_claim_is_atomic_and_each_task_has_one_owner(tmp_path: Path) -> None:
@@ -236,6 +335,11 @@ def test_model_execution_is_disabled_until_separately_verified() -> None:
     assert config["execution"]["provider_access_verified"] is False
     assert config["execution"]["worker_permissions_reviewed"] is False
     assert config["execution"]["continuous"] is False
+    assert config["execution"]["pilot_verified"] is False
+    assert config["execution"]["productive_expansion_authorized"] is False
+    assert config["pilot"]["max_tasks"] == 4
+    assert config["pilot"]["max_duration_seconds"] == 1800
+    assert config["pilot"]["candidate_addresses"] == ["0x2c28c", "0x4217c"]
     assert config["models"]["allowlist"] == [
         "openai/gpt-6-luna",
         "opencode/deepseek-v4.1-flash-free",
@@ -252,6 +356,10 @@ def test_only_complete_matcher_evidence_can_be_called_matched() -> None:
     artificial = strict_report()
     artificial["evidence"] = "agent-assertion"
     assert not is_strict_match(artificial, expected_address=0x1000, expected_size=16)
+
+    malformed = strict_report()
+    malformed["provenance"] = None
+    assert not is_strict_match(malformed, expected_address=0x1000, expected_size=16)
 
     limited = strict_report()
     limited["match"]["limitations"] = ["unresolved relocation"]  # type: ignore[index]
@@ -288,6 +396,91 @@ def test_ghidra_log_rejects_instruction_size_and_count_inconsistencies() -> None
     for log in (wrong_size, wrong_count, duplicate_marker, missing_listing):
         with pytest.raises(ValueError, match="exact Allegrex"):
             validate_ghidra_log(log, 0x1000)
+
+
+def test_cached_ghidra_evidence_is_reused_only_when_bound_to_address_and_hash(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    claim = store.claim_next("openai", "openai")
+    assert claim is not None
+    worktree = tmp_path / "worker"
+    log_relative = "decomp-campaign/openai/1000/evidence/ghidra-attempt-1.log"
+    log_path = campaign_build_path(worktree, log_relative)
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(ghidra_log(), encoding="utf-8")
+    digest = hashlib.sha256(log_path.read_bytes()).hexdigest()
+    cached = replace(
+        claim,
+        checkpoint={
+            "ghidra_log_path": log_relative,
+            "ghidra_log_sha256": digest,
+        },
+    )
+
+    assert validated_cached_ghidra_boundary(worktree, cached)["size_bytes"] == 16  # type: ignore[index]
+    log_path.write_text(ghidra_log(end=0x1020), encoding="utf-8")
+    with pytest.raises(ValueError, match="hash"):
+        validated_cached_ghidra_boundary(worktree, cached)
+    unsafe = replace(cached, checkpoint={**cached.checkpoint, "ghidra_log_path": "../../outside.log"})
+    with pytest.raises(ValueError, match="outside"):
+        validated_cached_ghidra_boundary(worktree, unsafe)
+
+
+def test_promotion_preflight_checks_snapshots_reports_ghidra_and_conflicts(tmp_path: Path) -> None:
+    store, config, repo, source_hash = promotable_campaign(tmp_path)
+    context = _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
+    assert context["source_hash"] == source_hash
+    assert context["origin"]["session_id"] == "ses_test_promotion"
+
+    context["destination"].parent.mkdir(parents=True, exist_ok=True)
+    context["destination"].write_text("conflicting certified source", encoding="utf-8")
+    with pytest.raises(ValueError, match="conflicts"):
+        _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
+
+
+def test_promotion_rejects_nonmatched_and_corrupt_checkpoint_sources(tmp_path: Path) -> None:
+    empty = CampaignStore(tmp_path / "empty.sqlite3")
+    empty.seed([candidate("0x1000")])
+    with pytest.raises(ValueError, match="MATCHED"):
+        _promotion_context(empty, tmp_path, {}, "0x1000")
+
+    store, config, repo, _source_hash = promotable_campaign(tmp_path / "corrupt")
+    task = store.get_task("0x1000")
+    snapshot = campaign_build_path(repo, task["checkpoint"]["best_source_snapshot"])
+    snapshot.write_text("modified after certification", encoding="utf-8")
+    with pytest.raises(ValueError, match="hash"):
+        _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
+
+
+def test_promotion_rejects_missing_checkpoint_provenance(tmp_path: Path) -> None:
+    store, config, repo, _source_hash = promotable_campaign(tmp_path)
+    with store._connect() as db:
+        db.execute("UPDATE candidates SET checkpoint_json='{}' WHERE address='0x1000'")
+    with pytest.raises(ValueError, match="best-source"):
+        _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
+
+
+def test_promotion_documentation_is_idempotent_and_keeps_session_and_hash(tmp_path: Path) -> None:
+    progress = tmp_path / "docs" / "decomp-progress.md"
+    progress.parent.mkdir()
+    progress.write_text("# Progress\n", encoding="utf-8")
+    record = {
+        "address": "0x1000",
+        "size_bytes": 16,
+        "source_sha256": "a" * 64,
+        "object_sha256": ["b" * 64, "b" * 64],
+        "worker_id": "openai",
+        "session_id": "ses_test_promotion",
+    }
+
+    _append_promotion_documentation(tmp_path, record)
+    _append_promotion_documentation(tmp_path, record)
+    text = progress.read_text(encoding="utf-8")
+    assert text.count("`0x1000`") == 1
+    assert "ses_test_promotion" in text
+    assert "`" + "a" * 64 + "`" in text
 
 
 def test_export_evidence_requires_unique_relocated_nid_and_real_prx_call(tmp_path: Path) -> None:
@@ -406,12 +599,23 @@ def test_session_creation_uses_the_id_returned_by_the_open_code_api(tmp_path: Pa
     assert claim is not None
     assert claim.session_id is None
 
-    bound = runner._ensure_session(claim, worktree, None)
+    bound = runner._ensure_session(
+        claim,
+        worktree,
+        None,
+        agent="seto-decomp-worker",
+        model="openai/gpt-6-luna",
+    )
     assert bound.session_id.startswith("ses_test")
     assert store.get_task("0x1000")["session_id"] == bound.session_id
     assert store.list_attempts()[0]["session_id"] == bound.session_id
+    session = json.loads((worktree / ".fake-opencode-sessions.json").read_text())[
+        "sessions"][bound.session_id]
+    assert session["agent"] == "seto-decomp-worker"
+    assert session["model"] == {"providerID": "openai", "id": "gpt-6-luna"}
     argv = runner._argv(Worker("worker", "openai", "openai/gpt-6-luna"), bound, "prompt")
     assert argv[argv.index("--session") + 1] == bound.session_id
+    assert argv[argv.index("--agent") + 1] == "seto-decomp-worker"
 
 
 def test_valid_session_is_reused_when_resuming_with_the_same_provider(tmp_path: Path) -> None:
@@ -439,6 +643,35 @@ def test_valid_session_is_reused_when_resuming_with_the_same_provider(tmp_path: 
     assert reused.session_id == bound.session_id
     assert state["created"] == [bound.session_id]
     assert store.get_task("0x1000")["checkpoint"]["next_experiment"] == "resume from checkpoint"
+
+
+def test_resume_replaces_session_that_was_created_with_broad_agent(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"worker": worktree},
+        timeout_seconds=5,
+    )
+    first = store.claim_next("worker", "openai")
+    assert first is not None
+    bound = runner._ensure_session(first, worktree, None)
+    assert bound.session_id is not None
+    state_path = worktree / ".fake-opencode-sessions.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["sessions"][bound.session_id]["agent"] = "build"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    store.fail(bound, Failure(FailureKind.INTERRUPTED))
+
+    resumed = store.claim_next("worker", "openai")
+    assert resumed is not None
+    replacement = runner._ensure_session(resumed, worktree, None)
+    assert replacement.session_id != bound.session_id
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["sessions"][replacement.session_id]["agent"] == "seto-decomp-worker"
 
 
 def test_provider_fallback_creates_an_independent_session_and_keeps_checkpoint(
@@ -557,11 +790,222 @@ def test_stop_and_resume_preserve_checkpoint_and_reuse_same_provider_session(
     assert interrupted["outcome"] == "interrupted"
     assert store.get_task("0x1000")["status"] == "pending"
     store.resume()
-    runner.run([Worker("openai", "openai", "openai/gpt-6-luna")], max_tasks=1)
+    runner.run([Worker("openai", "openai", "openai/gpt-6-luna")], max_tasks=2)
     attempts = store.list_attempts()
     assert attempts[1]["outcome"] == "matched"
     assert attempts[0]["session_id"] == attempts[1]["session_id"]
     assert all(task["status"] != "running" for task in store.list_tasks())
+
+
+def test_fast_worker_claims_another_task_before_slow_worker_finishes(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            candidate("0x1000", preferred_provider="openai"),
+            candidate("0x2000", preferred_provider="opencode"),
+            candidate("0x3000", preferred_provider="openai"),
+        ]
+    )
+    events = tmp_path / "events"
+    events.mkdir()
+    simulator = tmp_path / "timed_worker.py"
+    simulator.write_text(
+        "import json, pathlib, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "title = args[args.index('--title') + 1].split()\n"
+        "address, worker = title[2], title[3]\n"
+        f"events = pathlib.Path({str(events)!r})\n"
+        "events.joinpath(f'{worker}-{address}-start').write_text(str(time.time_ns()))\n"
+        "if worker == 'slow': time.sleep(1.5)\n"
+        "events.joinpath(f'{worker}-{address}-done').write_text(str(time.time_ns()))\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{'next_experiment':'continue'}})}))\n",
+        encoding="utf-8",
+    )
+    worktrees = {name: tmp_path / name for name in ("fast", "slow")}
+    for worktree in worktrees.values():
+        worktree.mkdir()
+
+    def verifier(_worktree: Path, task: Candidate, _checkpoint: dict[str, object]):
+        report = strict_report(task.address)
+        return {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, simulator),
+        worktrees=worktrees,
+        verifier=verifier,
+        timeout_seconds=5,
+    )
+    result = runner.run(
+        [
+            Worker("fast", "openai", "openai/gpt-6-luna"),
+            Worker("slow", "opencode", "opencode/deepseek-v4.1-flash-free"),
+        ],
+        max_tasks=3,
+    )
+
+    fast_next = events / "fast-0x3000-start"
+    slow_done = events / "slow-0x2000-done"
+    assert result["attempted"] == 3
+    assert fast_next.is_file() and slow_done.is_file()
+    assert fast_next.stat().st_mtime_ns < slow_done.stat().st_mtime_ns
+    attempts = store.list_attempts()
+    assert len(attempts) == 3
+    assert len({attempt["address"] for attempt in attempts}) == 3
+
+
+def test_pilot_candidate_filter_does_not_drain_the_rest_of_inventory(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000"), candidate("0x3000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+
+    def verifier(_worktree: Path, task: Candidate, _checkpoint: dict[str, object]):
+        report = strict_report(task.address)
+        return {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"openai": worktree},
+        verifier=verifier,
+        candidate_addresses=["0x2000"],
+    )
+    result = runner.run([Worker("openai", "openai", "openai/gpt-6-luna")], max_tasks=4)
+
+    assert result["attempted"] == 1
+    assert [attempt["address"] for attempt in store.list_attempts()] == ["0x2000"]
+    assert store.get_task("0x1000")["status"] == "pending"
+    assert store.get_task("0x3000")["status"] == "pending"
+
+
+def test_campaign_attempt_limit_is_atomic_across_joining_runners(tmp_path: Path) -> None:
+    database = tmp_path / "campaign.sqlite3"
+    store = CampaignStore(database)
+    store.seed([candidate(f"0x{0x1000 + index * 0x10:x}") for index in range(8)])
+
+    def verifier(_worktree: Path, task: Candidate, _checkpoint: dict[str, object]):
+        report = strict_report(task.address)
+        return {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    runners = []
+    for name, provider, model in (
+        ("join-openai", "openai", "openai/gpt-6-luna"),
+        ("join-opencode", "opencode", "opencode/deepseek-v4.1-flash-free"),
+    ):
+        worktree = tmp_path / name
+        worktree.mkdir()
+        runners.append(
+            (
+                CampaignRunner(
+                    CampaignStore(database),
+                    opencode_command=fake_opencode_command(tmp_path),
+                    worktrees={name: worktree},
+                    verifier=verifier,
+                    timeout_seconds=5,
+                ),
+                [Worker(name, provider, model)],
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(runner.run, workers, max_tasks=3) for runner, workers in runners]
+        results = [future.result(timeout=20) for future in futures]
+
+    assert sum(result["attempted"] for result in results) == 3
+    assert len(store.list_attempts()) == 3
+    assert all(task["status"] != "running" for task in store.list_tasks())
+
+
+def test_provider_preflight_selects_only_verified_free_worker() -> None:
+    config = {
+        "workers": {
+            "openai": {
+                "provider": "openai",
+                "model": "openai/gpt-6-luna",
+                "agent": "seto-decomp-worker",
+                "usage_mode": "unknown",
+                "access_verified": False,
+            },
+            "deepseek": {
+                "provider": "opencode",
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "agent": "seto-decomp-worker",
+                "usage_mode": "free",
+                "access_verified": True,
+                "free_model_only": True,
+            },
+        },
+        "models": {
+            "allowlist": [
+                "openai/gpt-6-luna",
+                "opencode/deepseek-v4.1-flash-free",
+            ]
+        },
+    }
+    observed = {
+        "openai": {"catalog": "available", "auth": "stored", "agent_policy": True},
+        "deepseek": {"catalog": "available", "auth": "stored", "agent_policy": True},
+    }
+
+    states = {
+        name: worker_readiness(worker, observed[name], config["models"]["allowlist"])
+        for name, worker in config["workers"].items()
+    }
+    selected = select_ready_workers(config["workers"], states, max_workers=2)
+
+    assert states["openai"]["ready"] is False
+    assert "usage_mode_unverified" in states["openai"]["blockers"]
+    assert states["deepseek"]["ready"] is True
+    assert selected == ["deepseek"]
+
+
+def test_worker_permission_audit_rejects_global_allow_and_shell_access() -> None:
+    agent = {
+        "id": "seto-decomp-worker",
+        "permissions": [
+            {"action": "*", "resource": "*", "effect": "allow"},
+            {"action": "*", "resource": "*", "effect": "deny"},
+            {"action": "read", "resource": "*", "effect": "allow"},
+            {
+                "action": "edit",
+                "resource": "decomp/src/eboot/func_*.c",
+                "effect": "allow",
+            },
+            {"action": "edit", "resource": "build/decomp-campaign/*", "effect": "allow"},
+            {"action": "ai_memory_memory_query", "resource": "*", "effect": "allow"},
+            {"action": "ai_memory_memory_read_page", "resource": "*", "effect": "allow"},
+            {"action": "external_directory", "resource": "*", "effect": "deny"},
+            {"action": "subagent", "resource": "*", "effect": "deny"},
+            {"action": "read", "resource": "*.env", "effect": "deny"},
+            {"action": "read", "resource": "*.env.*", "effect": "deny"},
+        ],
+    }
+    assert worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
+    agent["permissions"].append({"action": "shell", "resource": "*", "effect": "allow"})
+    assert not worker_agent_policy_is_restricted([agent], "seto-decomp-worker")
+    assert not worker_agent_policy_is_restricted([], "missing-agent")
 
 
 def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
