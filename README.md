@@ -381,6 +381,7 @@ no ISO, no commercial PRX and no proprietary compiler are ever downloaded.
 * [`docs/baseline.md`](docs/baseline.md) — measured facts about the disc, SFO and modules.
 * [`docs/toolchain.md`](docs/toolchain.md) — tool resolution, subprocess safety, Windows and WSL2 setup.
 * [`docs/decomp-progress.md`](docs/decomp-progress.md) — MATCHED / NONMATCHING / INCONCLUSIVE / BLOCKED report.
+* [`docs/decomp-campaign.md`](docs/decomp-campaign.md) — local EBOOT campaign preparation, readiness, and opt-in commands.
 * [`decomp/imports/libhtml_view.json`](decomp/imports/libhtml_view.json) — recovered `(library, NID)` identities.
 
 ## Licence
