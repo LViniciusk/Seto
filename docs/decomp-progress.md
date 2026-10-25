@@ -6391,3 +6391,110 @@ em **16 MATCHED / 912 instruções**.
 - Suíte completa Windows/Python 3.12 após R2: **835 passed, 43 skipped**; os skips são
   opt-ins de integração ou pré-requisitos específicos de plataforma.
 - `python -m compileall -q src scripts tests` e `git diff --check`: **clean**.
+
+## SETO-DECOMP-038 — composição de comandos e recuperação estrutural do EBOOT
+
+### Resultado
+
+| Endereço | NID `libehsys` | Tamanho | Baseline 038 | Melhor resultado | Diferenças | Status |
+|---|---|---:|---|---|---:|---|
+| `0x38DB4` | `0xB4471B5E` | 252 bytes / 63 ins. | sem fonte certificada | 63/63 em dois builds; helper `0x31308` resolvido | 0 | **MATCHED** |
+| `0x36D1C` | `0x8EA6B1E7` | 112 bytes / 28 ins. | sem fonte certificada | 28/28 em dois builds; helper `0x31308` resolvido | 0 | **MATCHED** |
+| `0x2C28C` | `0x7187E0F0` | 112 bytes / 28 ins. | sem fonte certificada | hipótese preservada: 26/28 | 2 | **NONMATCHING**, somente em `build/` |
+| `0x37F38` | `0xE6E4401F` | 264 bytes / 66 ins. | sem fonte certificada | objeto experimental: 252/264 bytes | — | **BLOCKED** por tamanho |
+| `0x44EB4` | `0xAB962AE7` | 76 bytes / 19 ins. | bloqueado por identidade global | hipótese compilou 56/76 bytes; comparação integral não executada | — | **BLOCKED** por identidade/tamanho |
+| `0x4217C` | `0x942B03D0` | 176 bytes / 44 ins. | não reconstruída | export, chamadas e fronteira Ghidra validados; quatro chamadas internas | — | **TRIADO** |
+| `0x8040` | `0x10F3BB61` | 252 bytes / 63 ins. | não reconstruída | fronteira Ghidra exata; detector linear termina em `0x80F4` (45 ins.) | — | **TRIADO** |
+
+As duas fontes entregues acrescentam **91 instruções EBOOT certificadas**: o
+total sobe de seis funções/115 instruções para **oito funções/206 instruções
+MATCHED**. O baseline separado dos PRXs permanece em **16 funções/912
+instruções MATCHED**. Nenhuma fonte do baseline foi alterada e o matcher não foi
+enfraquecido.
+
+### Reconstruções e contrato observado
+
+`0x38DB4` monta oito words locais (32 bytes), zera o buffer e chama
+`func_00031308(address, command, 8)`. Os bytes de tag são `B2`, `B3`, `EB`,
+`B4`, `B5`, `EC`, `EE` e `EA`; os campos usam máscaras/OR e shifts de 10, 16
+e 24 bits conforme os words observados. Os campos `EE` são decrementados antes
+da combinação; o word `EA` codifica `selector == 3`. O corpo termina após a
+chamada e não tem caminho de erro nem referência global. Ghidra vê parâmetros
+em `$a0–$a3` e na stack, mas o único call site encontrado (`libhtml_view.prx`,
+`0x1C`) prepara explicitamente `$a0–$a2`; os nomes C são, portanto, rótulos
+estruturais dos valores consumidos, não uma alegação de semântica pública ou de
+proveniência para todos os argumentos.
+
+O primeiro build experimental de `0x38DB4` produziu o tamanho correto e 43/63
+words. Reordenar os words elevou o resultado a 62/63; a divergência restante
+estava na composição do word `EE`. Separar sua atribuição e o OR do campo baixo
+reproduziu também o scheduling do MWCC. A fonte final compilou duas vezes com
+resultado integral e determinístico.
+
+`0x36D1C` cria um word `0x37`: selector `0` produz valor `2`, selector `2`
+produz `1`, e os demais produzem `0`; passa exatamente um word ao mesmo helper.
+Os dois corpos demonstram o contrato curto de `0x31308`: `$a0` é o estado/
+cursor retornado, `$a1` aponta para uma sequência de words e `$a2` é a contagem;
+para cada word, o helper chama `0x3129C`, avança o ponteiro de entrada e propaga
+o cursor retornado. `0x3129C` grava o word e avança o cursor em quatro bytes; para
+tags ainda não observadas, também atualiza o estado de tags e a tabela associada.
+Os limites Ghidra confirmados são 23 instruções para `0x31308` e 27 para
+`0x3129C`; nenhum helper foi adicionado como fonte de produção nesta tarefa.
+
+### Seleção, bloqueios e evidências
+
+O shortlist intermediário foi `0x36D1C`, `0x2C28C`, `0x37F38`, `0x4217C` e
+`0x8040`, todos exports únicos de `libehsys`, com imports/call sites comprovados
+nos PRXs e corpos Allegrex confirmados pelo Ghidra 12.1.3. Os três primeiros
+foram compilados como reconstruções; `0x36D1C` foi certificado. Em `0x2C28C`,
+a divergência causal está em `0x2C2C4`: o MWCC emite `bnel` e move o `lhu` para
+o delay slot, enquanto o original contém `bne` seguido de `nop`. A hipótese C
+continua somente em `build/seto038/func_0002C28C-hypothesis-v1.c`; não é fonte
+de produção. `0x37F38` contém duas buscas de bit e campos de comando; a melhor
+hipótese ainda gera 12 bytes a menos, logo não foi comparado como prefixo.
+`0x4217C` foi deixado em reserva pela combinação de quatro chamadas internas e
+stack frame grande. Em `0x8040`, o Ghidra prova o corpo `[0x8040,0x813C)`, mas o
+detector linear encontra somente `[0x8040,0x80F4)`; o corpo também tem callback
+indireto e referências de dados, razão para não inventar suas identidades.
+
+Em `0x44EB4`, a relocation HI16/LO16 comprova que o código lê o ponteiro global
+em `.data+0x7BE28` (VA `0xEA900`). O word armazenado é `0x273230`; esse endereço
+fica no zero-fill do `PT_LOAD`, sem seção/objeto nomeado, e o campo usado em
+`+0x50C40` resulta em `0x2C3E70`, também sem bloco mapeado pelo Ghidra. O corpo
+exato usa `lhu`/`sh` e mascara/define o bit `0x8000`, mas isso não prova a
+identidade do objeto apontado. A hipótese não criou `data-map` nem fonte em
+`decomp/src`; a compilação de 56 bytes não alcança as 76 bytes exigidas e não
+produz um veredito integral.
+
+MWCC PSP 3.0.1 build 219, `-O4,p -sdatathreshold 0`; cada fonte certificada foi
+compilada em diretórios independentes. SHA-256 de fonte/objeto:
+
+| Função | Fonte | Objeto |
+|---|---|---|
+| `0x38DB4` | `94a3a6e6686eefbaabb0252be463af0e4a8a40131d940b56db8bf881fc8cc53a` | `81b5ac578ed3b4ee12f4c448f0f9f3d0b6b5d3e28b0803a1f8d4457942dc5924` |
+| `0x36D1C` | `4a491e54a9e946b1f9b35ffc3b75cabc66a58c42677f3efac9116d2769c8e52d` | `dba5dba2595bbe765095d24dc898901093dd17126c56134e633b07e866515110` |
+
+As fontes têm um único `R_MIPS_26` cada, para `func_00031308`; a equivalência
+foi provada com a relocation resolvida, sem limitações, diferenças ou
+referências de dados. Experimentos e logs Ghidra ficam ignorados em
+`build/seto038/`; objetos e fontes NONMATCHING não são entregues como produção.
+
+Hashes dos experimentos preservados em `build/seto038/`:
+
+| Experimento | Melhor resultado | SHA-256 da fonte | SHA-256 do objeto |
+|---|---|---|---|
+| `0x38DB4` hipótese inicial | 43/63 | `9b4ba4a7624eb7da398a58886a4402282b6324c0b5d05f49e987b99c354d49ab` | `676c8e126317ee6053c9784117b1af391dadbfe049dd911b9ca4758b039d5727` |
+| `0x38DB4` hipótese revisada | 62/63 | `5c04f67fd1e9495c526dc5f2c232667020f896d8c78afb48ec1d41a7ec179f7d` | `ed8a23363881fd57d020b355a6ca69c4a44cbc03929a6fb4615405e8cae495b2` |
+| `0x2C28C` | NONMATCHING 26/28 | `1deb1fc3490cb64505db44bd02eb3b5c2493c820bea78f48ab52b6a99f645000` | `c7dc375ccbda6365e14bd7af5ac3ef5a6b1b1d92ce5dc7cb9f134813c739276e` |
+| `0x37F38` | objeto 252/264 bytes | `f980483c082d27ae6d4627e4f257df2076ab2766c5c58d1b0beec9213d989c02` | `0d735c3bbd7675eef6c240942ce14a493077359d071f6354b13808d2ca742c5b` |
+| `0x44EB4` | objeto 56/76 bytes; sem comparação integral | `dff9483ffd5846c27057dba70b43ee2e6f10007e2e3dae743c8d2efc9f26e4a2` | `e450f7d01723abcbf3d88e14b0fbe3e98a79e70f896514e8b8de9ba420765b1d` |
+
+### Regressões
+
+- Integrações reais WSL2/MWCC de 034, 035, 036, 037 e 038: **1 passed cada**.
+- A integração 038 valida hashes das mídias, exports/NIDs/relocations, call
+  sites nos dois PRXs, fronteiras Ghidra, compilação integral de ambas as fontes
+  e hashes determinísticos em dois builds independentes.
+- Suíte completa Windows/Python 3.12: **835 passed, 44 skipped**; os skips são
+  opt-ins e pré-requisitos específicos de plataforma.
+- `python -m compileall -q src scripts tests` e `git diff --check`: **clean**.
