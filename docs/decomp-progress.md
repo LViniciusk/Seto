@@ -6318,3 +6318,68 @@ As falhas locais reportadas no teste de exports não se reproduziram:
 `git diff --check` passaram. Integrações reais WSL2 034/035: 2 passed; 036:
 1 passed. Experimentos não certificados e artefatos proprietários permanecem
 ignorados em `build/`.
+
+## SETO-DECOMP-037 — recuperação funcional e novos matches do EBOOT
+
+### Reconstruções novas certificadas
+
+As três funções novas abaixo tiveram fronteiras contíguas confirmadas no
+Ghidra 12.1.3 (`Allegrex:LE:32:default`), export `libehsys` comprovado pela
+relocação do slot, e chamadas reais verificadas em `libtutoriallist.prx`.
+MWCC PSP 3.0.1 build 219 (`-O4,p -sdatathreshold 0`) compilou cada fonte duas
+vezes em diretórios independentes. Em todos os seis resultados, o símbolo tem o
+tamanho integral, o matcher de produção retornou `MATCHED`, a chamada local a
+`0x31308` foi resolvida e não há diferenças, limitações ou problemas de
+relocation. Os hashes dos objetos repetiram-se em cada par.
+
+| Função | NID | Tamanho | Baseline | Resultado final | Divergências | Status |
+|---|---|---:|---|---|---|---|
+| `0x36CCC` | `0xFDD168CA` | 20 words | sem fonte 037 | 20/20; fonte `58d1237a7ab139f95daa0b1554e44ac11040d4346b58b465bdca14f911ed20d6`; objeto `61c40a1c7116a9928c6661779a768880d60a7d63c780a9b71ff49576b5d84723` | nenhuma | **MATCHED** |
+| `0x37BC8` | `0xCABEA834` | 18 words | sem fonte 037 | 18/18; fonte `05bffbff73e0835dd1178b0b5ff8023187d513aa9ee813d46c02f4de1a696723`; objeto `da340f05387674ee6d846895a67250780268905925d4152db8e4affac6887a95` | nenhuma | **MATCHED** |
+| `0x388B4` | `0x5CBB9E43` | 18 words | sem fonte 037 | 18/18; fonte `3b4330b0327dce64cd9689a57d6a7ce277f0ae2722dc3a64c0c840510b919f3c`; objeto `1bef6b194e13374e9bfc99df6a61403e3bc18fc6c6fee6be7d9b92fe1d4d9816` | nenhuma | **MATCHED** |
+
+Os corpos constroem palavras de comando e chamam o helper interno em `0x31308`;
+os comentários e nomes mantêm os endereços/NIDs como identidade, sem inventar
+nomes semânticos. `0x36CCC` compõe o comando `0x36` de dois argumentos;
+`0x37BC8` e `0x388B4` acrescentam, respectivamente, as tags `0x5E` e `0xDE`.
+Os PRX têm 42, 10 e 2 call sites reais para esses NIDs, respectivamente.
+
+### Triagem e hipóteses rejeitadas
+
+| Candidato | NID | Evidência/decisão | Resultado |
+|---|---|---|---|
+| `0x3F2B0` | `0xE58C0FDC` | Ghidra confirmou `[0x3F2B0,0x3F328)`, 30 instruções, sem dados/relocações e quatro chamadas importadas pelo PRX. Os objetos v7 de 036 não estavam no checkout; reconstruí a semântica a partir do CFG e da decompilação atual. | Hipótese C integral mais próxima nesta rodada: 4/30; **NONMATCHING**, não promovida. O 18/30 histórico continua sendo apenas resultado experimental documentado em 036. |
+| `0xD28C` | `0x476FD94A` | Ghidra confirmou 38 instruções, sem chamadas/relocações/dados; cinco chamadas reais no `libhtml_view.prx`. A decompilação mostra cópia alinhada de palavras com detecção de NUL e cauda byte a byte. | Hipótese C gerou 32 words, não 38; bloqueio de tamanho, sem comparação de prefixo ou fonte de produção. |
+| `0x4B29C` | `0x08813E19` | O detector sugeriu 23 instruções e há importação, mas Ghidra não encontrou uma função iniciando nesse endereço. | Rejeitado: fronteira não comprovada. |
+| `0x44EB4` | `0xAB962AE7` | Ghidra confirmou 19 instruções e quatro call sites; a rotina altera um campo de 16 bits em `DAT_000EA900`, com referências globais relocadas. | Adiado: identidade/base do global não foi provada para uma reconstrução segura. |
+| `0x36CCC` | `0xFDD168CA` | Ghidra confirmou 20 instruções, um helper interno e 42 call sites reais no `libtutoriallist.prx`; sem referências a dados. | Reconstruído e **MATCHED 20/20**. |
+| `0x37BC8` | `0xCABEA834` | Ghidra confirmou 18 instruções, um helper interno e 10 call sites reais; sem referências a dados. | Reconstruído e **MATCHED 18/18**. |
+| `0x388B4` | `0x5CBB9E43` | Ghidra confirmou 18 instruções, um helper interno e dois call sites reais; sem referências a dados. | Reconstruído e **MATCHED 18/18**. |
+
+Em `0x3F2B0`, a primeira hipótese tratava os limites como comparações unsigned e
+compilava para `sltiu`; os opcodes originais usam `slti`. Tornar explícita a
+conversão após mascarar os 16 bits corrigiu essa divergência causal, mas o CFG
+resultante continuou diferente: a primeira divergência restante foi o branch
+likely em `0x3F2B8` (alvo/scheduling), seguida por divergências de fluxo e
+registradores. Não continuei permutando estruturas sem nova evidência.
+
+O dump usado mantém SHA-256
+`d4d0efc3d6c49a7ba8142adbd316ed006a3035a572169e9ef04c6cd0daba7a91`; hashes
+dos PRXs também conferiram com os valores de 034–035. Os relatórios, objetos,
+fontes experimentais e evidências Ghidra ficam em `build/seto037/` ou
+`build/seto035/`, ignorados pelo Git. As 59 instruções EBOOT anteriormente
+certificadas permanecem intactas; com as 56 novas, o total passa a **115
+instruções MATCHED em seis funções EBOOT**. O baseline separado dos PRXs segue
+em **16 MATCHED / 912 instruções**.
+
+### Testes e regressões
+
+- Integração real 037 em WSL2: **1 passed**; as três funções foram compiladas e
+  comparadas duas vezes, com hashes determinísticos e fronteiras Ghidra exatas.
+- Integrações reais WSL2 034, 035 e 036: **1 passed cada**.
+- A integração 037 valida origem/hash das mídias, export/NID/relocação,
+  fronteiras, Ghidra, call sites PRX, tamanho integral, matching estrito e
+  caminhos de saída protegidos nível a nível.
+- Suíte completa Windows/Python 3.12: **833 passed, 43 skipped**; os skips são
+  opt-ins de integração ou pré-requisitos específicos de plataforma.
+- `python -m compileall -q src scripts tests` e `git diff --check`: **clean**.
