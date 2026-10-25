@@ -25,8 +25,9 @@ py -3.12 scripts/decomp_campaign.py status
 `build/decomp-campaign/campaign.sqlite3`. `status` reports state counts,
 MATCHED functions/instructions, C sources whose hashes still match a verified
 checkpoint, blockers, provider attempts, and whether token/cost totals were
-available. No OpenAI or DeepSeek inference was made in SETO-DECOMP-039 or 040;
-the 040 database has zero attempts and no measurable token/cost usage.
+available. No inference was made during SETO-DECOMP-039 or R3. R4 made exactly
+one nonproductive OpenAI diagnostic request; the campaign database has zero
+attempts and zero matched progress.
 
 `doctor` checks OpenCode version/catalog/auth/model metadata, AIMemory MCP, WSL
 Python, Ghidra, MWCC, and wibo without invoking a model. Current machine
@@ -39,17 +40,23 @@ findings:
 | WSL2 Python | READY — Python 3.12.3 |
 | Ghidra | READY — 12.1.3; WSL has no Java, so the installed Windows `analyzeHeadless.bat` launcher and Corretto 25 are used |
 | MWCC / wibo | READY — MWCC PSP 3.0.1 build 219 and wibo 1.2.0 in the local WSL profile |
-| OpenAI model | Catalog available and auth is stored, but the auth mode is unknown. GPT-6 Luna can be billable; included subscription usage is not verified, so **BLOCKED** |
-| DeepSeek Free | **READY in the ignored R3 pilot profile** — exact model metadata proves `apiKey=public`, active/enabled status, and zero input/output/cache cost; operator access was independently confirmed |
+| OpenAI model | **READY in the ignored R4 pilot profile** — operator confirmed `chatgpt-token-sharing`; OpenCode reports one saved OAuth credential, the native provider/default endpoint is active with no gateway/header/body override, and one minimal diagnostic request succeeded. The CLI does not expose the OAuth method tied to the saved credential, so the local profile records this explicit operator confirmation. |
+| DeepSeek Free | **READY** — exact model metadata proves `apiKey=public`, active/enabled status, and zero input/output/cache cost; operator access was independently confirmed in R3 and preserved in R4 |
 | Worker agent | `seto-decomp-worker` is discovered and its effective policy is restricted in both checkout and campaign worktree: shell/external paths denied; edits limited to candidate C and campaign build paths; AIMemory query/read only |
-| Campaign | Pilot prepared but **not started**. Versioned defaults remain disabled; only the local R3 profile enables the verified Free worker and still requires explicit `run --confirm` |
+| Campaign | Pilot prepared but **not started**. Versioned defaults remain disabled; the ignored R4 profile selects both READY workers, is capped at four total attempts / 30 minutes, and still requires explicit `run --confirm` plus both usage flags |
 
 OpenCode's [provider guide](https://opencode.ai/v2/docs/providers) distinguishes
-ChatGPT-plan sign-in from API-key usage; its [Console model guide](https://opencode.ai/v2/docs/console/models)
-says pay-as-you-go requests are charged. The local `auth list` only says
-`OpenAI stored`, so neither route is inferred here. The
-[model catalog](https://opencode.ai/v2/docs/models) listing is not treated as
-proof that this project can execute the DeepSeek Free model.
+ChatGPT-plan sign-in from API-key usage; its [CLI provider guide](https://opencode.ai/v2/docs/cli/providers/)
+documents saved OAuth credentials and environment connections. OpenCode 2.1.4's
+`auth list --format json` reports only generic `oauth`, not which OAuth method
+created that credential. R4 therefore required an explicit operator confirmation
+of the advertised `chatgpt-token-sharing` method, alongside one unambiguous saved
+OAuth credential, no environment credential, the native OpenAI provider, and the
+default `https://api.openai.com/v1` endpoint with no custom headers/body or model
+route override. The official provider guide says ChatGPT-plan usage counts against
+the plan. An empty catalog `cost` object is not used as evidence of free usage.
+The [model catalog](https://opencode.ai/v2/docs/models) listing alone is not
+treated as proof that a project can execute a model.
 
 The repository does not copy or edit the existing global OpenCode/AIMemory
 configuration. The broad legacy project default is overridden for campaign
@@ -61,29 +68,33 @@ sources/campaign artifacts. Worktree preflight rechecks AIMemory connectivity.
 Workers may query/read AIMemory but may not write or message it. No credentials,
 media, or dumps are recorded in AIMemory or the campaign ledger.
 
-## A future, separately authorized run
+## A future, separately confirmed pilot run
 
-SETO-DECOMP-040 made **zero model requests**. Stored authentication alone does
-not make OpenAI READY; DeepSeek's catalog entry alone does not prove access.
-The R3 preflight accepts the exact DeepSeek Free model only when current
-`/api/model` metadata proves public auth, active/enabled state and zero cost,
-and the operator has separately verified access. The configured workers are:
+SETO-DECOMP-040 made exactly one **nonproductive diagnostic** model request in
+R4; the campaign itself was not started. Stored authentication alone does not
+make OpenAI READY, and DeepSeek's catalog entry alone does not prove access. The
+OpenAI preflight additionally requires the explicit OAuth-method confirmation
+described above. The R3 DeepSeek preflight accepts the exact Free model only when
+current `/api/model` metadata proves public auth, active/enabled state and zero
+cost, and the operator has separately verified access. The configured workers are:
 
 * `openai/gpt-6-luna` via provider `openai` (requires proven subscription-included usage; API-key/billable mode is rejected)
 * `opencode/deepseek-v4.1-flash-free` via provider `opencode` (requires exact public model metadata, verified access, and exact Free usage)
 
-After that evidence exists, set only the corresponding worker's
-`usage_mode` (`subscription_included` for OpenAI or `free` for the exact
-DeepSeek model) and `access_verified = true`. Then explicitly review the
-effective agent policy and set `execution.enabled`,
-`execution.provider_access_verified`, and `execution.worker_permissions_reviewed`
-to true. The ordinary `run` command is the **pilot**: it is restricted to
+The ignored R4 local profile records the operator-confirmed OpenAI method as
+`auth_method_confirmed = "chatgpt-token-sharing"`; preflight still rejects API
+keys, environment credentials, ambiguous accounts, unknown methods, and custom
+routes. On another machine, do not copy that confirmation: the operator must
+verify the selected method in `/connect` or `opencode auth login openai`, then
+record it only in that machine's ignored profile. Set `access_verified = true`
+only after the separate minimal test succeeds. The ordinary `run` command is the
+**pilot**: it is restricted to
 `0x2C28C` and `0x4217C`, max 4 total attempts with two READY providers (max 2
 with only one), and a 30-minute deadline. Pass only the confirmation flag(s) for
 the READY worker(s):
 
 ```powershell
-py -3.12 scripts/decomp_campaign.py run --confirm --allow-openai-usage --allow-free-model-usage --max-tasks 4
+py -3.12 scripts/decomp_campaign.py --config config/decomp_campaign.run.local.toml run --confirm --allow-openai-usage --allow-free-model-usage --max-tasks 4
 ```
 
 The launcher selects **only** workers that pass catalog, auth, exact cost-mode,
@@ -264,3 +275,46 @@ SETO-DECOMP-040 status before R3 (2026-10-25), no model inference:
   worker permissions. Targeted tests: **14 passed**; orchestrator suite:
   **55 passed**; full suite: **890 passed, 44 skipped**. `compileall` and
   `git diff --check` are clean. EBOOT remains **8/206** and PRXs **16/912**.
+
+## SETO-DECOMP-040-R4 — ChatGPT subscription preflight (2026-10-25)
+
+- The operator explicitly confirmed that the single saved OpenAI account was
+  connected with **Sign in with ChatGPT** (`chatgpt-token-sharing`). OpenCode
+  2.1.4 exposes only generic `method="oauth"` for the saved credential; it does
+  not link that credential to a specific OAuth method ID. No account was
+  switched, changed, or disconnected. `auth list --format json` showed one saved
+  OpenAI credential and no environment connection. The effective provider uses
+  OpenCode's native package and default OpenAI endpoint, without a custom
+  gateway, API-key override, custom request headers/body, or model-level route
+  override. Credential values were not read or recorded.
+- `openai/gpt-6-luna` was present, active, and enabled. Its empty catalog cost
+  metadata was **not** treated as billing evidence. The official V2 provider
+  documentation identifies ChatGPT-plan sign-in as plan usage; because the CLI
+  cannot distinguish the saved OAuth method, the ignored local profile records
+  the explicit operator confirmation.
+- One minimal, nonproductive Luna request succeeded in a
+  `seto-decomp-worker` session located in the OpenAI worktree. The effective
+  restricted policy passed; the session retained the exact agent/model and
+  OpenCode's `variant="default"`. No tool call or project work was made. Only
+  success, model, modality, and session identity were recorded; response content
+  and session ID were not recorded.
+- Session validation now compares the exact provider/model identity and accepts
+  OpenCode's implicit default variant; a non-default variant still causes a
+  session replacement. Preflight uses `auth list --format json` without
+  persisting account IDs, labels, or credential values. API keys, environment
+  credentials, ambiguous accounts, unknown methods, custom routes, unavailable
+  models, and insufficient permissions remain BLOCKED. DeepSeek Free readiness
+  remains independent and unchanged; an empty OpenAI cost object is ignored.
+- The ignored R4 profile selects both READY workers, one per model, with
+  `limits.max_workers=2`, four total pilot attempts, a 30-minute limit, and only
+  `0x2C28C` / `0x4217C`. `continuous`, `pilot_verified`, and productive expansion
+  remain false. The local `libtutoriallist.prx` hash typo was corrected to match
+  the versioned baseline; source files were not changed.
+- The checkout and both campaign worktrees pass `doctor`: OpenCode 2.1.4,
+  OpenAI and DeepSeek READY, AIMemory connected, restricted agent policy, WSL
+  Python 3.12.3, Ghidra, MWCC, and wibo READY. Both worktrees are clean at
+  `4e7c606` before R4 code changes. The campaign was not started; EBOOT and PRX
+  baselines remain **8/206** and **16/912**. TDD RED reproduced the missing
+  subscription/route checks and the false session mismatch on `variant="default"`;
+  GREEN: orchestrator **72 passed**, full suite **907 passed / 44 skipped**,
+  `compileall` and `git diff --check` clean.
