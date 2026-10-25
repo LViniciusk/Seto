@@ -3196,6 +3196,10 @@ def test_productive_run_max_tasks_is_a_cumulative_sqlite_ceiling(
         "inputs": {"eboot_sha256": "a" * 64},
         "worktrees": {"root": "build/decomp-campaign/worktrees"},
     }
+    local_ghidra_config = tmp_path / "config" / "decomp_campaign.local.toml"
+    local_ghidra_config.parent.mkdir(parents=True)
+    local_ghidra_config.write_text("[ghidra]\n", encoding="utf-8")
+    monkeypatch.setattr(decomp_campaign_module, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: config)
     monkeypatch.setattr(
         decomp_campaign_module,
