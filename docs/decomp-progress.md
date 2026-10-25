@@ -6908,4 +6908,4 @@ Não foram adicionadas fontes experimentais sem certificação.
 | `git diff --check` | clean |
 | MWCC / matcher local | quatro builds 28/28 para `conditional-pointer`; tentativa produtiva 28/28; dois builds adicionais na promoção |
 | Campanha / SQLite | 1 tentativa produtiva nova, 5 cumulativas, nenhuma em execução; limite 12 e duração máxima 5.400 s respeitados |
-| CI | a verificar após abrir a PR |
+| CI GitHub Actions | **passou** nos quatro jobs Ubuntu/Windows × Python 3.11/3.12; ambos os eventos push e pull request concluíram com sucesso |
