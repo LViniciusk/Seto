@@ -1101,6 +1101,11 @@ def _mock_opencode_preflight(
     models: list[dict[str, object]],
     *,
     api_stdout: str | None = None,
+    auth_payload: object | None = None,
+    provider_payload: object | None = None,
+    integration_payload: object | None = None,
+    worker_overrides: dict[str, object] | None = None,
+    agent_policy: bool = True,
 ) -> dict[str, object]:
     config = {
         "opencode": {"command": ["opencode-test-double"]},
@@ -1117,6 +1122,7 @@ def _mock_opencode_preflight(
                 "agent": "seto-decomp-worker",
                 "usage_mode": "unknown",
                 "access_verified": False,
+                **(worker_overrides or {}),
             },
             "deepseek": {
                 "provider": "opencode",
@@ -1128,15 +1134,49 @@ def _mock_opencode_preflight(
             },
         },
     }
+    auth_payload = auth_payload if auth_payload is not None else [
+        {
+            "id": "openai",
+            "name": "OpenAI",
+            "connections": [
+                {"id": "cred_test", "label": "primary", "method": "oauth", "type": "credential"}
+            ],
+        }
+    ]
+    provider_payload = provider_payload if provider_payload is not None else {
+        "data": {
+            "id": "openai",
+            "package": "@opencode/ai/providers/openai",
+            "activation": "auto",
+            "settings": {"baseURL": "https://api.openai.com/v1"},
+        }
+    }
+    integration_payload = integration_payload if integration_payload is not None else {
+        "data": {
+            "id": "openai",
+            "methods": [
+                {"id": "key", "type": "key"},
+                {"id": "env", "type": "env"},
+                {"id": "chatgpt-token-sharing", "type": "oauth"},
+                {"id": "chatgpt-browser", "type": "oauth"},
+                {"id": "chatgpt-headless", "type": "oauth"},
+            ],
+        }
+    }
+
     def fake_run(
         command: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         if command[1:] == ["models"]:
             stdout = "openai/gpt-6-luna\nopencode/deepseek-v4.1-flash-free\n"
-        elif command[1:] == ["auth", "list"]:
-            stdout = "openai account stored\n"
+        elif command[1:] in (["auth", "list"], ["auth", "list", "--format", "json"]):
+            stdout = json.dumps(auth_payload)
         elif command[1:] == ["api", "get", "/api/model"]:
             stdout = api_stdout if api_stdout is not None else json.dumps({"data": models})
+        elif command[1:] == ["api", "get", "/api/provider/openai"]:
+            stdout = json.dumps(provider_payload)
+        elif command[1:] == ["api", "get", "/api/integration/openai"]:
+            stdout = json.dumps(integration_payload)
         elif command[1:] == ["debug", "agents"]:
             stdout = "[]"
         else:
@@ -1147,7 +1187,7 @@ def _mock_opencode_preflight(
     monkeypatch.setattr(
         decomp_campaign_module,
         "worker_agent_policy_is_restricted",
-        lambda *_args: True,
+        lambda *_args: agent_policy,
     )
     result = _opencode_preflight(config, Path.cwd())
     return result["workers"]  # type: ignore[return-value]
@@ -1234,6 +1274,316 @@ def test_openai_without_verified_no_additional_cost_stays_blocked(
     assert workers["openai"]["auth"] == "stored"
     assert workers["openai"]["ready"] is False
     assert "additional_cost_not_excluded" in workers["openai"]["blockers"]
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["chatgpt-token-sharing", "chatgpt-browser", "chatgpt-headless"],
+)
+def test_confirmed_chatgpt_oauth_and_default_route_make_openai_ready(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    openai = _preflight_model("openai", "gpt-6-luna", cost=[])
+    deepseek = _preflight_model("opencode", "deepseek-v4.1-flash-free", api_key="public")
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        [openai, deepseek],
+        worker_overrides={
+            "usage_mode": "subscription_included",
+            "access_verified": True,
+            "auth_method_confirmed": method,
+        },
+    )
+
+    assert workers["openai"]["ready"] is True
+    assert workers["openai"]["blockers"] == []
+    assert workers["openai"]["chatgpt_oauth_verified"] is True
+    assert workers["openai"]["model_status"] == "active"
+    assert workers["openai"]["model_enabled"] is True
+    assert workers["openai"]["model_cost_zero"] is False  # Empty catalog cost is not proof.
+    assert workers["deepseek"]["ready"] is True
+
+
+@pytest.mark.parametrize(
+    ("stored_method", "confirmed_method"),
+    [
+        ("key", "chatgpt-token-sharing"),
+        ("oauth", "unknown-oauth-method"),
+        ("oauth", None),
+    ],
+)
+def test_openai_api_key_unknown_or_unconfirmed_oauth_stays_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_method: str,
+    confirmed_method: str | None,
+) -> None:
+    model = _preflight_model("openai", "gpt-6-luna", cost=[])
+    overrides: dict[str, object] = {
+        "usage_mode": "subscription_included",
+        "access_verified": True,
+    }
+    if confirmed_method is not None:
+        overrides["auth_method_confirmed"] = confirmed_method
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        [model],
+        auth_payload=[
+            {
+                "id": "openai",
+                "connections": [
+                    {"id": "cred_test", "label": "primary", "method": stored_method, "type": "credential"}
+                ],
+            }
+        ],
+        worker_overrides=overrides,
+    )
+
+    assert workers["openai"]["ready"] is False
+    assert workers["openai"]["chatgpt_oauth_verified"] is False
+    assert "chatgpt_subscription_auth_unverified" in workers["openai"]["blockers"]
+
+
+@pytest.mark.parametrize(
+    "connections",
+    [
+        [{"id": "env", "label": "environment", "method": "env", "type": "environment"}],
+        [
+            {"id": "oauth-a", "label": "one", "method": "oauth", "type": "credential"},
+            {"id": "oauth-b", "label": "two", "method": "oauth", "type": "credential"},
+        ],
+    ],
+)
+def test_openai_environment_or_ambiguous_accounts_cannot_prove_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+    connections: list[dict[str, str]],
+) -> None:
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        [_preflight_model("openai", "gpt-6-luna", cost=[])],
+        auth_payload=[{"id": "openai", "connections": connections}],
+        worker_overrides={
+            "usage_mode": "subscription_included",
+            "access_verified": True,
+            "auth_method_confirmed": "chatgpt-token-sharing",
+        },
+    )
+
+    assert workers["openai"]["ready"] is False
+    assert workers["openai"]["chatgpt_oauth_verified"] is False
+    assert "chatgpt_subscription_auth_unverified" in workers["openai"]["blockers"]
+
+
+def test_openai_custom_gateway_is_rejected_even_with_chatgpt_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _preflight_model("openai", "gpt-6-luna", cost=[])
+    provider = {
+        "data": {
+            "id": "openai",
+            "package": "@opencode/ai/providers/openai",
+            "activation": "auto",
+            "settings": {"baseURL": "https://gateway.example.test/v1"},
+        }
+    }
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        [model],
+        provider_payload=provider,
+        worker_overrides={
+            "usage_mode": "subscription_included",
+            "access_verified": True,
+            "auth_method_confirmed": "chatgpt-token-sharing",
+        },
+    )
+
+    assert workers["openai"]["ready"] is False
+    assert "provider_route_not_subscription_compatible" in workers["openai"]["blockers"]
+
+
+def test_openai_model_level_gateway_override_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _preflight_model("openai", "gpt-6-luna", cost=[])
+    model["settings"] = {"baseURL": "https://model-gateway.example.test/v1"}
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        [model],
+        worker_overrides={
+            "usage_mode": "subscription_included",
+            "access_verified": True,
+            "auth_method_confirmed": "chatgpt-token-sharing",
+        },
+    )
+
+    assert workers["openai"]["ready"] is False
+    assert "provider_route_not_subscription_compatible" in workers["openai"]["blockers"]
+
+
+def test_openai_provider_api_key_override_is_rejected_with_chatgpt_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _preflight_model("openai", "gpt-6-luna", cost=[])
+    provider = {
+        "data": {
+            "id": "openai",
+            "package": "@opencode/ai/providers/openai",
+            "activation": "auto",
+            "settings": {
+                "baseURL": "https://api.openai.com/v1",
+                "apiKey": "configured",
+            },
+        }
+    }
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        [model],
+        provider_payload=provider,
+        worker_overrides={
+            "usage_mode": "subscription_included",
+            "access_verified": True,
+            "auth_method_confirmed": "chatgpt-token-sharing",
+        },
+    )
+
+    assert workers["openai"]["ready"] is False
+    assert "provider_route_not_subscription_compatible" in workers["openai"]["blockers"]
+
+
+@pytest.mark.parametrize(
+    ("status", "enabled", "expected_blocker"),
+    [
+        ("inactive", True, "model_not_active"),
+        ("active", False, "model_disabled_or_unverified"),
+    ],
+)
+def test_openai_unavailable_model_or_unrestricted_agent_blocks_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    enabled: bool,
+    expected_blocker: str,
+) -> None:
+    model = _preflight_model("openai", "gpt-6-luna", status=status, enabled=enabled, cost=[])
+    worker = {
+        "usage_mode": "subscription_included",
+        "access_verified": True,
+        "auth_method_confirmed": "chatgpt-token-sharing",
+    }
+    unavailable = _mock_opencode_preflight(monkeypatch, [model], worker_overrides=worker)
+    assert unavailable["openai"]["ready"] is False
+    assert expected_blocker in unavailable["openai"]["blockers"]
+
+    denied = _mock_opencode_preflight(
+        monkeypatch,
+        [_preflight_model("openai", "gpt-6-luna", cost=[])],
+        worker_overrides=worker,
+        agent_policy=False,
+    )
+    assert denied["openai"]["ready"] is False
+    assert "worker_permissions_not_restricted" in denied["openai"]["blockers"]
+
+
+def test_two_ready_workers_are_selected_without_changing_pilot_scope_or_models() -> None:
+    workers = {
+        "openai": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 1},
+        "deepseek": {
+            "provider": "opencode",
+            "model": "opencode/deepseek-v4.1-flash-free",
+            "max_parallel": 1,
+        },
+    }
+    allowed_models = [worker["model"] for worker in workers.values()]
+    candidates = ["0x2c28c", "0x4217c"]
+    states = {name: {"ready": True} for name in workers}
+
+    selected = select_ready_workers(workers, states, max_workers=2)
+
+    assert selected == ["openai", "deepseek"]
+    assert [worker["model"] for worker in workers.values()] == allowed_models
+    assert [worker["max_parallel"] for worker in workers.values()] == [1, 1]
+    assert candidates == ["0x2c28c", "0x4217c"]
+
+
+def test_resumed_session_keeps_luna_model_and_restricted_agent(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"worker": worktree},
+        timeout_seconds=5,
+    )
+    claim = store.claim_next("worker", "openai")
+    assert claim is not None
+    bound = runner._ensure_session(
+        claim,
+        worktree,
+        None,
+        agent="seto-decomp-worker",
+        model="openai/gpt-6-luna",
+    )
+    store.fail(bound, Failure(FailureKind.INTERRUPTED))
+
+    resumed = store.claim_next("worker", "openai")
+    assert resumed is not None
+    reused = runner._ensure_session(
+        resumed,
+        worktree,
+        None,
+        agent="seto-decomp-worker",
+        model="openai/gpt-6-luna",
+    )
+
+    assert reused.session_id == bound.session_id
+    state = json.loads((worktree / ".fake-opencode-sessions.json").read_text())
+    session = state["sessions"][reused.session_id]
+    assert session["agent"] == "seto-decomp-worker"
+    assert session["model"] == {"providerID": "openai", "id": "gpt-6-luna"}
+
+
+@pytest.mark.parametrize(("variant", "should_reuse"), [("default", True), ("extended", False)])
+def test_resumed_session_validates_opencode_model_variant_metadata(
+    tmp_path: Path, variant: str, should_reuse: bool
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"worker": worktree},
+        timeout_seconds=5,
+    )
+    claim = store.claim_next("worker", "openai")
+    assert claim is not None
+    bound = runner._ensure_session(
+        claim,
+        worktree,
+        None,
+        agent="seto-decomp-worker",
+        model="openai/gpt-6-luna",
+    )
+    state_path = worktree / ".fake-opencode-sessions.json"
+    state = json.loads(state_path.read_text())
+    state["sessions"][bound.session_id]["model"]["variant"] = variant
+    state_path.write_text(json.dumps(state))
+    store.fail(bound, Failure(FailureKind.INTERRUPTED))
+
+    resumed = store.claim_next("worker", "openai")
+    assert resumed is not None
+    reused = runner._ensure_session(
+        resumed,
+        worktree,
+        None,
+        agent="seto-decomp-worker",
+        model="openai/gpt-6-luna",
+    )
+
+    updated = json.loads(state_path.read_text())
+    assert (reused.session_id == bound.session_id) is should_reuse
+    assert len(updated["created"]) == (1 if should_reuse else 2)
 
 
 def test_missing_restricted_worker_permissions_block_free_readiness() -> None:

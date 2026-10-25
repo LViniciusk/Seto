@@ -30,6 +30,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
+from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,11 @@ TOKEN_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
 )
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+CHATGPT_OAUTH_METHODS = frozenset(
+    {"chatgpt-token-sharing", "chatgpt-browser", "chatgpt-headless"}
+)
+OPENAI_PROVIDER_PACKAGE = "@opencode/ai/providers/openai"
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 
 class FailureKind(StrEnum):
@@ -1386,6 +1392,20 @@ class CampaignRunner:
         except OSError:
             return False
 
+    @staticmethod
+    def _session_model_matches(data: dict[str, Any], model: str) -> bool:
+        provider_id, separator, model_id = model.partition("/")
+        stored = data.get("model")
+        return bool(
+            separator
+            and provider_id
+            and model_id
+            and isinstance(stored, dict)
+            and stored.get("providerID") == provider_id
+            and stored.get("id") == model_id
+            and stored.get("variant", "default") in (None, "default")
+        )
+
     def _create_session(
         self,
         claim: Claim,
@@ -1444,14 +1464,7 @@ class CampaignRunner:
                     self._session_id(data.get("id")) == session_id
                     and self._same_location(data, worktree)
                     and data.get("agent") == agent
-                    and (
-                        model is None
-                        or data.get("model")
-                        == {
-                            "providerID": model.partition("/")[0],
-                            "id": model.partition("/")[2],
-                        }
-                    )
+                    and (model is None or self._session_model_matches(data, model))
                 ):
                     return claim
             elif not (
@@ -2529,6 +2542,109 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     return value
 
 
+def _unwrap_api_data(value: Any) -> Any:
+    return value.get("data", value) if isinstance(value, dict) else value
+
+
+def _provider_auth_metadata(payload: Any, provider: str) -> dict[str, Any]:
+    """Summarize auth-list metadata without exposing credential labels or values."""
+    entries = _unwrap_api_data(payload)
+    if not isinstance(entries, list):
+        return {"auth": "not-listed", "method": None, "single_credential": False}
+    matches = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("id") == provider
+    ]
+    if len(matches) != 1 or not isinstance(matches[0].get("connections"), list):
+        return {"auth": "not-listed", "method": None, "single_credential": False}
+    connections = matches[0]["connections"]
+    if len(connections) != 1 or not isinstance(connections[0], dict):
+        return {"auth": "ambiguous", "method": None, "single_credential": False}
+    connection = connections[0]
+    if connection.get("type") == "environment":
+        return {"auth": "environment", "method": connection.get("method"), "single_credential": False}
+    if connection.get("type") != "credential":
+        return {"auth": "not-listed", "method": None, "single_credential": False}
+    return {
+        "auth": "stored",
+        "method": connection.get("method"),
+        "single_credential": True,
+    }
+
+
+def _chatgpt_oauth_method_available(payload: Any, method_id: Any) -> bool:
+    """Require an operator-confirmed method that this OpenCode build advertises as OAuth."""
+    if method_id not in CHATGPT_OAUTH_METHODS:
+        return False
+    integration = _unwrap_api_data(payload)
+    if not isinstance(integration, dict) or integration.get("id") != "openai":
+        return False
+    methods = integration.get("methods")
+    return isinstance(methods, list) and any(
+        isinstance(method, dict)
+        and method.get("id") == method_id
+        and method.get("type") == "oauth"
+        for method in methods
+    )
+
+
+def _openai_base_url_is_default(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        route = urlsplit(value)
+        default = urlsplit(OPENAI_DEFAULT_BASE_URL)
+    except ValueError:
+        return False
+    return bool(
+        route.scheme == "https"
+        and route.hostname == default.hostname
+        and route.port is None
+        and route.path.rstrip("/") == default.path
+        and not route.query
+        and not route.fragment
+        and not route.username
+        and not route.password
+    )
+
+
+def _openai_route_is_subscription_compatible(
+    payload: Any, model_metadata: Any = None
+) -> bool:
+    """Reject API-key overrides and custom gateways; accept only native OpenAI defaults."""
+    provider = _unwrap_api_data(payload)
+    if not isinstance(provider, dict) or provider.get("id") != "openai":
+        return False
+    settings = provider.get("settings")
+    if (
+        provider.get("package") != OPENAI_PROVIDER_PACKAGE
+        or not isinstance(settings, dict)
+        or not _openai_base_url_is_default(settings.get("baseURL"))
+        or settings.get("apiKey")
+        or provider.get("headers")
+        or provider.get("body")
+    ):
+        return False
+    model = _unwrap_api_data(model_metadata)
+    if model is None:
+        return True
+    if not isinstance(model, dict) or model.get("providerID") != "openai":
+        return False
+    model_settings = model.get("settings")
+    if not isinstance(model_settings, dict):
+        return False
+    if (
+        model.get("package") not in {None, OPENAI_PROVIDER_PACKAGE}
+        or ("baseURL" in model_settings and not _openai_base_url_is_default(model_settings["baseURL"]))
+        or model_settings.get("apiKey")
+        or model.get("headers")
+        or model.get("body")
+    ):
+        return False
+    return True
+
+
 def worker_readiness(
     worker: dict[str, Any], observed: dict[str, Any], allowed_models: Iterable[str]
 ) -> dict[str, Any]:
@@ -2556,6 +2672,14 @@ def worker_readiness(
     if provider == "openai":
         if usage_mode != "subscription_included":
             blockers.append("additional_cost_not_excluded")
+        if observed.get("chatgpt_oauth_verified") is not True:
+            blockers.append("chatgpt_subscription_auth_unverified")
+        if observed.get("provider_route_compatible") is not True:
+            blockers.append("provider_route_not_subscription_compatible")
+        if observed.get("model_status") != "active":
+            blockers.append("model_not_active")
+        if observed.get("model_enabled") is not True:
+            blockers.append("model_disabled_or_unverified")
     elif provider == "opencode":
         if (
             usage_mode != "free"
@@ -2946,10 +3070,31 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
         [*command, "models"], cwd=cwd, capture_output=True, text=True, timeout=120, check=False
     )
     auth = subprocess.run(
-        [*command, "auth", "list"], cwd=cwd, capture_output=True, text=True, timeout=60, check=False
+        [*command, "auth", "list", "--format", "json"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     model_metadata_result = subprocess.run(
         [*command, "api", "get", "/api/model"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    provider_result = subprocess.run(
+        [*command, "api", "get", "/api/provider/openai"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    integration_result = subprocess.run(
+        [*command, "api", "get", "/api/integration/openai"],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -2965,7 +3110,10 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
         check=False,
     )
     listed_models = set(catalog.stdout.splitlines()) if catalog.returncode == 0 else set()
-    auth_text = auth.stdout if auth.returncode == 0 else ""
+    try:
+        auth_payload = json.loads(auth.stdout) if auth.returncode == 0 else None
+    except json.JSONDecodeError:
+        auth_payload = None
     try:
         model_payload = (
             json.loads(model_metadata_result.stdout)
@@ -2977,6 +3125,16 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     raw_model_data = model_payload.get("data") if isinstance(model_payload, dict) else None
     model_data = raw_model_data if isinstance(raw_model_data, list) else []
     model_records = [item for item in model_data if isinstance(item, dict)]
+    try:
+        provider_payload = json.loads(provider_result.stdout) if provider_result.returncode == 0 else None
+    except json.JSONDecodeError:
+        provider_payload = None
+    try:
+        integration_payload = (
+            json.loads(integration_result.stdout) if integration_result.returncode == 0 else None
+        )
+    except json.JSONDecodeError:
+        integration_payload = None
 
     def cost_is_zero(cost: Any) -> bool:
         if not isinstance(cost, list) or not cost:
@@ -3005,12 +3163,13 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     for worker_name, item in config.get("workers", {}).items():
         model = validate_model_id(item["model"], config["models"]["allowlist"])
         model_present = model in listed_models
-        provider_auth = bool(re.search(rf"(?im)^\s*{re.escape(item['provider'])}\s+.+\bstored\b", auth_text))
+        provider_id = str(item["provider"])
+        auth_metadata = _provider_auth_metadata(auth_payload, provider_id)
         model_id = model.partition("/")[2]
         metadata_matches = [
             record
             for record in model_records
-            if record.get("providerID") == item["provider"]
+            if record.get("providerID") == provider_id
             and record.get("id") == model_id
         ]
         metadata = metadata_matches[0] if len(metadata_matches) == 1 else {}
@@ -3020,15 +3179,40 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
             and isinstance(settings, dict)
             and settings.get("apiKey") == "public"
         )
+        provider_route_compatible = (
+            _openai_route_is_subscription_compatible(provider_payload, metadata)
+            if provider_id == "openai"
+            else None
+        )
+        operator_confirmed_method = item.get("auth_method_confirmed")
+        chatgpt_oauth_verified = (
+            provider_id == "openai"
+            and auth_metadata.get("auth") == "stored"
+            and auth_metadata.get("single_credential") is True
+            and auth_metadata.get("method") == "oauth"
+            and provider_route_compatible is True
+            and _chatgpt_oauth_method_available(
+                integration_payload, operator_confirmed_method
+            )
+        )
         observation = {
             "model": model,
             "catalog": "available" if model_present else "missing",
             "auth": (
-                "stored"
-                if provider_auth
+                auth_metadata["auth"]
+                if auth_metadata["auth"] != "not-listed"
                 else "public"
                 if public_key_metadata
                 else "not-listed"
+            ),
+            "auth_method": (
+                operator_confirmed_method
+                if chatgpt_oauth_verified
+                else auth_metadata.get("method")
+            ),
+            "chatgpt_oauth_verified": chatgpt_oauth_verified,
+            "provider_route_compatible": (
+                provider_route_compatible
             ),
             "public_model_metadata": public_key_metadata,
             "model_status": metadata.get("status"),
@@ -3047,6 +3231,8 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
         "catalog_exit_code": catalog.returncode,
         "auth_exit_code": auth.returncode,
         "model_metadata_exit_code": model_metadata_result.returncode,
+        "provider_metadata_exit_code": provider_result.returncode,
+        "integration_metadata_exit_code": integration_result.returncode,
         "worker_agent_configured": agents_result.returncode == 0,
         "workers": worker_states,
     }
