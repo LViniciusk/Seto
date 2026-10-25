@@ -6821,3 +6821,91 @@ campanha então gerou e validou seus próprios logs da tentativa 2.
 | Ghidra real | dois smoke tests isolados + duas análises da campanha, boundaries e listings completos |
 | MWCC/matcher real | Luna: duas compilações e comparações completas determinísticas; DeepSeek: duas falhas de compilação por `stdarg.h` ausente |
 | Tentativas/modelos | exatamente duas novas tentativas, Luna e DeepSeek; total cumulativo 4; nenhuma execução adicional |
+
+## SETO-DECOMP-044 — Promoções certificadas
+
+- `0x2c28c` — 28 instruções, source SHA-256
+  `c8a3d3d30a4238257ffbbb8d025740758037896aa2617b9b3e590f2e27295c2a`; origem
+  `openai` / sessão `ses_e8c6931dbffegdQ52d6EAchFWw`; dois builds MWCC
+  certificados: `cb138678ec0ac8a66aa2cce682a18d66baa0912318a5422732606a0628305fa6,
+  cb138678ec0ac8a66aa2cce682a18d66baa0912318a5422732606a0628305fa6`.
+
+### Código e evidências locais
+
+- O `run --productive` agora exige `--candidate-address` repetível e valida
+  formato, duplicatas e presença no inventário. O `--max-tasks` limita o total
+  cumulativo lido do SQLite; o teto absoluto é passado intacto ao runner porque
+  o SQLite aplica o limite atomicamente entre runners concorrentes. RED reproduziu
+  a regressão em que passar somente o saldo disponível seria interpretado como
+  novo teto total; GREEN permite até 8 tentativas novas sobre 4 históricas sem
+  exceder 12. Com 12 tentativas existentes não agenda trabalho, e rejeita um
+  total acima do teto. `resume --retry-address` desbloqueia somente
+  endereços solicitados, sem lease, preservando sessões, checkpoints, snapshots
+  e tentativas históricas. Não altera o caminho de recuperação de leases nem o
+  scheduler.
+- Cada verificação do matcher passou a ter diretório por tentativa, e os
+  checkpoints pequenos/sanitizados distinguem `best_match` de `last_attempt`,
+  conservam score, divergência, hashes, relatórios e worker/sessão/tentativa de
+  origem. A reprodução com best `openai` 3/4 seguido de resultado `deepseek`
+  2/4 confirmou que relatório e divergência do best continuam vinculados ao
+  primeiro worker. Experimentos locais podem ser registrados como evidência
+  separada, sem substituir `best_result`, status ou contador de inferências.
+- A fonte histórica 26/28 foi preservada. Variantes C locais foram compiladas
+  com MWCC 3.0.1 build 219, flags de produção `-O4,p -sdatathreshold 0` e
+  comparação do objeto integral de 112 bytes; nada alterou o matcher ou usou
+  assembly manual:
+
+| Experimento local em `build/` | Source SHA-256 | Resultado observado |
+|---|---|---|
+| Hipótese anterior | `0d01ed9e18e747fcb910d30d745f46012c20b070df2b3bf25294e57701740b4a` | **NONMATCHING 26/28**, diferenças em `0x2C2C4`/`0x2C2C8`; objeto `c7dc375ccbda6365e14bd7af5ac3ef5a6b1b1d92ce5dc7cb9f134813c739276e` |
+| `inverted-early-return` | `9e86f5731dc7489650d8a5a88e7c40307a642fd2776bdff8f46f5ab123a68f43` | Falha de compilação; sem objeto ou resultado de matching |
+| `duplicate-if-else` | `fea1ce01da6192e353eeb94fd699d338a4130d772761a522c9a62de1eff3a2a3` | **NONMATCHING 14/28**; objeto `8a6a71fb407c7ac85bc71ea303848a279d84536678cc8884b8f0ede6666df6fa` |
+| `switch-tag` | `0e930a3d7ab31d4ac8a03aa7abcd9f7d13c944f66bd50b0de324f8403cdf1197` | **NONMATCHING 14/28**; objeto `0bf67c8fe87622d7c0e92408ea0c3d8802adced04798f60fc4aa2d1d8b544692` |
+| `conditional-pointer` | `b550586021f0d3891bc0f7a0281e5f9dd98be7d2f555dee3990da0fb028f1d9d` | **MATCHED 28/28** em quatro builds independentes, zero divergências/limitações; todos produziram objeto `cb138678ec0ac8a66aa2cce682a18d66baa0912318a5422732606a0628305fa6`. Inicialmente registrado como experimento, não como certificação da campanha. |
+
+Os C e relatórios dessas variantes continuam somente em `build/` e não fazem
+parte desta PR. Para `0x4217C`, MWCC 3.0.1 não encontra um `stdarg.h` compatível:
+o único arquivo achado é um stub de testes do pycparser, `MWCIncludes` está
+ausente e a sonda de `__builtin_va_list`/`__builtin_va_start`/`__builtin_va_end`
+foi rejeitada sem produzir objeto. Nenhum header arbitrário ou ABI sintético
+foi usado. O candidato permanece `blocked`; o histórico `checkpoint_invalid`
+do SQLite foi mantido e não houve inferência DeepSeek nesta janela produtiva.
+
+### Janela produtiva, certificação e baselines
+
+O preflight começou com SQLite íntegro, quatro tentativas e nenhum worker ativo;
+os hashes configurados de EBOOT, PRXs e triage conferiram. Ghidra **12.1.3**,
+MWCC PSP **3.0.1 build 219**, WSL2/wibo e Python WSL **3.12.3** estavam
+disponíveis. Luna/DeepSeek passaram a verificação de modelo e suas políticas
+restritas foram inspecionadas; a configuração local limitou de fato a janela a
+um worker Luna e a `0x2C28C`. AIMemory permaneceu `UNVERIFIED`, sem bloquear o
+uso das evidências locais. Os limites configurados foram 12 tentativas
+cumulativas e 5.400 segundos. O filtro explícito e a retomada seletiva foram
+exercitados em testes antes da única execução produtiva.
+
+| Tentativa produtiva | Worker / sessão | Duração | Resultado integral |
+|---|---|---:|---|
+| `0x2C28C`, tentativa SQLite **3** | `openai/gpt-6-luna`, `openai`, `ses_e8c6931dbffegdQ52d6EAchFWw` | 43,05 s | **MATCHED 28/28**; duas verificações integrais, objeto idêntico `cb138678ec0ac8a66aa2cce682a18d66baa0912318a5422732606a0628305fa6`, nenhuma divergência ou limitação de relocação. Source SHA-256 `c8a3d3d30a4238257ffbbb8d025740758037896aa2617b9b3e590f2e27295c2a`. |
+
+`promote_campaign_source()` revalidou a fonte com dois novos builds independentes
+antes de instalá-la em `decomp/src/eboot/func_0002C28C.c`; ambos reproduziram o
+mesmo objeto certificado. A campanha consumiu **1 tentativa nova**, passando de
+4 para **5/12 cumulativas**; não iniciou outra campanha. SQLite final: integridade
+`ok`, nenhuma tentativa `running`, `0x2C28C` `matched` (3 tentativas do candidato)
+e `0x4217C` `blocked` (2 tentativas históricas; checkpoint não reescrito).
+
+Baseline EBOOT após a promoção: **9 funções MATCHED / 234 instruções** (antes:
+8 / 206). Baseline PRXs inalterado: **16 funções MATCHED / 912 instruções**.
+Não foram adicionadas fontes experimentais sem certificação.
+
+### Validação SETO-DECOMP-044
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_decomp_campaign.py` | **128 passed** |
+| Suíte completa Windows / Python 3.12 | **963 passed, 44 skipped** |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+| MWCC / matcher local | quatro builds 28/28 para `conditional-pointer`; tentativa produtiva 28/28; dois builds adicionais na promoção |
+| Campanha / SQLite | 1 tentativa produtiva nova, 5 cumulativas, nenhuma em execução; limite 12 e duração máxima 5.400 s respeitados |
+| CI | a verificar após abrir a PR |

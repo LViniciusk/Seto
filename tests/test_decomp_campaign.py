@@ -6,6 +6,7 @@ import json
 import hashlib
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -694,6 +695,7 @@ def test_promotion_documentation_is_idempotent_and_keeps_session_and_hash(tmp_pa
     _append_promotion_documentation(tmp_path, record)
     _append_promotion_documentation(tmp_path, record)
     text = progress.read_text(encoding="utf-8")
+    assert "## SETO-DECOMP-044 — Promoções certificadas" in text
     assert text.count("`0x1000`") == 1
     assert "ses_test_promotion" in text
     assert "`" + "a" * 64 + "`" in text
@@ -820,6 +822,25 @@ def test_worker_can_continue_from_local_evidence_when_aimemory_is_unavailable(
 ) -> None:
     store = CampaignStore(tmp_path / "campaign.sqlite3")
     store.seed([candidate("0x1000", preferred_provider="openai")])
+    local_experiment = {
+        "origin_kind": "local_experiment",
+        "worker_id": "openai",
+        "status": "MATCHED",
+        "source_path": "build/decomp-campaign/experiments/1000/variant.c",
+        "source_sha256": "a" * 64,
+        "matching_words": 4,
+        "total_words": 4,
+        "report_paths": [
+            "build/decomp-campaign/experiments/1000/verify-1/full.json",
+            "build/decomp-campaign/experiments/1000/verify-2/full.json",
+        ],
+        "object_sha256s": ["b" * 64, "b" * 64],
+    }
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET checkpoint_json=? WHERE address='0x1000'",
+            (json.dumps({"local_experiments": [local_experiment]}),),
+        )
     simulator = tmp_path / "local_evidence_only.py"
     simulator.write_text(
         "import json, pathlib\n"
@@ -847,6 +868,9 @@ def test_worker_can_continue_from_local_evidence_when_aimemory_is_unavailable(
     assert store.get_task("0x1000")["checkpoint"]["next_experiment"] == (
         "inspect the proven call site"
     )
+    assert store.get_task("0x1000")["checkpoint"]["local_experiments"] == [
+        local_experiment
+    ]
 
 
 def test_successful_worker_without_candidate_source_preserves_checkpoint_and_diagnosis(
@@ -1341,6 +1365,74 @@ def test_campaign_attempt_limit_is_atomic_across_joining_runners(tmp_path: Path)
 
     assert sum(result["attempted"] for result in results) == 3
     assert len(store.list_attempts()) == 3
+    assert all(task["status"] != "running" for task in store.list_tasks())
+
+
+def test_cumulative_attempt_ceiling_is_atomic_with_historical_attempts(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "campaign.sqlite3"
+    store = CampaignStore(database)
+    candidates = [candidate(f"0x{0x1000 + index * 0x10:x}") for index in range(12)]
+    store.seed(candidates)
+    with store._connect() as db:
+        for index, item in enumerate(candidates[:4], start=1):
+            db.execute(
+                "UPDATE candidates SET attempt_count=1 WHERE address=?", (item.address,)
+            )
+            db.execute(
+                "INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at,ended_at,outcome) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    item.address,
+                    1,
+                    "historical",
+                    "openai",
+                    f"ses_historical_{index}",
+                    float(index),
+                    float(index) + 0.5,
+                    "agent_error",
+                ),
+            )
+
+    def verifier(_worktree: Path, task: Candidate, _checkpoint: dict[str, object]):
+        report = strict_report(task.address)
+        return {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    runners = []
+    for name, provider, model in (
+        ("ceiling-openai", "openai", "openai/gpt-6-luna"),
+        ("ceiling-deepseek", "opencode", "opencode/deepseek-v4.1-flash-free"),
+    ):
+        worktree = tmp_path / name
+        worktree.mkdir()
+        runners.append(
+            (
+                CampaignRunner(
+                    CampaignStore(database),
+                    opencode_command=fake_opencode_command(tmp_path),
+                    worktrees={name: worktree},
+                    verifier=verifier,
+                    timeout_seconds=5,
+                ),
+                [Worker(name, provider, model)],
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(runner.run, workers, max_tasks=12) for runner, workers in runners]
+        results = [future.result(timeout=20) for future in futures]
+
+    assert sum(result["attempted"] for result in results) == 8
+    assert len(store.list_attempts()) == 12
+    assert sum(sum(outcomes.values()) for outcomes in store.attempt_summary().values()) == 12
     assert all(task["status"] != "running" for task in store.list_tasks())
 
 
@@ -2552,7 +2644,44 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
                 "total_words": 28,
                 "first_divergence": {"address": "0x2c2c4"},
             },
-            "best_match": {"status": "NONMATCHING", "difference_indices": [9]},
+            "best_match": {
+                "status": "NONMATCHING",
+                "matching_words": 26,
+                "total_words": 28,
+                "difference_indices": [14, 15],
+                "first_divergence_address": "0x2c2c4",
+                "first_divergence_original": "0x14a30004",
+                "first_divergence_candidate": "0x54a30005",
+            },
+            "last_attempt": {
+                "status": "NONMATCHING",
+                "matching_words": 26,
+                "total_words": 28,
+                "producer_worker_id": "openai",
+                "producer_attempt_number": 2,
+            },
+            "local_experiments": [
+                {
+                    "origin_kind": "local_experiment",
+                    "worker_id": "openai",
+                    "status": "MATCHED",
+                    "source_path": "build/decomp-campaign/experiments/2c28c/conditional-pointer.c",
+                    "source_sha256": "b" * 64,
+                    "matching_words": 28,
+                    "total_words": 28,
+                    "report_paths": ["build/decomp-campaign/experiments/2c28c/verify-1.json"],
+                },
+                {
+                    "origin_kind": "local_experiment",
+                    "worker_id": "deepseek",
+                    "status": "MATCHED",
+                    "source_path": "build/decomp-campaign/experiments/4217c/variant.c",
+                    "source_sha256": "c" * 64,
+                    "matching_words": 44,
+                    "total_words": 44,
+                    "report_paths": ["build/decomp-campaign/experiments/4217c/verify.json"],
+                },
+            ],
             "next_experiment": "inspect delay slot",
         },
         {},
@@ -2567,6 +2696,10 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
     assert "NONMATCHING / not certified" in prompt
     assert "0x2c2c4" in prompt
     assert "26" in prompt and "28" in prompt
+    assert "0x14a30004" in prompt and "0x54a30005" in prompt
+    assert "last_attempt" in prompt and "producer_attempt_number" in prompt
+    assert "conditional-pointer.c" in prompt
+    assert "4217c/variant.c" not in prompt
     assert "optional" in prompt.lower()
     assert "if retrieval is unavailable, report that limitation" in prompt
     assert "first use" not in prompt.lower()
@@ -2747,6 +2880,568 @@ def test_best_source_snapshot_survives_a_lower_scoring_retry(tmp_path: Path) -> 
     assert next_claim is not None
     runner._restore_best_source(worktree, next_claim)
     assert (worktree / "decomp/src/eboot/func_00001000.c").read_text(encoding="utf-8") == "version-one"
+
+
+def test_lower_score_from_fallback_worker_keeps_best_report_provenance(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+
+    def result(worker: str, attempt: int, score: int, source_hash: str, object_hash: str):
+        reports = []
+        for verify in (1, 2):
+            report_path = (
+                f"build/decomp-campaign/{worker}/1000/attempt-{attempt}/verify-{verify}/"
+                "func_00001000.match.json"
+            )
+            difference = {
+                "address": 0x1000 + score * 4,
+                "word_index": score,
+                "candidate": "0x00000000",
+                "original": "0x00000001",
+                "reason": "word differs",
+            }
+            reports.append(
+                {
+                    "status": "NONMATCHING",
+                    "verified_decompilation": False,
+                    "address": "0x1000",
+                    "symbol": "func_00001000",
+                    "report_path": report_path,
+                    "provenance": {
+                        "source_sha256": source_hash,
+                        "object_sha256": object_hash,
+                    },
+                    "match": {
+                        "status": "NONMATCHING",
+                        "matching_words": score,
+                        "total_words": 4,
+                        "difference_count": 4 - score,
+                        "differences": [difference],
+                        "limitations": [],
+                        "relocation_issues": [],
+                    },
+                }
+            )
+        return {
+            "status": "NONMATCHING",
+            "source_sha256": source_hash,
+            "source_snapshot_path": f"decomp-campaign/checkpoints/00001000/{source_hash}.c",
+            "matching_words": score,
+            "total_words": 4,
+            "build_sha256": [object_hash, object_hash],
+            "reports": reports,
+        }
+
+    first = store.claim_next("openai", "openai")
+    assert first is not None
+    first = store.bind_session(first, "ses_test_openai")
+    store.complete(
+        first,
+        {"next_experiment": "check original branch delay slot"},
+        result("openai", 1, 3, "a" * 64, "b" * 64),
+        max_attempts_without_progress=3,
+        max_attempts_per_candidate=8,
+    )
+
+    # Simulate an older checkpoint written before matcher divergence details
+    # were included; the next claim should enrich it from best_result_json.
+    with store._connect() as db:
+        checkpoint = json.loads(
+            db.execute(
+                "SELECT checkpoint_json FROM candidates WHERE address='0x1000'"
+            ).fetchone()[0]
+        )
+        for key in (
+            "first_divergence_address",
+            "first_divergence_word_index",
+            "first_divergence_candidate",
+            "first_divergence_original",
+            "first_divergence_reason",
+        ):
+            checkpoint["best_match"].pop(key, None)
+        db.execute(
+            "UPDATE candidates SET checkpoint_json=? WHERE address='0x1000'",
+            (json.dumps(checkpoint),),
+        )
+
+    fallback = store.claim_next("deepseek", "opencode")
+    assert fallback is not None
+    assert fallback.checkpoint["best_match"]["first_divergence_address"] == "0x100c"
+    assert fallback.checkpoint["best_match"]["first_divergence_original"] == "0x00000001"
+    fallback = store.bind_session(fallback, "ses_test_deepseek")
+    store.complete(
+        fallback,
+        {"next_experiment": "inspect first divergence"},
+        result("deepseek", 2, 2, "c" * 64, "d" * 64),
+        max_attempts_without_progress=3,
+        max_attempts_per_candidate=8,
+    )
+
+    task = store.get_task("0x1000")
+    assert task["best_result"]["campaign_origin"]["worker_id"] == "openai"
+    best_match = task["checkpoint"]["best_match"]
+    assert best_match["report_path"] == (
+        "build/decomp-campaign/openai/1000/attempt-1/verify-1/func_00001000.match.json"
+    )
+    assert best_match["producer_worker_id"] == "openai"
+    assert best_match["first_divergence_address"] == "0x100c"
+    assert best_match["first_divergence_candidate"] == "0x00000000"
+    latest = task["checkpoint"]["last_attempt"]
+    assert latest["producer_worker_id"] == "deepseek"
+    assert latest["matching_words"] == 2
+    assert latest["report_path"] == (
+        "build/decomp-campaign/deepseek/1000/attempt-2/verify-1/func_00001000.match.json"
+    )
+    assert set(task["checkpoint"]["evidence_paths"]) >= {
+        best_match["report_path"],
+        latest["report_path"],
+    }
+
+
+def test_matcher_outputs_are_scoped_to_their_attempt(tmp_path: Path, monkeypatch) -> None:
+    worktree = tmp_path / "openai"
+    worktree.mkdir()
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    runner = CampaignRunner(
+        store,
+        opencode_command=["opencode"],
+        worktrees={"openai": worktree},
+        verifier=lambda *_args: {},
+    )
+    claim = Claim(
+        "0x1000", 16, "0x12345678", 50, "EXACT", "openai", "openai", "ses_test", 3, 0, {}, {}
+    )
+    report = strict_report("0x1000", word_count=4)
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        return decomp_campaign_module.WorkResult(0, json.dumps(report), "")
+
+    monkeypatch.setattr(decomp_campaign_module, "_run_process", fake_run)
+
+    reports = runner._run_matcher_native(
+        worktree,
+        claim,
+        worktree / "source.c",
+        worktree / "eboot.elf",
+        worktree / "seto.toml",
+        worktree / "match_function.py",
+    )
+
+    expected = [
+        "build/decomp-campaign/openai/1000/attempt-3/verify-1/func_00001000.match.json",
+        "build/decomp-campaign/openai/1000/attempt-3/verify-2/func_00001000.match.json",
+    ]
+    assert [item["report_path"] for item in reports] == expected
+    out_arguments = [argv[argv.index("--out") + 1].replace("\\", "/") for argv in calls]
+    assert all("/attempt-3/verify-" in value for value in out_arguments)
+
+
+def test_match_summary_uses_campaign_origin_when_report_paths_are_absent() -> None:
+    result = {
+        "status": "NONMATCHING",
+        "source_sha256": "a" * 64,
+        "matching_words": 3,
+        "total_words": 4,
+        "build_sha256": ["b" * 64, "b" * 64],
+        "campaign_origin": {
+            "worker_id": "openai",
+            "provider": "openai",
+            "session_id": "ses_test_best",
+            "attempt_number": 3,
+        },
+        "reports": [
+            {
+                "address": "0x1000",
+                "match": {
+                    "status": "NONMATCHING",
+                    "matching_words": 3,
+                    "total_words": 4,
+                    "difference_count": 1,
+                    "differences": [],
+                    "limitations": [],
+                },
+            }
+        ],
+    }
+
+    summary = decomp_campaign_module._match_checkpoint_summary(result)
+
+    assert summary["report_path"] == (
+        "build/decomp-campaign/openai/1000/attempt-3/verify-1/func_00001000.match.json"
+    )
+    assert summary["producer_worker_id"] == "openai"
+    assert summary["producer_attempt_number"] == 3
+
+
+def test_cli_accepts_repeated_productive_candidate_filters() -> None:
+    args = decomp_campaign_module.build_parser().parse_args(
+        [
+            "run",
+            "--confirm",
+            "--productive",
+            "--candidate-address",
+            "0x2c28c",
+            "--candidate-address",
+            "0x4217c",
+        ]
+    )
+
+    assert args.candidate_address == ["0x2c28c", "0x4217c"]
+
+
+def test_resume_cli_accepts_selective_retry_address() -> None:
+    args = decomp_campaign_module.build_parser().parse_args(
+        ["resume", "--retry-address", "0x4217c"]
+    )
+
+    assert args.retry_address == ["0x4217c"]
+
+
+def test_productive_candidate_address_filter_is_normalized_and_scoped() -> None:
+    candidates = [candidate("0x1000"), candidate("0x2000")]
+
+    assert decomp_campaign_module._normalize_candidate_addresses(
+        ["0X1000", "0x2000"], candidates, required=True
+    ) == ["0x1000", "0x2000"]
+    with pytest.raises(ValueError, match="required"):
+        decomp_campaign_module._normalize_candidate_addresses(
+            None, candidates, required=True
+        )
+    with pytest.raises(ValueError, match="invalid"):
+        decomp_campaign_module._normalize_candidate_addresses(
+            ["0xnot-hex"], candidates, required=True
+        )
+    with pytest.raises(ValueError, match="inventory"):
+        decomp_campaign_module._normalize_candidate_addresses(
+            ["0x3000"], candidates, required=True
+        )
+    with pytest.raises(ValueError, match="duplicate"):
+        decomp_campaign_module._normalize_candidate_addresses(
+            ["0x1000", "0X1000"], candidates, required=True
+        )
+
+
+@pytest.mark.parametrize(
+    ("historical_attempts", "total_ceiling", "expected_new_attempts"),
+    [(4, 12, 8), (12, 12, 0), (14, 12, None)],
+)
+def test_productive_run_max_tasks_is_a_cumulative_sqlite_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    historical_attempts: int,
+    total_ceiling: int,
+    expected_new_attempts: int,
+) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    config_path = tmp_path / "local.toml"
+    database = tmp_path / "campaign.sqlite3"
+    candidates = [candidate("0x1000"), candidate("0x2000")]
+    store = CampaignStore(database)
+    store.seed(candidates)
+    attempts_per_candidate = historical_attempts // len(candidates)
+    with store._connect() as db:
+        for item in candidates:
+            db.execute(
+                "UPDATE candidates SET attempt_count=?,status='pending' WHERE address=?",
+                (attempts_per_candidate, item.address),
+            )
+            for attempt_number in range(1, attempts_per_candidate + 1):
+                db.execute(
+                    "INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at,ended_at,outcome) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        item.address,
+                        attempt_number,
+                        "openai",
+                        "openai",
+                        f"ses_history_{item.address[-1]}_{attempt_number}",
+                        float(attempt_number),
+                        float(attempt_number) + 0.5,
+                        "agent_error",
+                    ),
+                )
+
+    config = {
+        "execution": {
+            "enabled": True,
+            "provider_access_verified": True,
+            "worker_permissions_reviewed": True,
+            "pilot_verified": True,
+            "productive_expansion_authorized": True,
+            "continuous": False,
+        },
+        "opencode": {"command": ["opencode"]},
+        "models": {"allowlist": ["openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"]},
+        "workers": {
+            "openai": {"provider": "openai", "model": "openai/gpt-6-luna", "agent": "seto-decomp-worker"},
+            "deepseek": {"provider": "opencode", "model": "opencode/deepseek-v4.1-flash-free", "agent": "seto-decomp-worker"},
+        },
+        "limits": {
+            "max_workers": 2,
+            "max_tasks": 12,
+            "max_duration_seconds": 5400,
+            "agent_timeout_seconds": 900,
+            "max_output_bytes": 1048576,
+            "max_attempts_without_progress": 3,
+            "max_attempts_per_candidate": 8,
+            "lease_seconds": 3600,
+            "max_retry_after_seconds": 900,
+        },
+        "pilot": {"max_tasks": 4, "max_duration_seconds": 1800, "candidate_addresses": ["0x1000", "0x2000"]},
+        "toolchain": {"wsl_distro": "Ubuntu", "ghidra_local_config": "config/decomp_campaign.local.toml"},
+        "inputs": {"eboot_sha256": "a" * 64},
+        "worktrees": {"root": "build/decomp-campaign/worktrees"},
+    }
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (tmp_path / "inventory.json", database),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "load_inventory",
+        lambda _path: (candidates, {"source_commit": "test"}),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_doctor",
+        lambda *_args: {
+            "opencode": {
+                "workers": {"openai": {"ready": True}, "deepseek": {"ready": True}}
+            },
+            "wsl_python": "Python 3.12",
+            "toolchain": {"ghidra": "READY", "mwcc": "READY", "wibo": "READY"},
+        },
+    )
+    monkeypatch.setattr(decomp_campaign_module, "_sanitize_opencode_prefix", lambda command: command)
+    monkeypatch.setattr(decomp_campaign_module, "_effective_worker_policy_ready", lambda *_args: True)
+    worker_roots = {name: tmp_path / name for name in ("openai", "deepseek")}
+    for path in worker_roots.values():
+        path.mkdir()
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "prepare_worker_worktrees",
+        lambda *_args: worker_roots,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            captured["candidate_addresses"] = kwargs.get("candidate_addresses")
+
+        def run(self, _workers: object, *, max_tasks: int) -> dict[str, object]:
+            captured["max_tasks"] = max_tasks
+            return {"attempted": max_tasks, "outcomes": {}}
+
+    monkeypatch.setattr(decomp_campaign_module, "CampaignRunner", FakeRunner)
+    monkeypatch.setattr(decomp_campaign_module, "_print_json", lambda _value: None)
+
+    argv = [
+        "--config", str(config_path), "run", "--confirm", "--productive",
+        "--allow-openai-usage", "--allow-free-model-usage",
+        "--candidate-address", "0x1000", "--candidate-address", "0x2000",
+        "--max-tasks", str(total_ceiling),
+    ]
+    exit_code = decomp_campaign_module.main(argv)
+
+    if expected_new_attempts is None:
+        assert exit_code == 2
+        assert "max_tasks" not in captured
+    else:
+        assert exit_code == 0
+        assert captured.get("candidate_addresses") == ["0x1000", "0x2000"]
+    if expected_new_attempts:
+        assert captured.get("max_tasks") == total_ceiling
+    elif expected_new_attempts == 0:
+        assert "max_tasks" not in captured
+
+
+def test_selective_retry_changes_only_requested_block_and_preserves_history(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000")])
+    original = {}
+    with store._connect() as db:
+        for address, session in (("0x1000", "ses_target"), ("0x2000", "ses_other")):
+            checkpoint = {"next_experiment": f"keep {address}", "best_source_sha256": "a" * 64}
+            best_result = {"status": "NONMATCHING", "matching_words": 2, "source_sha256": "a" * 64}
+            encoded_checkpoint = json.dumps(checkpoint, sort_keys=True)
+            encoded_result = json.dumps(best_result, sort_keys=True)
+            db.execute(
+                "UPDATE candidates SET status='blocked',attempt_count=2,attempts_without_progress=1,"
+                "owner=NULL,provider=NULL,lease_until=NULL,session_id=?,checkpoint_json=?,best_result_json=? "
+                "WHERE address=?",
+                (session, encoded_checkpoint, encoded_result, address),
+            )
+            original[address] = (encoded_checkpoint, encoded_result, session)
+            for attempt in (1, 2):
+                db.execute(
+                    "INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at,ended_at,outcome) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (address, attempt, "openai", "openai", session, float(attempt), float(attempt + 1), "agent_error"),
+                )
+
+    assert store.retry_blocked_addresses(["0x1000"]) == ["0x1000"]
+    target = store.get_task("0x1000")
+    untouched = store.get_task("0x2000")
+    assert target["status"] == "pending"
+    assert target["attempt_count"] == 2
+    assert target["session_id"] == original["0x1000"][2]
+    assert target["checkpoint"] == json.loads(original["0x1000"][0])
+    assert target["best_result"] == json.loads(original["0x1000"][1])
+    assert untouched["status"] == "blocked"
+    assert untouched["attempt_count"] == 2
+    assert untouched["session_id"] == original["0x2000"][2]
+    assert len(store.list_attempts()) == 4
+
+
+def test_selective_retry_rejects_active_lease(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET status='blocked',owner='openai',lease_until=?,attempt_count=1 WHERE address='0x1000'",
+            (time.time() + 300,),
+        )
+
+    with pytest.raises(ValueError, match="lease"):
+        store.retry_blocked_addresses(["0x1000"])
+    assert store.get_task("0x1000")["status"] == "blocked"
+
+
+def test_resume_main_retries_only_the_requested_blocked_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "campaign.sqlite3"
+    candidates = [candidate("0x1000"), candidate("0x2000")]
+    store = CampaignStore(database)
+    store.seed(candidates)
+    snapshots = {}
+    with store._connect() as db:
+        for address, session in (("0x1000", "ses_target"), ("0x2000", "ses_other")):
+            checkpoint = json.dumps({"next_experiment": f"keep {address}"}, sort_keys=True)
+            best = json.dumps({"status": "NONMATCHING", "matching_words": 2}, sort_keys=True)
+            db.execute(
+                "UPDATE candidates SET status='blocked',attempt_count=1,owner=NULL,provider=NULL,"
+                "lease_until=NULL,session_id=?,checkpoint_json=?,best_result_json=? WHERE address=?",
+                (session, checkpoint, best, address),
+            )
+            snapshots[address] = (checkpoint, best, session)
+            db.execute(
+                "INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at,ended_at,outcome) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (address, 1, "openai", "openai", session, 1.0, 2.0, "agent_error"),
+            )
+    config = {}
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (tmp_path / "inventory.json", database),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "load_inventory",
+        lambda _path: (candidates, {}),
+    )
+    output = {}
+    monkeypatch.setattr(decomp_campaign_module, "_print_json", output.update)
+
+    assert decomp_campaign_module.main(
+        ["--config", str(tmp_path / "local.toml"), "resume", "--retry-address", "0x1000"]
+    ) == 0
+
+    assert output["retried_addresses"] == ["0x1000"]
+    retried = store.get_task("0x1000")
+    untouched = store.get_task("0x2000")
+    assert retried["status"] == "pending"
+    assert untouched["status"] == "blocked"
+    assert len(store.list_attempts()) == 2
+    for address, task in (("0x1000", retried), ("0x2000", untouched)):
+        assert task["attempt_count"] == 1
+        assert task["session_id"] == snapshots[address][2]
+        assert json.dumps(task["checkpoint"], sort_keys=True) == snapshots[address][0]
+        assert json.dumps(task["best_result"], sort_keys=True) == snapshots[address][1]
+
+
+def test_local_match_experiment_is_checkpointed_without_changing_campaign_best(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "openai"
+    worktree.mkdir()
+    source_relative = "decomp-campaign/experiments/1000/conditional/func_00001000.c"
+    source = campaign_build_path(worktree, source_relative)
+    source.parent.mkdir(parents=True)
+    source.write_text("int func_00001000(void) { return 1; }\n", encoding="utf-8")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    report_paths = [
+        f"decomp-campaign/experiments/1000/conditional/verify-{number}/full-match.json"
+        for number in (1, 2)
+    ]
+    for report_path in report_paths:
+        report_file = campaign_build_path(worktree, report_path)
+        report_file.parent.mkdir(parents=True)
+        report = strict_report("0x1000", word_count=4)
+        report["function"] = "func_00001000"
+        report["provenance"]["source_sha256"] = source_sha
+        report_file.write_text(json.dumps(report), encoding="utf-8")
+
+    summary = store.record_local_match_experiment(
+        "0x1000",
+        worker_id="openai",
+        worktree=worktree,
+        source_relative=source_relative,
+        report_relatives=report_paths,
+    )
+
+    task = store.get_task("0x1000")
+    assert summary["status"] == "MATCHED"
+    assert summary["origin_kind"] == "local_experiment"
+    assert summary["source_sha256"] == source_sha
+    assert task["status"] == "pending"
+    assert task["attempt_count"] == 0
+    assert task["best_result"] == {}
+    assert task["checkpoint"]["local_experiments"] == [summary]
+    assert store.list_attempts() == []
+
+
+def test_local_match_experiment_rejects_report_with_wrong_source_hash(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "openai"
+    worktree.mkdir()
+    source_relative = "decomp-campaign/experiments/1000/conditional/func_00001000.c"
+    source = campaign_build_path(worktree, source_relative)
+    source.parent.mkdir(parents=True)
+    source.write_text("int func_00001000(void) { return 1; }\n", encoding="utf-8")
+    report_paths = []
+    for number in (1, 2):
+        relative = f"decomp-campaign/experiments/1000/conditional/verify-{number}/full-match.json"
+        report_file = campaign_build_path(worktree, relative)
+        report_file.parent.mkdir(parents=True)
+        report = strict_report("0x1000", word_count=4)
+        report["function"] = "func_00001000"
+        report_file.write_text(json.dumps(report), encoding="utf-8")
+        report_paths.append(relative)
+
+    with pytest.raises(ValueError, match="source/object provenance"):
+        store.record_local_match_experiment(
+            "0x1000",
+            worker_id="openai",
+            worktree=worktree,
+            source_relative=source_relative,
+            report_relatives=report_paths,
+        )
+    assert store.get_task("0x1000")["checkpoint"].get("local_experiments") is None
+    assert store.list_attempts() == []
 
 
 def test_two_simulated_sessions_handle_distinct_tasks_and_quota_fallback(
