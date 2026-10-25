@@ -10,6 +10,8 @@ continuous = false
 require_explicit_confirmation = true
 provider_access_verified = false
 worker_permissions_reviewed = false
+pilot_verified = false
+productive_expansion_authorized = false
 
 [opencode]
 command = ["opencode"]
@@ -21,24 +23,35 @@ allowlist = ["openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"]
 [workers.openai]
 provider = "openai"
 model = "openai/gpt-6-luna"
+agent = "seto-decomp-worker"
+usage_mode = "unknown"
+access_verified = false
 max_parallel = 1
 
 [workers.deepseek]
 provider = "opencode"
 model = "opencode/deepseek-v4.1-flash-free"
+agent = "seto-decomp-worker"
+usage_mode = "unknown"
+access_verified = false
 max_parallel = 1
 free_model_only = true
 
 [limits]
 max_workers = 2
 max_tasks = 40
-max_duration_seconds = 3600
+max_duration_seconds = 7200
 lease_seconds = 3660
 agent_timeout_seconds = 900
 max_attempts_per_candidate = 8
 max_attempts_without_progress = 3
 max_output_bytes = 1048576
 max_retry_after_seconds = 900
+
+[pilot]
+max_tasks = 4
+max_duration_seconds = 1800
+candidate_addresses = ["0x2c28c", "0x4217c"]
 
 [toolchain]
 wsl_distro = "Ubuntu"
