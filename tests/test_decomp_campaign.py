@@ -161,6 +161,23 @@ def ghidra_log(
     return "\n".join(rows)
 
 
+def detailed_ghidra_log() -> str:
+    rows = [
+        f"{line} nop" if line.startswith("SETO_INSN=") else line
+        for line in ghidra_log().splitlines()
+    ]
+    rows.extend(
+        [
+            "SETO_DECOMP_C_BEGIN",
+            "void func_00001000(void) {",
+            "    return;",
+            "}",
+            "SETO_DECOMP_C_END",
+        ]
+    )
+    return "\n".join(rows)
+
+
 def promotable_campaign(
     tmp_path: Path, *, certified_retry: bool = True
 ) -> tuple[CampaignStore, dict[str, object], Path, str]:
@@ -410,6 +427,120 @@ def test_ghidra_log_requires_one_exact_contiguous_allegrex_body() -> None:
 
     with pytest.raises(ValueError, match="exact Allegrex"):
         validate_ghidra_log(log.replace("SETO_FUNCTION_BODY_RANGES=1", "SETO_FUNCTION_BODY_RANGES=2"), 0x1000)
+
+
+def test_ghidra_log_accepts_and_identifies_reconstruction_details() -> None:
+    log = detailed_ghidra_log()
+
+    evidence = validate_ghidra_log(log, 0x1000)
+
+    assert evidence["instruction_count"] == 4
+    assert decomp_campaign_module._ghidra_log_has_reconstruction_details(log)
+
+
+def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    worktree = tmp_path / "worker"
+    eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
+    eboot.parent.mkdir(parents=True)
+    eboot.write_bytes(b"test EBOOT")
+    triage = worktree / "build" / "seto035" / "export-triage.json"
+    triage.parent.mkdir(parents=True)
+    triage.write_text(
+        json.dumps(
+            {
+                "exports": [
+                    {
+                        "address": "0x1000",
+                        "nid": "0x12345678",
+                        "library": "libehsys",
+                        "pointer_relocation": {
+                            "type": "R_MIPS_32",
+                            "addend_valid": True,
+                            "addend": 0x1000,
+                            "application_valid": True,
+                        },
+                        "importers": [
+                            {"call_sites": [{"address": "0x20"}], "table_limitations": []}
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first = store.claim_next("openai", "openai")
+    assert first is not None
+    old_log_relative = "decomp-campaign/openai/1000/evidence/ghidra-attempt-1.log"
+    old_log = campaign_build_path(worktree, old_log_relative)
+    old_log.parent.mkdir(parents=True)
+    old_log.write_text(ghidra_log(), encoding="utf-8")
+    store.save_checkpoint(
+        first,
+        {
+            "ghidra_log_path": old_log_relative,
+            "ghidra_log_sha256": hashlib.sha256(old_log.read_bytes()).hexdigest(),
+            "boundary_status": "EXACT",
+        },
+        trusted_evidence=True,
+    )
+    store.fail(first, Failure(FailureKind.INTERRUPTED))
+    retry = store.claim_next("openai", "openai")
+    assert retry is not None
+    assert retry.attempt_number == 2
+
+    observed: dict[str, object] = {}
+
+    def fake_ghidra(argv, **_kwargs):
+        observed["argv"] = list(argv)
+        console_lines = []
+        for line in detailed_ghidra_log().splitlines():
+            if line.startswith("SETO_") or line == "}":
+                line += " (GhidraScript)"
+            console_lines.append(line)
+        return decomp_campaign_module.WorkResult(0, "\n".join(console_lines), "")
+
+    monkeypatch.setattr(decomp_campaign_module, "_run_process", fake_ghidra)
+    if decomp_campaign_module.os.name == "nt":
+        ghidra_home = tmp_path / "ghidra"
+        (ghidra_home / "support").mkdir(parents=True)
+        (ghidra_home / "support" / "analyzeHeadless.bat").touch()
+        (worktree / "scripts").mkdir()
+        (worktree / "scripts" / "run_ghidra_headless.ps1").touch()
+        monkeypatch.setattr(
+            decomp_campaign_module.shutil,
+            "which",
+            lambda name: "powershell.exe" if name == "powershell.exe" else None,
+        )
+        runner = CampaignRunner(
+            store,
+            opencode_command=["opencode"],
+            worktrees={"openai": worktree},
+            ghidra_windows_home=str(ghidra_home),
+        )
+    else:
+        runner = CampaignRunner(
+            store,
+            opencode_command=["opencode"],
+            worktrees={"openai": worktree},
+            ghidra_home="/ghidra",
+        )
+
+    prepared = runner._prepare_claim(worktree, retry, None)
+    new_log = campaign_build_path(worktree, prepared.checkpoint["ghidra_log_path"])
+
+    assert observed["argv"]
+    assert "SetoAnalyzeEntry.java" in observed["argv"]
+    assert prepared.checkpoint["ghidra_log_path"].endswith("ghidra-attempt-2.log")
+    assert "SETO_INSN=0x1000 SIZE=4 nop" in new_log.read_text(encoding="utf-8")
+    assert "SETO_DECOMP_C_BEGIN" in new_log.read_text(encoding="utf-8")
+    assert decomp_campaign_module._ghidra_log_has_reconstruction_details(
+        new_log.read_text(encoding="utf-8")
+    )
 
 
 def test_ghidra_log_rejects_a_truncated_instruction_listing() -> None:

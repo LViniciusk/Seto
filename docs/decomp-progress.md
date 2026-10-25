@@ -6565,3 +6565,70 @@ Hashes dos experimentos preservados em `build/seto038/`:
   `0x36D1C` 28/28, objeto
   `dba5dba2595bbe765095d24dc898901093dd17126c56134e633b07e866515110`.
   Isso revalida o baseline existente, não acrescenta progresso à campanha 040.
+
+## SETO-DECOMP-041 — piloto real multiagente do EBOOT
+
+### Resultado da campanha
+
+- O comando autorizado foi executado uma vez, na branch `feat/seto-decomp-041`,
+  com Luna e DeepSeek Free. O scheduler terminou em **10m28s**, sem atingir o
+  deadline interno de 30 minutos: **2 tentativas**, ambas `agent_error` /
+  `blocked`; não declarou parada manual. O SQLite preexistente foi preservado;
+  sua contagem passou de 0 para **2/4 tentativas cumulativas**.
+- Distribuição e sessões OpenCode retornadas pela API:
+
+  | Função | Worker/modelo | Tentativa | Sessão | Resultado observado |
+  |---|---|---:|---|---|
+  | `0x2C28C` (28 instruções) | `openai/gpt-6-luna` | 1 | `ses_e8c6931dbffegdQ52d6EAchFWw` | `blocked`; nenhuma fonte candidata; matcher não executado |
+  | `0x4217C` (44 instruções) | `opencode/deepseek-v4.1-flash-free` | 1 | `ses_e8c697332ffeRLvsg1ke0QEFCM` | `blocked`; esqueleto sem semântica comprovada; compilação curta |
+
+- O worker Luna recebeu apenas um boundary exato e instruções Ghidra como
+  endereços/tamanhos. Não recebeu disassembly nem C decompilado, registrou essa
+  limitação e não escreveu fonte. A hipótese anterior `0x2C28C` **26/28** e sua
+  divergência em `0x2C2C4` continuam sendo evidência histórica, não resultado
+  desta tentativa.
+- O worker DeepSeek preservou no worktree ignorado
+  `decomp/src/eboot/func_0004217C.c` um esqueleto explicitamente marcado como
+  `EVIDENCE-BLOCKED`, sem inventar layout local ou semântica dos quatro callee.
+  SHA-256 da fonte: `d757f70262ba490246a37443f84bd1aa8ce24e780b1354109333451d9510c17d`.
+  MWCC 3.0.1 build 219 compilou um objeto ELF de 624 bytes cujo `.text` tem só
+  8 bytes (objeto SHA-256
+  `2c2f3a20f7e5e08537aff256d7023819e1d2b483d56669347cd8b8f6692a462d`). O
+  matcher de produção recusou corretamente uma comparação incompleta: faltam
+  bytes para os 176 solicitados (`section is 8 bytes`). Não houve relatório de
+  matching integral, score `X/Y`, diferenças ou snapshot certificado. A
+  hipótese ficou apenas no worktree ignorado; não foi promovida.
+- Não houve certificação nem promoção. Os baselines permanecem **EBOOT 8/206** e
+  **PRXs 16/912**; nenhuma função nova foi contabilizada. Hashes configurados do
+  EBOOT, PRXs e triage foram conferidos antes da chamada e coincidiram. Os
+  contadores atuais de tokens/custo não são fornecidos pela integração JSON do
+  OpenCode.
+- Os workers informaram que as ferramentas AIMemory read-only não foram expostas
+  às sessões isoladas; não tentaram writes ou mensagens. A busca histórica
+  read-only do operador foi realizada antes da campanha. Os artefatos,
+  checkpoints e sessões permaneceram nos caminhos ignorados. Não foi iniciada
+  outra rodada: quando o defeito foi reproduzido e corrigido, já havia passado
+  o limite de 30 minutos desde o início do piloto; os dois slots restantes não
+  foram usados para renovar esse prazo.
+
+### Correção reproduzida (TDD)
+
+- **RED:** um teste com log contendo mnemônicos/C falhava na validação; outro
+  reproduzia que um cache Ghidra antigo, embora hash-verificado e com boundary
+  exato, era reutilizado sem os dados necessários à reconstrução.
+- **GREEN:** `SetoAnalyzeEntry.java` agora registra instruções com mnemônicos e
+  o bloco C do decompiler. `CampaignRunner` conserva apenas esse bloco delimitado,
+  reconhece os sufixos `(GhidraScript)`, exige disassembly+C e força nova análise
+  quando o cache só contém boundary. O matcher continua estrito: objeto curto
+  não é comparado como prefixo nem tratado como `MATCHED`.
+- Ghidra **12.1.3** foi executado sem mocks nas duas entradas: `0x2C28C` validou
+  112 bytes / 28 instruções e `0x4217C` 176 bytes / 44 instruções; ambos os logs
+  passaram a conter disassembly e decompilação utilizáveis. O teste de regressão
+  reproduz o cache antigo e verifica a reanálise, incluindo a extração do bloco C.
+- `tests/test_decomp_campaign.py`: **74 passed** após a correção; suíte completa:
+  **909 passed, 44 skipped**. Os skips são opt-ins de integrações reais EBOOT /
+  PRX / REA, pré-requisitos GNU MIPSel ausentes ou testes POSIX não aplicáveis
+  ao host Windows. `compileall` e `git diff --check`: **clean**. Como não restou
+  fonte candidata completa, não havia integração de matching/promote de função
+  recuperada a executar. PR #42 foi aberta sem merge; os oito jobs de CI
+  (Ubuntu/Windows, Python 3.11/3.12, nos eventos de push e PR) passaram.

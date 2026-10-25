@@ -412,6 +412,25 @@ def validated_cached_ghidra_boundary(
     return boundary
 
 
+def _ghidra_log_has_reconstruction_details(text: str) -> bool:
+    """Require disassembly and decompiler output before reusing Ghidra evidence."""
+    raw_instruction_markers = re.findall(r"(?m)^[ \t]*SETO_INSN=", text)
+    detailed_instruction_rows = re.findall(
+        r"(?m)^[ \t]*SETO_INSN=0x[0-9a-fA-F]+[ \t]+SIZE=\d+[ \t]+\S[^\r\n]*\r?$",
+        text,
+    )
+    begin_markers = list(re.finditer(r"(?m)^\s*SETO_DECOMP_C_BEGIN\s*$", text))
+    end_markers = list(re.finditer(r"(?m)^\s*SETO_DECOMP_C_END\s*$", text))
+    return (
+        bool(raw_instruction_markers)
+        and len(raw_instruction_markers) == len(detailed_instruction_rows)
+        and len(begin_markers) == 1
+        and len(end_markers) == 1
+        and begin_markers[0].end() < end_markers[0].start()
+        and bool(text[begin_markers[0].end() : end_markers[0].start()].strip())
+    )
+
+
 class CampaignStore:
     """Small SQLite queue with atomic claims, leases, checkpoints, and event history."""
 
@@ -1580,7 +1599,12 @@ class CampaignRunner:
             # a fresh Ghidra proof below instead of stranding the candidate.
             cached_boundary = None
         if cached_boundary is not None:
-            return replace(claim, checkpoint=dict(claim.checkpoint))
+            cached_path = campaign_build_path(
+                worktree, str(claim.checkpoint["ghidra_log_path"])
+            )
+            cached_text = cached_path.read_text(encoding="utf-8", errors="replace")
+            if _ghidra_log_has_reconstruction_details(cached_text):
+                return replace(claim, checkpoint=dict(claim.checkpoint))
         if os.name == "nt":
             if not self.ghidra_windows_home:
                 raise ValueError("machine-local Windows Ghidra home is not configured")
@@ -1654,10 +1678,27 @@ class CampaignRunner:
         # Persist only the helper's bounded markers. Ghidra's surrounding process
         # output may contain private paths or diagnostics unrelated to evidence.
         marker_lines = []
+        collecting_decompilation = False
         for line in (process.stdout + "\n" + process.stderr).splitlines():
-            marker = re.search(r"SETO_[A-Z0-9_]+=", line)
-            if marker:
-                marker_lines.append(line[marker.start() :].split(" (GhidraScript)", 1)[0].strip())
+            if collecting_decompilation:
+                end_marker = re.search(r"SETO_DECOMP_C_END(?:\s|$)", line)
+                if end_marker:
+                    marker_lines.append("SETO_DECOMP_C_END")
+                    collecting_decompilation = False
+                else:
+                    marker_lines.append(
+                        re.sub(r"[ \t]+\(GhidraScript\)[ \t]*$", "", line).rstrip()
+                    )
+                continue
+            marker = re.search(
+                r"SETO_[A-Z0-9_]+(?==|[ \t]+\(GhidraScript\)|$)", line
+            )
+            if not marker:
+                continue
+            marker_line = line[marker.start() :].split(" (GhidraScript)", 1)[0].strip()
+            marker_lines.append(marker_line)
+            if marker_line == "SETO_DECOMP_C_BEGIN":
+                collecting_decompilation = True
         if not marker_lines:
             raise ValueError(
                 "Ghidra completed without boundary markers "
@@ -1668,9 +1709,10 @@ class CampaignRunner:
             encoding="utf-8",
             newline="\n",
         )
-        boundary = validate_ghidra_log(
-            log_path.read_text(encoding="utf-8"), claim.numeric_address
-        )
+        log_text = log_path.read_text(encoding="utf-8")
+        boundary = validate_ghidra_log(log_text, claim.numeric_address)
+        if not _ghidra_log_has_reconstruction_details(log_text):
+            raise ValueError("Ghidra analysis omitted the instruction listing or decompilation")
         if claim.boundary_status == "EXACT" and boundary["size_bytes"] != claim.size_bytes:
             raise ValueError("fresh Ghidra analysis conflicts with the inventory's exact size")
         if claim.boundary_status == "UNVERIFIED":
@@ -2159,9 +2201,10 @@ def validate_ghidra_log(text: str, address: int) -> dict[str, Any]:
             "Ghidra evidence does not prove one exact Allegrex function boundary"
         ) from exc
 
-    raw_instruction_markers = re.findall(r"(?m)^\s*SETO_INSN=", text)
+    raw_instruction_markers = re.findall(r"(?m)^[ \t]*SETO_INSN=", text)
     instruction_rows = re.findall(
-        r"(?m)^\s*SETO_INSN=(0x[0-9a-fA-F]+)\s+SIZE=(\d+)\s*$", text
+        r"(?m)^[ \t]*SETO_INSN=(0x[0-9a-fA-F]+)[ \t]+SIZE=(\d+)(?:[ \t]+\S[^\r\n]*)?[ \t]*\r?$",
+        text,
     )
     try:
         instructions = [(int(item, 16), int(size)) for item, size in instruction_rows]
