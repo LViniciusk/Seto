@@ -2532,7 +2532,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
 def worker_readiness(
     worker: dict[str, Any], observed: dict[str, Any], allowed_models: Iterable[str]
 ) -> dict[str, Any]:
-    """Require catalog, auth, explicit cost-mode verification, and restricted tools."""
+    """Require catalog, verified billing/auth, and restricted tools."""
     blockers: list[str] = []
     model = worker.get("model")
     provider = worker.get("provider")
@@ -2540,7 +2540,13 @@ def worker_readiness(
         blockers.append("model_not_allowlisted")
     if observed.get("catalog") != "available":
         blockers.append("model_not_in_catalog")
-    if observed.get("auth") != "stored":
+    public_free_auth = (
+        provider == "opencode"
+        and model == "opencode/deepseek-v4.1-flash-free"
+        and observed.get("auth") == "public"
+        and observed.get("public_model_metadata") is True
+    )
+    if observed.get("auth") != "stored" and not public_free_auth:
         blockers.append("provider_auth_not_listed")
     if worker.get("access_verified") is not True:
         blockers.append("provider_access_unverified")
@@ -2557,6 +2563,16 @@ def worker_readiness(
             or worker.get("free_model_only") is not True
         ):
             blockers.append("exact_free_usage_not_verified")
+        if model == "opencode/deepseek-v4.1-flash-free" and observed.get(
+            "public_model_metadata"
+        ) is not True:
+            blockers.append("public_auth_metadata_unverified")
+        if observed.get("model_status") != "active":
+            blockers.append("model_not_active")
+        if observed.get("model_enabled") is not True:
+            blockers.append("model_disabled_or_unverified")
+        if observed.get("model_cost_zero") is not True:
+            blockers.append("model_cost_not_zero_or_unverified")
     else:
         blockers.append("provider_not_supported")
     if observed.get("agent_policy") is not True:
@@ -2932,6 +2948,14 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     auth = subprocess.run(
         [*command, "auth", "list"], cwd=cwd, capture_output=True, text=True, timeout=60, check=False
     )
+    model_metadata_result = subprocess.run(
+        [*command, "api", "get", "/api/model"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
     agents_result = subprocess.run(
         [*command, "debug", "agents"],
         cwd=cwd,
@@ -2943,6 +2967,37 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     listed_models = set(catalog.stdout.splitlines()) if catalog.returncode == 0 else set()
     auth_text = auth.stdout if auth.returncode == 0 else ""
     try:
+        model_payload = (
+            json.loads(model_metadata_result.stdout)
+            if model_metadata_result.returncode == 0
+            else {}
+        )
+    except json.JSONDecodeError:
+        model_payload = {}
+    raw_model_data = model_payload.get("data") if isinstance(model_payload, dict) else None
+    model_data = raw_model_data if isinstance(raw_model_data, list) else []
+    model_records = [item for item in model_data if isinstance(item, dict)]
+
+    def cost_is_zero(cost: Any) -> bool:
+        if not isinstance(cost, list) or not cost:
+            return False
+        for tier in cost:
+            if not isinstance(tier, dict) or set(tier) != {"input", "output", "cache"}:
+                return False
+            cache = tier.get("cache")
+            if not isinstance(cache, dict) or set(cache) != {"read", "write"}:
+                return False
+            values = [tier["input"], tier["output"], cache["read"], cache["write"]]
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value != 0
+                for value in values
+            ):
+                return False
+        return True
+
+    try:
         configured_agents = json.loads(agents_result.stdout) if agents_result.returncode == 0 else []
     except json.JSONDecodeError:
         configured_agents = []
@@ -2951,10 +3006,34 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
         model = validate_model_id(item["model"], config["models"]["allowlist"])
         model_present = model in listed_models
         provider_auth = bool(re.search(rf"(?im)^\s*{re.escape(item['provider'])}\s+.+\bstored\b", auth_text))
+        model_id = model.partition("/")[2]
+        metadata_matches = [
+            record
+            for record in model_records
+            if record.get("providerID") == item["provider"]
+            and record.get("id") == model_id
+        ]
+        metadata = metadata_matches[0] if len(metadata_matches) == 1 else {}
+        settings = metadata.get("settings")
+        public_key_metadata = (
+            len(metadata_matches) == 1
+            and isinstance(settings, dict)
+            and settings.get("apiKey") == "public"
+        )
         observation = {
             "model": model,
             "catalog": "available" if model_present else "missing",
-            "auth": "stored" if provider_auth else "not-listed",
+            "auth": (
+                "stored"
+                if provider_auth
+                else "public"
+                if public_key_metadata
+                else "not-listed"
+            ),
+            "public_model_metadata": public_key_metadata,
+            "model_status": metadata.get("status"),
+            "model_enabled": metadata.get("enabled"),
+            "model_cost_zero": cost_is_zero(metadata.get("cost")),
             "usage_mode": item.get("usage_mode", "unknown"),
             "access_verified": item.get("access_verified") is True,
             "agent_policy": worker_agent_policy_is_restricted(
@@ -2967,6 +3046,7 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     return {
         "catalog_exit_code": catalog.returncode,
         "auth_exit_code": auth.returncode,
+        "model_metadata_exit_code": model_metadata_result.returncode,
         "worker_agent_configured": agents_result.returncode == 0,
         "workers": worker_states,
     }
@@ -3086,7 +3166,7 @@ def _doctor(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
         "ai_memory_version": memory_version,
         "wsl_python": wsl_result,
         "toolchain": toolchain,
-        "execution": "BLOCKED: campaign is opt-in; provider execution/cost and unattended tool permissions are unverified",
+        "execution": "NOT STARTED: doctor is read-only; run requires explicit --confirm and the READY worker's usage flag",
     }
 
 

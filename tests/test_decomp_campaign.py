@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+import decomp_campaign as decomp_campaign_module  # noqa: E402
 from decomp_campaign import (  # noqa: E402
     CampaignRunner,
     CampaignStore,
@@ -35,6 +36,7 @@ from decomp_campaign import (  # noqa: E402
     validated_cached_ghidra_boundary,
     worker_agent_policy_is_restricted,
     worker_readiness,
+    _opencode_preflight,
     _append_promotion_documentation,
     _promotion_context,
 )
@@ -1048,7 +1050,15 @@ def test_provider_preflight_selects_only_verified_free_worker() -> None:
     }
     observed = {
         "openai": {"catalog": "available", "auth": "stored", "agent_policy": True},
-        "deepseek": {"catalog": "available", "auth": "stored", "agent_policy": True},
+        "deepseek": {
+            "catalog": "available",
+            "auth": "public",
+            "public_model_metadata": True,
+            "model_status": "active",
+            "model_enabled": True,
+            "model_cost_zero": True,
+            "agent_policy": True,
+        },
     }
 
     states = {
@@ -1061,6 +1071,230 @@ def test_provider_preflight_selects_only_verified_free_worker() -> None:
     assert "usage_mode_unverified" in states["openai"]["blockers"]
     assert states["deepseek"]["ready"] is True
     assert selected == ["deepseek"]
+
+
+def _preflight_model(
+    provider: str,
+    model_id: str,
+    *,
+    api_key: str | None = None,
+    status: str = "active",
+    enabled: bool = True,
+    cost: object | None = None,
+) -> dict[str, object]:
+    return {
+        "providerID": provider,
+        "id": model_id,
+        "settings": {"apiKey": api_key} if api_key is not None else {},
+        "status": status,
+        "enabled": enabled,
+        "cost": (
+            cost
+            if cost is not None
+            else [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}]
+        ),
+    }
+
+
+def _mock_opencode_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    models: list[dict[str, object]],
+    *,
+    api_stdout: str | None = None,
+) -> dict[str, object]:
+    config = {
+        "opencode": {"command": ["opencode-test-double"]},
+        "models": {
+            "allowlist": [
+                "openai/gpt-6-luna",
+                "opencode/deepseek-v4.1-flash-free",
+            ]
+        },
+        "workers": {
+            "openai": {
+                "provider": "openai",
+                "model": "openai/gpt-6-luna",
+                "agent": "seto-decomp-worker",
+                "usage_mode": "unknown",
+                "access_verified": False,
+            },
+            "deepseek": {
+                "provider": "opencode",
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "agent": "seto-decomp-worker",
+                "usage_mode": "free",
+                "access_verified": True,
+                "free_model_only": True,
+            },
+        },
+    }
+    def fake_run(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command[1:] == ["models"]:
+            stdout = "openai/gpt-6-luna\nopencode/deepseek-v4.1-flash-free\n"
+        elif command[1:] == ["auth", "list"]:
+            stdout = "openai account stored\n"
+        elif command[1:] == ["api", "get", "/api/model"]:
+            stdout = api_stdout if api_stdout is not None else json.dumps({"data": models})
+        elif command[1:] == ["debug", "agents"]:
+            stdout = "[]"
+        else:
+            raise AssertionError(f"unexpected OpenCode command: {command}")
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(decomp_campaign_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "worker_agent_policy_is_restricted",
+        lambda *_args: True,
+    )
+    result = _opencode_preflight(config, Path.cwd())
+    return result["workers"]  # type: ignore[return-value]
+
+
+def test_public_zero_cost_deepseek_metadata_is_ready_without_stored_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _preflight_model(
+        "opencode", "deepseek-v4.1-flash-free", api_key="public"
+    )
+    workers = _mock_opencode_preflight(monkeypatch, [model])
+
+    assert workers["deepseek"]["auth"] == "public"
+    assert workers["deepseek"]["ready"] is True
+    assert workers["deepseek"]["blockers"] == []
+
+
+def test_public_deepseek_with_nonzero_cost_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _preflight_model(
+        "opencode",
+        "deepseek-v4.1-flash-free",
+        api_key="public",
+        cost=[{"input": 0, "output": 0.01, "cache": {"read": 0, "write": 0}}],
+    )
+    workers = _mock_opencode_preflight(monkeypatch, [model])
+
+    assert workers["deepseek"]["ready"] is False
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "disabled",
+        "inactive",
+        "absent",
+        "invalid-json",
+        "wrong-provider",
+        "duplicate",
+        "missing-cost-fields",
+    ],
+)
+def test_deepseek_missing_or_invalid_model_metadata_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    target = _preflight_model(
+        "opencode",
+        "deepseek-v4.1-flash-free",
+        api_key="public",
+        status="inactive" if case == "inactive" else "active",
+        enabled=False if case == "disabled" else True,
+    )
+    if case == "absent":
+        models = []
+    elif case == "wrong-provider":
+        models = [{**target, "providerID": "other-provider"}]
+    elif case == "duplicate":
+        models = [target, target]
+    elif case == "missing-cost-fields":
+        target["cost"] = [{"input": 0, "output": 0, "cache": {"read": 0}}]
+        models = [target]
+    else:
+        models = [target]
+    workers = _mock_opencode_preflight(
+        monkeypatch,
+        models,
+        api_stdout="not valid JSON" if case == "invalid-json" else None,
+    )
+
+    assert workers["deepseek"]["ready"] is False
+
+
+def test_openai_without_verified_no_additional_cost_stays_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openai = _preflight_model("openai", "gpt-6-luna", cost=[])
+    deepseek = _preflight_model(
+        "opencode", "deepseek-v4.1-flash-free", api_key="public"
+    )
+    workers = _mock_opencode_preflight(monkeypatch, [openai, deepseek])
+
+    assert workers["openai"]["auth"] == "stored"
+    assert workers["openai"]["ready"] is False
+    assert "additional_cost_not_excluded" in workers["openai"]["blockers"]
+
+
+def test_missing_restricted_worker_permissions_block_free_readiness() -> None:
+    worker = {
+        "provider": "opencode",
+        "model": "opencode/deepseek-v4.1-flash-free",
+        "usage_mode": "free",
+        "access_verified": True,
+        "free_model_only": True,
+    }
+    observed = {
+        "catalog": "available",
+        "auth": "public",
+        "public_model_metadata": True,
+        "model_status": "active",
+        "model_enabled": True,
+        "model_cost_zero": True,
+        "agent_policy": False,
+    }
+
+    result = worker_readiness(
+        worker, observed, ["opencode/deepseek-v4.1-flash-free"]
+    )
+
+    assert result["ready"] is False
+    assert "worker_permissions_not_restricted" in result["blockers"]
+
+
+def test_stored_auth_does_not_replace_public_model_metadata_for_free_worker() -> None:
+    worker = {
+        "provider": "opencode",
+        "model": "opencode/deepseek-v4.1-flash-free",
+        "usage_mode": "free",
+        "access_verified": True,
+        "free_model_only": True,
+    }
+    observed = {
+        "catalog": "available",
+        "auth": "stored",
+        "public_model_metadata": False,
+        "model_status": "active",
+        "model_enabled": True,
+        "model_cost_zero": True,
+        "agent_policy": True,
+    }
+
+    result = worker_readiness(
+        worker, observed, ["opencode/deepseek-v4.1-flash-free"]
+    )
+
+    assert result["ready"] is False
+    assert "public_auth_metadata_unverified" in result["blockers"]
+
+
+def test_single_worker_pilot_is_capped_at_two_attempts_and_keeps_candidates() -> None:
+    config = load_config(Path(__file__).resolve().parents[1] / "config" / "decomp_campaign.toml")
+    single_worker_limit = min(config["pilot"]["max_tasks"], 1 * 2)
+
+    assert single_worker_limit == 2
+    assert config["pilot"]["max_duration_seconds"] == 1800
+    assert config["pilot"]["candidate_addresses"] == ["0x2c28c", "0x4217c"]
 
 
 def test_worker_permission_audit_rejects_global_allow_and_shell_access() -> None:
