@@ -6622,13 +6622,140 @@ Hashes dos experimentos preservados em `build/seto038/`:
   quando o cache só contém boundary. O matcher continua estrito: objeto curto
   não é comparado como prefixo nem tratado como `MATCHED`.
 - Ghidra **12.1.3** foi executado sem mocks nas duas entradas: `0x2C28C` validou
-  112 bytes / 28 instruções e `0x4217C` 176 bytes / 44 instruções; ambos os logs
-  passaram a conter disassembly e decompilação utilizáveis. O teste de regressão
-  reproduz o cache antigo e verifica a reanálise, incluindo a extração do bloco C.
+  112 bytes / 28 instruções e `0x4217C` 176 bytes / 44 instruções. Reinspeção dos
+  arquivos de cache ainda preservados no checkout mostrou que eles só contêm
+  marcadores de boundary e endereços/tamanhos `SETO_INSN`, sem mnemônicos nem C
+  decompilado. Portanto, o boundary permanece verificado, mas esses caches não
+  bastam para reconstrução. A validação em 042 confirma que o runner os rejeita
+  como contexto completo e exige nova análise antes do próximo worker. O teste de
+  regressão cobre essa reanálise e a extração do bloco C.
 - `tests/test_decomp_campaign.py`: **74 passed** após a correção; suíte completa:
   **909 passed, 44 skipped**. Os skips são opt-ins de integrações reais EBOOT /
   PRX / REA, pré-requisitos GNU MIPSel ausentes ou testes POSIX não aplicáveis
   ao host Windows. `compileall` e `git diff --check`: **clean**. Como não restou
   fonte candidata completa, não havia integração de matching/promote de função
-  recuperada a executar. PR #42 foi aberta sem merge; os oito jobs de CI
-  (Ubuntu/Windows, Python 3.11/3.12, nos eventos de push e PR) passaram.
+  recuperada a executar. PR #42 foi aberta e depois integrada em `main` (base
+  `7a15e10`); os oito jobs de CI (Ubuntu/Windows, Python 3.11/3.12, nos eventos
+  de push e PR) passaram.
+
+## SETO-DECOMP-042 — recuperação de contexto e diagnóstico do worker
+
+Esta rodada corrige a exposição read-only do AIMemory e a perda de contexto
+observadas no piloto 041. Não inicia outra inferência, não repete tentativas,
+não promove hipóteses e não muda scheduler, matcher ou critérios de certificação.
+
+### Contexto e permissões
+
+- O prompt prioriza as instruções Allegrex, o log Ghidra completo e as evidências
+  locais de export/NID, calls e relocations. O C decompilado pelo Ghidra é uma
+  hipótese inicial; só o matcher sobre o objeto completo pode certificar
+  equivalência.
+- AIMemory é contexto suplementar opcional. O worker só recebe permissões para
+  `memory_query` e `memory_read_page`; escrita, mensagens, exclusão, shell e
+  subagentes continuam negados por deny-by-default. `execute`, ferramentas de
+  rede e acesso externo também são negados explicitamente; a política efetiva é
+  auditada antes de declarar o worker pronto.
+- No OpenCode **2.1.4**, `mcp list` confirma a conexão, mas não inspeciona o
+  catálogo efetivamente anexado a uma sessão ativa. `doctor` agora separa os
+  estados: conexão **CONNECTED**, permissões do worker **READY**, catálogo de
+  ferramentas registradas **UNVERIFIED** e disponibilidade na sessão
+  **UNVERIFIED**. Essa incerteza não bloqueia a reconstrução local.
+- `opencode debug agents` e a auditoria do projeto confirmaram a política
+  restrita no checkout e nos dois worktrees existentes. Isso verifica política,
+  não prova que as ferramentas MCP foram expostas ao contexto da sessão.
+
+### Recuperação da hipótese e diagnósticos
+
+- A hipótese histórica de `0x2C28C` continua em
+  `build/seto038/func_0002C28C-hypothesis-v1.c`, SHA-256
+  `1deb1fc3490cb64505db44bd02eb3b5c2493c820bea78f48ab52b6a99f645000`.
+  O manifesto de allowlist confere path local, hash, declaração da função e
+  intervalo de 28 instruções antes de copiá-la para evidência isolada de cada
+  worker. O resultado histórico segue **NONMATCHING, 26/28**, com divergência em
+  `0x2C2C4` (`bnel`/delay slot versus `bne`/`nop`); nunca é fonte certificada e
+  não substitui checkpoint ou fonte melhor. Uma cópia incompleta é removida sem
+  sobrescrever artefato preexistente.
+- Falhas locais agora persistem somente pares controlados de estágio/código no
+  checkpoint, evento e tentativa; `status` os expõe sem mensagens, caminhos
+  privados ou texto bruto de exceção. Fonte candidata ausente interrompe antes
+  do matcher. A validação exige duas respostas completas, função/endereço,
+  proveniência de fonte/objeto e cobertura de todo o intervalo: um objeto curto
+  não gera score parcial persistido. Um relatório completo `INCONCLUSIVE` é
+  preservado como tal, em vez de ser confundido com saída truncada.
+- Os registros bloqueados da campanha preexistente continuam como fatos
+  históricos (`agent_error`); não foram migrados nem reescritos para inventar
+  diagnósticos retroativos.
+
+### Evidência e estado preservado
+
+- Os logs Ghidra existentes foram apenas lidos: hashes coincidem com os
+  checkpoints e boundaries Allegrex exatos são `0x2C28C` — 112 bytes / 28
+  instruções — e `0x4217C` — 176 bytes / 44 instruções. Porém, os dois arquivos
+  são caches de boundary apenas: não contêm mnemônicos nem C decompilado, apesar
+  de `SETO_DECOMP_STATUS=OK`. A evidência de export/NID passou para ambos. O
+  runner agora detecta a falta de conteúdo e força nova análise antes de usar
+  esses caches; Ghidra não foi executado novamente nesta rodada.
+- `doctor` reportou OpenCode **2.1.4**, ambos os modelos configurados **READY**,
+  AIMemory conectado, Ghidra/MWCC/wibo **READY** e Python WSL **3.12.3**. São
+  verificações de ambiente; não equivalem a compilar ou comparar novas fontes.
+- Os SHA-256 do EBOOT, dos dois PRXs e do relatório de triage coincidem com os
+  valores configurados. A base SQLite continua com **2/4 tentativas cumulativas**:
+  `0x2C28C` (Luna) e `0x4217C` (DeepSeek), uma tentativa `agent_error` cada;
+  ambas permanecem `blocked`. `plan`/`status` e as verificações de evidência não
+  iniciaram sessões nem alteraram a fila. Nenhuma função foi certificada ou
+  promovida; os baselines permanecem **EBOOT 8 MATCHED / 206 instruções** e
+  **PRXs 16 MATCHED / 912 instruções**.
+
+### Validação
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_decomp_campaign.py` | **112 passed** |
+| Suíte completa, Windows / Python 3.12 | **947 passed, 44 skipped** |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+| `doctor`, `plan`, `status` | executados sem iniciar modelo; readiness e limites acima |
+| Matching real novo / promoção | não executados; nenhuma fonte completa foi produzida nesta rodada |
+
+Os skips da suíte completa são integrações opt-in de EBOOT/PRX/REA, ferramentas
+GNU MIPSel ausentes ou gates POSIX/WSL que não se aplicam ao host Windows. A
+prontidão detectada pelo `doctor` não substitui essas integrações reais.
+
+### SETO-DECOMP-042-R2 — launcher AIMemory e isolamento do worker
+
+- A instalação local é AIMemory **3.1.1** e OpenCode **2.1.4**. `ai-memory run
+  --help` confirma que `run opencode <argumentos>` encaminha argumentos nativos,
+  mas também seleciona/retoma um workstream e faz auto-wire de hooks/MCP. O
+  `config/decomp_campaign.run.local.toml` permanece em `command = ["opencode"]`:
+  o orquestrador chama `api`, `debug` e `run --session` diretamente, portanto
+  substituir o prefixo pelo launcher não foi comprovado compatível e poderia
+  alterar a seleção/reutilização de workstreams. Nenhum launcher ou modelo foi
+  iniciado nesta verificação.
+- `opencode debug config` nos dois worktrees confirma que os processos diretos
+  carregam a instalação persistente `ai-memory` do config global do usuário; a
+  conexão não prova a lista de ferramentas de uma sessão. A instalação atual
+  não define `codemode`, portanto mantém o padrão Code Mode. A versão 2.1.4
+  aceitou `codemode: false` em um config remoto fictício de loopback, sem
+  conexão; segundo a documentação V2, isso expõe ferramentas diretamente.
+- Não foi gravado um override de campanha: OpenCode substitui por inteiro o
+  objeto de servidor homônimo em uma configuração de maior precedência. O
+  override precisaria repetir endpoint e autenticação, que hoje estão no config
+  global; copiá-la para os worktrees ou alterar o global ampliaria o escopo e
+  não preservaria o isolamento de outros agentes. Assim, a exposição real das
+  duas ferramentas permanece **UNVERIFIED**; AIMemory é opcional e a evidência
+  local é suficiente para continuar.
+- O `doctor` read-only, executado com o código atualizado para o checkout e cada
+  config de worktree, confirmou nos três diretórios conexão MCP **CONNECTED**,
+  política efetiva **READY**, catálogo e exposição em sessão **UNVERIFIED**.
+  Nenhum modelo foi iniciado; os worktrees mantiveram seus estados de prontidão
+  de provedor locais.
+- RED reproduziu a aceitação histórica de `execute: allow`; GREEN endureceu a
+  auditoria para exigir deny-by-default, negar execução, shell, HTTP/rede,
+  subagentes e acessos externos, aceitar somente os dois grants exatos de leitura
+  AIMemory e rejeitar overrides permissivos. O diagnóstico agora requer igualdade
+  exata com as duas ferramentas permitidas antes de reportar disponibilidade
+  **READY**; conexão isolada continua **UNVERIFIED**. Também foram cobertos o
+  fallback local, os comandos nativos da campanha e a separação de sessões.
+- As alterações R2 não iniciam campanha nem mudam SQLite, baselines, scheduler
+  ou matcher. Resultado R2: orquestrador **112 passed**, suíte completa
+  **947 passed, 44 skipped**, `compileall` clean e `git diff --check` clean.

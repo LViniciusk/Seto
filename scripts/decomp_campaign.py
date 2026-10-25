@@ -46,6 +46,34 @@ CHATGPT_OAUTH_METHODS = frozenset(
 )
 OPENAI_PROVIDER_PACKAGE = "@opencode/ai/providers/openai"
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+AI_MEMORY_SERVER = "ai-memory"
+AI_MEMORY_READ_TOOLS = frozenset({"memory_query", "memory_read_page"})
+AI_MEMORY_READ_ACTIONS = frozenset(
+    f"{AI_MEMORY_SERVER}_{tool}" for tool in AI_MEMORY_READ_TOOLS
+)
+DIAGNOSTIC_CODES = {
+    "ghidra_evidence_invalid": "ghidra",
+    "context_unavailable": "context",
+    "checkpoint_invalid": "worker_return",
+    "candidate_source_missing": "worker_return",
+    "matcher_incomplete": "matcher",
+    "protected_input_changed": "integrity",
+    "internal_error": "internal",
+}
+HISTORICAL_HYPOTHESES: dict[str, dict[str, Any]] = {
+    "0x2c28c": {
+        "source_path": "seto038/func_0002C28C-hypothesis-v1.c",
+        "sha256": "1deb1fc3490cb64505db44bd02eb3b5c2493c820bea78f48ab52b6a99f645000",
+        "function": "func_0002C28C",
+        "matching_words": 26,
+        "total_words": 28,
+        "first_divergence": {
+            "address": "0x2C2C4",
+            "candidate": "bnel with lhu in the delay slot",
+            "original": "bne followed by nop",
+        },
+    }
+}
 
 
 class FailureKind(StrEnum):
@@ -62,6 +90,8 @@ class FailureKind(StrEnum):
 class Failure:
     kind: FailureKind
     retry_after_seconds: float | None = None
+    diagnostic_stage: str | None = None
+    diagnostic_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +177,10 @@ class CampaignInterrupted(Exception):
     """Internal signal used to release a task after an operator stop request."""
 
 
+class MatcherIncomplete(ValueError):
+    """Matcher output did not cover the complete required function interval."""
+
+
 def validate_model_id(model: str, allowed_models: Iterable[str]) -> str:
     """Require an exact, configured model identifier; aliases are not accepted."""
     allowed = set(allowed_models)
@@ -226,6 +260,20 @@ def _safe_text(value: Any, limit: int = 4000) -> str:
     return text[:limit]
 
 
+def _matcher_failure_is_incomplete(exc: Exception) -> bool:
+    """Recognize bounded-output failures without retaining the exception text."""
+    if isinstance(exc, MatcherIncomplete):
+        return True
+    return bool(
+        re.search(
+            r"(?is)(?:\.text|object|candidate).{0,100}"
+            r"(?:\b\d+\s+bytes?\b|too small|too short|incomplete|truncated)|"
+            r"(?:too few|incomplete|truncated).{0,80}(?:bytes?|object|text)",
+            str(exc),
+        )
+    )
+
+
 def _sanitize_checkpoint(
     checkpoint: dict[str, Any], *, trusted_evidence: bool = False
 ) -> dict[str, Any]:
@@ -242,6 +290,8 @@ def _sanitize_checkpoint(
             "boundary_status",
             "best_match",
             "evidence_paths",
+            "historical_hypothesis",
+            "last_diagnostic",
         }
     result: dict[str, Any] = {}
     for key in allowed:
@@ -286,6 +336,62 @@ def _sanitize_checkpoint(
                 for item_key, item_value in value.items()
                 if item_key in fields and isinstance(item_value, (str, int, list))
             }
+        elif key == "historical_hypothesis" and isinstance(value, dict):
+            status = value.get("status")
+            if status == "available":
+                path = value.get("path")
+                digest = value.get("sha256")
+                first_divergence = value.get("first_divergence")
+                if (
+                    isinstance(path, str)
+                    and path.replace("\\", "/").startswith("build/decomp-campaign/")
+                    and ".." not in Path(path.replace("\\", "/")).parts
+                    and isinstance(digest, str)
+                    and HEX_SHA256.fullmatch(digest)
+                    and isinstance(first_divergence, dict)
+                ):
+                    matching_words = value.get("matching_words")
+                    total_words = value.get("total_words")
+                    if (
+                        isinstance(matching_words, bool)
+                        or not isinstance(matching_words, int)
+                        or isinstance(total_words, bool)
+                        or not isinstance(total_words, int)
+                        or not 0 <= matching_words <= total_words <= 512
+                    ):
+                        continue
+                    result[key] = {
+                        "status": "available",
+                        "path": path.replace("\\", "/"),
+                        "sha256": digest,
+                        "classification": "NONMATCHING / not certified",
+                        "matching_words": matching_words,
+                        "total_words": total_words,
+                        "first_divergence": {
+                            field: _safe_text(first_divergence[field], 200)
+                            for field in ("address", "candidate", "original")
+                            if isinstance(first_divergence.get(field), str)
+                        },
+                    }
+            elif status == "unavailable" and value.get("reason") in {
+                "missing",
+                "hash_mismatch",
+                "identity_mismatch",
+                "unsafe_path",
+                "destination_conflict",
+                "copy_failed",
+            }:
+                result[key] = {"status": "unavailable", "reason": value["reason"]}
+        elif key == "last_diagnostic" and isinstance(value, dict):
+            stage = value.get("stage")
+            code = value.get("code")
+            if (
+                isinstance(stage, str)
+                and isinstance(code, str)
+                and code in DIAGNOSTIC_CODES
+                and DIAGNOSTIC_CODES[code] == stage
+            ):
+                result[key] = {"stage": stage, "code": code}
     return result
 
 
@@ -927,6 +1033,22 @@ class CampaignStore:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             candidate_row = self._require_owner(db, claim)
+            diagnostic = None
+            if (
+                isinstance(failure.diagnostic_code, str)
+                and failure.diagnostic_code in DIAGNOSTIC_CODES
+                and DIAGNOSTIC_CODES[failure.diagnostic_code]
+                == failure.diagnostic_stage
+            ):
+                diagnostic = {
+                    "stage": failure.diagnostic_stage,
+                    "code": failure.diagnostic_code,
+                }
+            diagnostic_code = diagnostic["code"] if diagnostic is not None else None
+            checkpoint = json.loads(candidate_row["checkpoint_json"])
+            if diagnostic is not None:
+                checkpoint["last_diagnostic"] = diagnostic
+            checkpoint_json = _json_dump(checkpoint)
             provider_status = "blocked"
             task_status = "blocked"
             preferred_provider: str | None = claim.provider
@@ -970,7 +1092,7 @@ class CampaignStore:
             )
             db.execute(
                 """UPDATE candidates SET status=?,owner=NULL,provider=NULL,lease_until=NULL,
-                   preferred_provider=?,available_at=?,last_provider=?,session_id=?,updated_at=?
+                   preferred_provider=?,available_at=?,last_provider=?,session_id=?,checkpoint_json=?,updated_at=?
                    WHERE address=?""",
                 (
                     task_status,
@@ -978,6 +1100,7 @@ class CampaignStore:
                     available_at,
                     claim.provider,
                     claim.session_id,
+                    checkpoint_json,
                     now,
                     claim.address,
                 ),
@@ -987,7 +1110,7 @@ class CampaignStore:
                    WHERE address=? AND attempt_number=?""",
                 (
                     now,
-                    failure.kind.value,
+                    diagnostic_code or failure.kind.value,
                     failure.kind.value,
                     delay,
                     claim.address,
@@ -996,7 +1119,7 @@ class CampaignStore:
             )
             self._event(
                 db,
-                failure.kind.value,
+                diagnostic_code or failure.kind.value,
                 address=claim.address,
                 worker_id=claim.worker_id,
                 provider=claim.provider,
@@ -1247,40 +1370,54 @@ def _extract_checkpoint(output: str) -> dict[str, Any]:
 def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
     compact_checkpoint = {
         key: checkpoint[key]
-        for key in ("next_experiment", "source_sha256", "best_match", "ghidra_log_path")
+        for key in (
+            "next_experiment",
+            "source_sha256",
+            "best_source_sha256",
+            "best_source_snapshot",
+            "best_match",
+            "ghidra_log_path",
+            "historical_hypothesis",
+        )
         if key in checkpoint
     }
     return (
-        "Work on one EBOOT function in this isolated Git worktree. Do not modify the matcher, "
-        "certified sources, integration tests, or documentation. Do not write to AIMemory; "
-        "do not run git add/commit/push, alter branches, or access paths outside this worktree. "
-        "first use the read-only ai-memory retrieval tools for project knowledge about the "
-        "relevant MIPS/MWCC subsystem; if retrieval is unavailable, report that limitation. "
-        "Never write, annotate, or send checkpoints to AIMemory. Keep the candidate C source "
-        "at its prescribed path and all auxiliary artifacts in the worker build directory. "
-        "Inspect the export/NID, references, and exact Ghidra boundary evidence already "
-        "generated for this attempt. Do not invoke shell commands: the restricted worker "
-        "agent has no shell permission. The orchestrator compiles and compares the complete "
-        "function with scripts/match_function.py and the configured MWCC PSP 3.0.1 toolchain. "
-        "Never claim MATCHED from partial words: the orchestrator independently runs two "
-        "full builds before certification. Keep only this function's source and evidence "
-        "at the prescribed source path and evidence under its worker build directory. "
-        "Return one JSON object with a top-level "
-        "checkpoint containing ghidra_log_path, next_experiment, limitations, and "
-        "evidence paths. If the inventory boundary is UNVERIFIED, report only its "
-        "Ghidra proof first; the orchestrator will then schedule reconstruction. "
-        "For a confirmed boundary, also include source_path and source_sha256. Do not include credentials, "
-        "raw private dumps, or media contents in the JSON.\n\n"
+        "Reconstruct only this EBOOT function in the isolated worker worktree. Treat local "
+        "MIPS instructions and full-object matcher results as primary evidence; Ghidra's C "
+        "decompilation is an initial hypothesis, not proof of equivalence. First read the "
+        "complete Ghidra log at the checkpoint path: it contains the verified boundary, "
+        "instruction disassembly, and decompiled C. Then inspect "
+        "build/seto035/export-triage.json for the export/NID, proven call sites, relocations, "
+        "and references; follow only evidence paths actually present in the supplied task "
+        "evidence. Review the current candidate source and the best prior checkpoint/source "
+        "hash before changing anything, preserving a stronger hypothesis and recording the "
+        "first causal divergence. A supplied historical hypothesis is explicitly NONMATCHING "
+        "and not certified; use it as a lead only and never promote it automatically.\n\n"
+        "AIMemory retrieval via memory_query/memory_read_page is optional supporting context. "
+        "Use it only if those read-only tools are actually available; if retrieval is unavailable, "
+        "report that limitation and continue from sufficient local evidence. It is not a "
+        "prerequisite. Never write, annotate, or send anything to AIMemory. Do not invoke shell "
+        "commands, subagents, Git mutations, or paths outside this worktree. Edit only the "
+        "assigned C source and put auxiliary evidence below this worker's build directory. "
+        "Do not modify the matcher, certified sources, tests, or documentation. The orchestrator "
+        "independently compiles and compares the complete function with the production matcher "
+        "and MWCC PSP 3.0.1, requiring two deterministic full builds for certification; never "
+        "claim MATCHED from partial words or an incomplete object. Do not invent semantics when "
+        "the evidence is insufficient.\n\n"
+        "Return one JSON object with a top-level checkpoint containing next_experiment, "
+        "limitations, and evidence_paths. Include source_path and source_sha256 only when a "
+        "candidate source was actually produced. Do not include credentials, full prompts, "
+        "stdout dumps, private input contents, or media contents.\n\n"
         f"Address: {claim.address}; size currently listed: {claim.size_bytes} bytes; "
         f"NID: {claim.nid}; boundary: {claim.boundary_status}; priority: {claim.priority}.\n"
         f"Worktree: {worktree}\n"
         f"Task evidence/build root: build/decomp-campaign/{claim.worker_id}/"
         f"{claim.address.removeprefix('0x')} (paths in JSON must be repo-relative).\n"
         f"Candidate source path: decomp/src/eboot/func_{claim.numeric_address:08X}.c.\n"
-        f"Provenance hints: {json.dumps(claim.evidence, sort_keys=True)}\n"
+        f"Local export/reference evidence: {json.dumps(claim.evidence, sort_keys=True)}\n"
         f"Previous local checkpoint: {json.dumps(compact_checkpoint, sort_keys=True)}\n"
-        f"Session: {claim.session_id}. Preserve the best hypothesis and identify the first "
-        "causal divergence; do not promote speculative semantics to certified facts."
+        f"Session: {claim.session_id}. If local evidence is insufficient, state exactly what is "
+        "missing and propose a bounded next experiment instead of guessing."
     )
 
 
@@ -1581,6 +1718,17 @@ class CampaignRunner:
             os.replace(temporary, destination)
         verification["source_snapshot_path"] = relative
 
+    def _attach_historical_hypothesis(self, worktree: Path, claim: Claim) -> Claim:
+        evidence = _copy_known_historical_hypothesis(
+            self.checkpoint_repo_root or REPO_ROOT, worktree, claim
+        )
+        if evidence is None:
+            return claim
+        checkpoint = dict(claim.checkpoint)
+        checkpoint["historical_hypothesis"] = evidence
+        self.store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+        return replace(claim, checkpoint=checkpoint)
+
     def _prepare_claim(self, worktree: Path, claim: Claim, deadline: float | None) -> Claim:
         """Recheck export provenance and exact Ghidra body before any model call."""
         eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
@@ -1604,7 +1752,9 @@ class CampaignRunner:
             )
             cached_text = cached_path.read_text(encoding="utf-8", errors="replace")
             if _ghidra_log_has_reconstruction_details(cached_text):
-                return replace(claim, checkpoint=dict(claim.checkpoint))
+                return self._attach_historical_hypothesis(
+                    worktree, replace(claim, checkpoint=dict(claim.checkpoint))
+                )
         if os.name == "nt":
             if not self.ghidra_windows_home:
                 raise ValueError("machine-local Windows Ghidra home is not configured")
@@ -1726,12 +1876,13 @@ class CampaignRunner:
             }
         )
         self.store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
-        return replace(
+        prepared = replace(
             claim,
             size_bytes=int(boundary["size_bytes"]),
             boundary_status="EXACT",
             checkpoint=checkpoint,
         )
+        return self._attach_historical_hypothesis(worktree, prepared)
 
     def _verify_with_matcher_twice(
         self,
@@ -1791,10 +1942,21 @@ class CampaignRunner:
             reports = self._run_matcher_native(
                 worktree, claim, source, eboot, config, matcher, deadline=deadline
             )
+        if len(reports) != 2:
+            raise MatcherIncomplete("matcher did not produce two complete verification reports")
         objects = [
-            str(report.get("provenance", {}).get("object_sha256", ""))
+            str(provenance.get("object_sha256", ""))
+            if isinstance(provenance := report.get("provenance"), dict)
+            else ""
             for report in reports
         ]
+        for report in reports:
+            _validate_complete_matcher_report(
+                report,
+                expected_address=claim.numeric_address,
+                expected_size=claim.size_bytes,
+                expected_source_sha256=source_hash,
+            )
         matching = max(
             (int(report.get("match", {}).get("matching_words", -1)) for report in reports),
             default=-1,
@@ -1807,8 +1969,17 @@ class CampaignRunner:
             )
             for report in reports
         )
+        if all_matched and objects[0] == objects[1]:
+            result_status = "MATCHED"
+        elif any(report["status"] == "INCONCLUSIVE" for report in reports) or (
+            all(report["status"] == "MATCHED" for report in reports)
+            and objects[0] != objects[1]
+        ):
+            result_status = "INCONCLUSIVE"
+        else:
+            result_status = "NONMATCHING"
         result: dict[str, Any] = {
-            "status": "MATCHED" if all_matched and objects[0] == objects[1] else "NONMATCHING",
+            "status": result_status,
             "source_sha256": source_hash,
             "matching_words": matching,
             "total_words": claim.size_bytes // 4,
@@ -1934,20 +2105,33 @@ class CampaignRunner:
     def _run_claim(self, worker: Worker, claim: Claim, deadline: float | None) -> str:
         worktree = self.worktrees[worker.worker_id]
         if worktree.is_symlink() or not worktree.is_dir():
-            self._fail(claim, Failure(FailureKind.AGENT_ERROR))
+            self._fail(
+                claim,
+                Failure(
+                    FailureKind.AGENT_ERROR,
+                    diagnostic_stage="context",
+                    diagnostic_code="context_unavailable",
+                ),
+            )
             return "blocked"
+        phase = "context"
         try:
             if self.auto_preflight:
+                phase = "ghidra"
                 claim = self._prepare_claim(worktree, claim, deadline)
+            phase = "context"
             claim = self._ensure_session(
                 claim, worktree, deadline, agent=worker.agent, model=worker.model
             )
+            phase = "checkpoint"
             self._restore_best_source(worktree, claim)
+            phase = "integrity"
             protected_before = _file_manifest(worktree) if self.auto_preflight else {}
             changes_before = _worktree_status_snapshot(worktree) if self.auto_preflight else {}
             git_head_before = _git_output(worktree, "rev-parse", "HEAD") if self.auto_preflight else ""
             git_branch_before = _git_output(worktree, "branch", "--show-current") if self.auto_preflight else ""
             validate_model_id(worker.model, {"openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"})
+            phase = "context"
             process = _run_process(
                 self._argv(worker, claim, _prompt(claim, claim.checkpoint, worktree)),
                 cwd=worktree,
@@ -1956,9 +2140,18 @@ class CampaignRunner:
                 stop_requested=self.store.stop_requested,
                 deadline=deadline,
             )
+            phase = "integrity"
             protected_after = _file_manifest(worktree) if self.auto_preflight else {}
             if protected_before != protected_after:
-                raise ValueError("worker modified a protected matcher, toolchain, or private input")
+                self._fail(
+                    claim,
+                    Failure(
+                        FailureKind.AGENT_ERROR,
+                        diagnostic_stage="integrity",
+                        diagnostic_code="protected_input_changed",
+                    ),
+                )
+                return "blocked"
             if self.auto_preflight:
                 _assert_worker_changes_scoped(
                     changes_before,
@@ -1974,16 +2167,21 @@ class CampaignRunner:
                 self._fail(claim, Failure(FailureKind.INTERRUPTED))
                 return "interrupted"
             if process.returncode != 0 or process.timed_out:
-                self._fail(
-                    claim,
-                    classify_failure(
-                        process.returncode,
-                        process.stdout,
-                        process.stderr,
-                        timed_out=process.timed_out,
-                    ),
+                failure = classify_failure(
+                    process.returncode,
+                    process.stdout,
+                    process.stderr,
+                    timed_out=process.timed_out,
                 )
+                if failure.kind is FailureKind.AGENT_ERROR:
+                    failure = replace(
+                        failure,
+                        diagnostic_stage="context",
+                        diagnostic_code="context_unavailable",
+                    )
+                self._fail(claim, failure)
                 return "failed"
+            phase = "worker_return"
             agent_checkpoint = _extract_checkpoint(process.stdout)
             checkpoint = {
                 key: agent_checkpoint[key]
@@ -1993,13 +2191,79 @@ class CampaignRunner:
             for key in ("ghidra_log_path", "ghidra_log_sha256", "boundary_status"):
                 if key in claim.checkpoint:
                     checkpoint[key] = claim.checkpoint[key]
+            if "historical_hypothesis" in claim.checkpoint:
+                checkpoint["historical_hypothesis"] = claim.checkpoint[
+                    "historical_hypothesis"
+                ]
+            for key in (
+                "best_source_sha256",
+                "best_source_snapshot",
+                "best_match",
+            ):
+                if key in claim.checkpoint:
+                    checkpoint[key] = claim.checkpoint[key]
+            phase = "checkpoint"
             self.store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
-            if self.auto_preflight:
-                verification = self._verify_with_matcher_twice(
-                    worktree, claim, checkpoint, deadline
+            source_relative = Path("decomp/src/eboot") / f"func_{claim.numeric_address:08X}.c"
+            try:
+                source = _safe_worktree_path(worktree, source_relative)
+            except (OSError, ValueError):
+                self._fail(
+                    claim,
+                    Failure(
+                        FailureKind.AGENT_ERROR,
+                        diagnostic_stage="integrity",
+                        diagnostic_code="protected_input_changed",
+                    ),
                 )
-            else:
-                verification = self.verifier(worktree, claim, checkpoint)
+                return "blocked"
+            if source.is_symlink():
+                self._fail(
+                    claim,
+                    Failure(
+                        FailureKind.AGENT_ERROR,
+                        diagnostic_stage="integrity",
+                        diagnostic_code="protected_input_changed",
+                    ),
+                )
+                return "blocked"
+            if claim.boundary_status == "EXACT" and not source.is_file():
+                self._fail(
+                    claim,
+                    Failure(
+                        FailureKind.AGENT_ERROR,
+                        diagnostic_stage="worker_return",
+                        diagnostic_code="candidate_source_missing",
+                    ),
+                )
+                return "blocked"
+            phase = "matcher"
+            try:
+                if self.auto_preflight:
+                    verification = self._verify_with_matcher_twice(
+                        worktree, claim, checkpoint, deadline
+                    )
+                else:
+                    verification = self.verifier(worktree, claim, checkpoint)
+            except CampaignInterrupted:
+                raise
+            except Exception as exc:
+                if _matcher_failure_is_incomplete(exc):
+                    code = "matcher_incomplete"
+                    stage = "matcher"
+                else:
+                    code = "internal_error"
+                    stage = "internal"
+                self._fail(
+                    claim,
+                    Failure(
+                        FailureKind.AGENT_ERROR,
+                        diagnostic_stage=stage,
+                        diagnostic_code=code,
+                    ),
+                )
+                return "blocked"
+            phase = "checkpoint"
             if verification.get("status") != "BOUNDARY_VALIDATED":
                 self._snapshot_candidate_source(worktree, claim, verification)
             status = self.store.complete(
@@ -2013,10 +2277,35 @@ class CampaignRunner:
         except CampaignInterrupted:
             self._fail(claim, Failure(FailureKind.INTERRUPTED))
             return "interrupted"
-        except Exception:
-            # Persist only a bounded classification; process/model text is never logged.
+        except Exception as exc:
+            # Provider signals from session setup retain their existing policy;
+            # local diagnostics persist only a stable stage/code, never messages.
+            if phase == "context":
+                provider_failure = classify_failure(1, "", str(exc))
+                if provider_failure.kind is not FailureKind.AGENT_ERROR:
+                    try:
+                        self._fail(claim, provider_failure)
+                    except RuntimeError:
+                        pass
+                    return "failed"
+            code_by_phase = {
+                "ghidra": ("ghidra", "ghidra_evidence_invalid"),
+                "context": ("context", "context_unavailable"),
+                "worker_return": ("worker_return", "checkpoint_invalid"),
+                "checkpoint": ("worker_return", "checkpoint_invalid"),
+                "integrity": ("integrity", "protected_input_changed"),
+                "matcher": ("internal", "internal_error"),
+            }
+            stage, code = code_by_phase.get(phase, ("internal", "internal_error"))
             try:
-                self._fail(claim, Failure(FailureKind.AGENT_ERROR))
+                self._fail(
+                    claim,
+                    Failure(
+                        FailureKind.AGENT_ERROR,
+                        diagnostic_stage=stage,
+                        diagnostic_code=code,
+                    ),
+                )
             except RuntimeError:
                 pass
             return "blocked"
@@ -2148,6 +2437,70 @@ def _parse_match_report(returncode: int, stdout: str) -> dict[str, Any]:
     if expected_codes.get(report.get("status")) != returncode:
         raise ValueError("production matcher status and exit code disagree")
     return report
+
+
+def _validate_complete_matcher_report(
+    report: dict[str, Any],
+    *,
+    expected_address: int,
+    expected_size: int,
+    expected_source_sha256: str,
+) -> None:
+    """Reject malformed or partial comparisons without rejecting full INCONCLUSIVE results."""
+    expected_words = expected_size // 4
+    match = report.get("match")
+    status = report.get("status")
+    expected_function = f"func_{expected_address:08X}"
+    if (
+        expected_size <= 0
+        or expected_size % 4
+        or not isinstance(status, str)
+        or status not in {"MATCHED", "NONMATCHING", "INCONCLUSIVE"}
+        or not isinstance(match, dict)
+        or match.get("status") != status
+        or report.get("function") != expected_function
+        or report.get("symbol") != expected_function
+    ):
+        raise MatcherIncomplete("matcher report is malformed or identifies another function")
+    provenance = report.get("provenance")
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("source_sha256") != expected_source_sha256
+        or not isinstance(provenance.get("object_sha256"), str)
+        or not HEX_SHA256.fullmatch(provenance["object_sha256"])
+    ):
+        raise MatcherIncomplete("matcher report is missing source/object provenance")
+    try:
+        report_address = int(str(report.get("address")), 0)
+    except (TypeError, ValueError):
+        raise MatcherIncomplete("matcher report is missing the expected function address") from None
+    if report_address != expected_address:
+        raise MatcherIncomplete("matcher report identifies another function address")
+
+    matching_words = match.get("matching_words")
+    total_words = match.get("total_words")
+    difference_count = match.get("difference_count")
+    if (
+        isinstance(matching_words, bool)
+        or not isinstance(matching_words, int)
+        or isinstance(total_words, bool)
+        or not isinstance(total_words, int)
+        or isinstance(difference_count, bool)
+        or not isinstance(difference_count, int)
+        or total_words != expected_words
+        or not 0 <= matching_words <= total_words
+        or not 0 <= difference_count <= total_words
+        or matching_words + difference_count > total_words
+    ):
+        raise MatcherIncomplete("matcher report does not cover the complete function interval")
+    for key in ("differences", "limitations", "relocation_issues"):
+        if not isinstance(match.get(key), list):
+            raise MatcherIncomplete("matcher report omitted comparison evidence")
+    relocation_issues = match["relocation_issues"]
+    if any(not isinstance(issue, str) for issue in relocation_issues):
+        raise MatcherIncomplete("matcher report contains malformed relocation evidence")
+    if any(issue.startswith("size mismatch:") for issue in relocation_issues):
+        raise MatcherIncomplete("matcher report identifies an incomplete object interval")
 
 
 def _wsl_path(path: Path, distro: str) -> str:
@@ -2766,7 +3119,7 @@ def select_ready_workers(
 def worker_agent_policy_is_restricted(
     agents: list[dict[str, Any]], agent_id: str
 ) -> bool:
-    """Audit OpenCode's effective agent rules; workers get no shell or broad writes."""
+    """Require local-only worker access and exact read-only AIMemory tool grants."""
     matches = [agent for agent in agents if agent.get("id") == agent_id]
     if len(matches) != 1 or not isinstance(matches[0].get("permissions"), list):
         return False
@@ -2781,6 +3134,20 @@ def worker_agent_policy_is_restricted(
     ]
     if not deny_indices:
         return False
+    denied_actions = {
+        (action, "*", "deny")
+        for action in (
+            "execute",
+            "shell",
+            "http",
+            "http_request",
+            "webfetch",
+            "websearch",
+            "browser",
+            "external_directory",
+            "subagent",
+        )
+    }
     allowed_overrides = {
         ("*", "*", "deny"),
         ("read", "*", "allow"),
@@ -2788,14 +3155,11 @@ def worker_agent_policy_is_restricted(
         ("grep", "*", "allow"),
         ("edit", "decomp/src/eboot/func_*.c", "allow"),
         ("edit", "build/decomp-campaign/*", "allow"),
-        ("ai_memory_memory_query", "*", "allow"),
-        ("ai_memory_memory_read_page", "*", "allow"),
-        ("external_directory", "*", "deny"),
-        ("subagent", "*", "deny"),
+        ("ai-memory_memory_query", "*", "allow"),
+        ("ai-memory_memory_read_page", "*", "allow"),
         ("read", "*.env", "deny"),
         ("read", "*.env.*", "deny"),
-        ("browser", "*", "deny"),
-    }
+    } | denied_actions
     for rule in rules[deny_indices[-1] :]:
         if not isinstance(rule, dict) or (
             rule.get("action"), rule.get("resource"), rule.get("effect")
@@ -2822,9 +3186,19 @@ def worker_agent_policy_is_restricted(
         and effect("edit", "*") == "deny"
         and effect("edit", "decomp/src/eboot/func_00002C28C.c") == "allow"
         and effect("edit", "build/decomp-campaign/openai/2c28c/result.json") == "allow"
+        and effect("execute", "*") == "deny"
+        and effect("http", "*") == "deny"
+        and effect("http_request", "*") == "deny"
+        and effect("webfetch", "*") == "deny"
+        and effect("websearch", "*") == "deny"
+        and effect("browser", "*") == "deny"
         and effect("subagent", "*") == "deny"
-        and effect("ai_memory_memory_query", "*") == "allow"
-        and effect("ai_memory_memory_read_page", "*") == "allow"
+        and effect("ai-memory_memory_query", "*") == "allow"
+        and effect("ai-memory_memory_read_page", "*") == "allow"
+        and effect("ai-memory_memory_write_page", "*") == "deny"
+        and effect("ai-memory_memory_message_send", "*") == "deny"
+        and effect("ai-memory_memory_delete_page", "*") == "deny"
+        and effect("ai-memory_memory_message_pop", "*") == "deny"
         and effect("read", "private/credentials.env") == "deny"
         and effect("read", "private/credentials.env.local") == "deny"
     )
@@ -2877,6 +3251,144 @@ def _safe_worktree_path(worktree: Path, relative: str | Path) -> Path:
     except ValueError as exc:
         raise ValueError("worker path escapes the worktree") from exc
     return target
+
+
+def _copy_known_historical_hypothesis(
+    repo_root: Path, worktree: Path, claim: Claim
+) -> dict[str, Any] | None:
+    """Copy only a specifically catalogued, hash- and identity-checked hypothesis."""
+    spec = HISTORICAL_HYPOTHESES.get(claim.address.lower())
+    if spec is None:
+        return None
+
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {"status": "unavailable", "reason": reason}
+
+    try:
+        source_relative = spec["source_path"]
+        expected_hash = spec["sha256"]
+        expected_function = f"func_{claim.numeric_address:08X}"
+        if (
+            not isinstance(source_relative, str)
+            or not isinstance(expected_hash, str)
+            or not HEX_SHA256.fullmatch(expected_hash)
+            or spec.get("function") != expected_function
+            or int(spec["total_words"]) != claim.size_bytes // 4
+        ):
+            return unavailable("unsafe_path")
+        source = campaign_build_path(repo_root, source_relative)
+    except (KeyError, TypeError, ValueError, OSError):
+        return unavailable("unsafe_path")
+
+    if source.is_symlink():
+        return unavailable("unsafe_path")
+    if not source.is_file():
+        return unavailable("missing")
+    try:
+        content = source.read_bytes()
+    except OSError:
+        return unavailable("missing")
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != expected_hash.lower():
+        return unavailable("hash_mismatch")
+    text = content.decode("utf-8", errors="replace")
+    if not re.search(rf"(?m)^\s*void\s+{re.escape(expected_function)}\s*\(", text):
+        return unavailable("identity_mismatch")
+
+    matching_words = spec.get("matching_words")
+    total_words = spec.get("total_words")
+    divergence = spec.get("first_divergence")
+    if (
+        isinstance(matching_words, bool)
+        or not isinstance(matching_words, int)
+        or isinstance(total_words, bool)
+        or not isinstance(total_words, int)
+        or not 0 <= matching_words <= total_words <= 512
+        or not isinstance(divergence, dict)
+        or not isinstance(divergence.get("address"), str)
+    ):
+        return unavailable("identity_mismatch")
+    worker_id = claim.worker_id
+    if not re.fullmatch(r"[a-z0-9-]+", worker_id) or not worktree.is_dir():
+        return unavailable("unsafe_path")
+
+    address = claim.address.removeprefix("0x").lower()
+    relative_destination = Path(
+        "build",
+        "decomp-campaign",
+        worker_id,
+        address,
+        "evidence",
+        "historical",
+        Path(source_relative).name,
+    )
+    destination: Path | None = None
+    created_identity: tuple[int, int] | None = None
+
+    def remove_incomplete_copy() -> None:
+        if destination is None or created_identity is None or destination.is_symlink():
+            return
+        try:
+            info = destination.stat()
+            if (info.st_dev, info.st_ino) == created_identity:
+                destination.unlink(missing_ok=True)
+        except OSError:
+            return
+
+    try:
+        destination = _safe_worktree_path(worktree, relative_destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Recheck every parent after creating directories, then use exclusive
+        # creation so a concurrent worker/artifact can never be overwritten.
+        destination = _safe_worktree_path(worktree, relative_destination)
+        if destination.exists() or destination.is_symlink():
+            if destination.is_symlink() or not destination.is_file():
+                return unavailable("unsafe_path")
+            if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                return unavailable("destination_conflict")
+        else:
+            try:
+                with destination.open("xb") as output:
+                    info = os.fstat(output.fileno())
+                    created_identity = (info.st_dev, info.st_ino)
+                    if output.write(content) != len(content):
+                        raise OSError("historical hypothesis copy was incomplete")
+                    output.flush()
+            except FileExistsError:
+                if (
+                    destination.is_symlink()
+                    or not destination.is_file()
+                    or hashlib.sha256(destination.read_bytes()).hexdigest() != digest
+                ):
+                    return unavailable("destination_conflict")
+            except OSError:
+                remove_incomplete_copy()
+                return unavailable("copy_failed")
+            try:
+                copied_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
+            except OSError:
+                remove_incomplete_copy()
+                return unavailable("copy_failed")
+            if copied_hash != digest:
+                remove_incomplete_copy()
+                return unavailable("copy_failed")
+    except (OSError, ValueError):
+        remove_incomplete_copy()
+        return unavailable("unsafe_path")
+
+    return {
+        "status": "available",
+        "path": relative_destination.as_posix(),
+        "sha256": digest,
+        "classification": "NONMATCHING / not certified",
+        "matching_words": matching_words,
+        "total_words": total_words,
+        "first_divergence": {
+            key: value
+            for key, value in divergence.items()
+            if key in {"address", "candidate", "original"} and isinstance(value, str)
+        },
+    }
 
 
 def _file_manifest(worktree: Path) -> dict[str, str]:
@@ -3281,18 +3793,50 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     }
 
 
-def _ai_memory_connected(command: list[str], cwd: Path) -> bool:
-    result = subprocess.run(
-        [*command, "mcp", "list"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+def _ai_memory_exposure_report(
+    mcp_output: str,
+    *,
+    registered_tool_names: Iterable[str] | None,
+    worker_permissions_ready: bool | None,
+    effective_tool_names: Iterable[str] | None = None,
+) -> dict[str, str]:
+    """Separate MCP connection/catalog/policy checks from session-level exposure."""
+    connected = bool(
+        re.search(r"(?im)^\s*✓\s+ai-memory\s+connected\s*$", mcp_output)
     )
-    return result.returncode == 0 and bool(
-        re.search(r"(?im)^\s*✓\s+ai-memory\s+connected\s*$", result.stdout)
-    )
+    expected_names = AI_MEMORY_READ_ACTIONS
+    if registered_tool_names is None:
+        registered = "UNVERIFIED"
+        registered_ids: set[str] = set()
+    else:
+        registered_ids = set()
+        for name in registered_tool_names:
+            normalized = str(name).strip()
+            if normalized in AI_MEMORY_READ_TOOLS:
+                registered_ids.add(f"{AI_MEMORY_SERVER}_{normalized}")
+            else:
+                registered_ids.add(normalized)
+        registered = "READY" if expected_names <= registered_ids else "BLOCKED"
+    if worker_permissions_ready is None:
+        permissions = "UNVERIFIED"
+    else:
+        permissions = "READY" if worker_permissions_ready else "BLOCKED"
+
+    if not connected or registered == "BLOCKED" or permissions == "BLOCKED":
+        available = "BLOCKED"
+    elif effective_tool_names is None:
+        # OpenCode 2.1.4 reports the MCP server connection and effective agent
+        # policy, but cannot inspect the tool catalog attached to a live session.
+        available = "UNVERIFIED"
+    else:
+        effective_ids = {str(name).strip() for name in effective_tool_names}
+        available = "READY" if effective_ids == expected_names else "BLOCKED"
+    return {
+        "connection": "CONNECTED" if connected else "DISCONNECTED",
+        "registered_tools": registered,
+        "worker_permissions": permissions,
+        "available_to_agent": available,
+    }
 
 
 def _doctor(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
@@ -3387,11 +3931,23 @@ def _doctor(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
                                     toolchain["ghidra"] = "READY"
             except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
                 pass
+    mcp_connected = mcp.returncode == 0 and bool(
+        re.search(r"(?im)^\s*✓\s+ai-memory\s+connected\s*$", mcp.stdout)
+    )
+    worker_permissions_ready = bool(model_check.get("workers")) and all(
+        state.get("agent_policy") is True
+        for state in model_check.get("workers", {}).values()
+    )
+    ai_memory_exposure = _ai_memory_exposure_report(
+        mcp.stdout if mcp.returncode == 0 else "",
+        registered_tool_names=None,
+        worker_permissions_ready=worker_permissions_ready,
+    )
     return {
         "opencode_version": version.stdout.strip() if version.returncode == 0 else "BLOCKED",
         "opencode": model_check,
-        "mcp_connected": mcp.returncode == 0
-        and bool(re.search(r"(?im)^\s*✓\s+ai-memory\s+connected\s*$", mcp.stdout)),
+        "mcp_connected": mcp_connected,
+        "ai_memory_exposure": ai_memory_exposure,
         "ai_memory_version": memory_version,
         "wsl_python": wsl_result,
         "toolchain": toolchain,
@@ -3452,6 +4008,23 @@ def _status_report(
     provider_attempts = {
         provider: sum(outcomes.values()) for provider, outcomes in attempts.items()
     }
+    blockers = []
+    for task in tasks:
+        if task["status"] not in {"needs_boundary", "blocked", "stalled"}:
+            continue
+        item = {"address": task["address"], "status": task["status"]}
+        diagnostic = task["checkpoint"].get("last_diagnostic")
+        if (
+            isinstance(diagnostic, dict)
+            and isinstance(diagnostic.get("code"), str)
+            and diagnostic.get("code") in DIAGNOSTIC_CODES
+            and diagnostic.get("stage") == DIAGNOSTIC_CODES[diagnostic["code"]]
+        ):
+            item["diagnostic"] = {
+                "stage": diagnostic["stage"],
+                "code": diagnostic["code"],
+            }
+        blockers.append(item)
     return {
         "execution_enabled": bool(config.get("execution", {}).get("enabled", False)),
         "provider_access_verified": bool(
@@ -3465,11 +4038,7 @@ def _status_report(
         "matched_instructions": sum(int(task["size_bytes"]) // 4 for task in matched),
         "reconstructed_c_functions": len(reconstructed),
         "reconstructed_c_addresses": reconstructed,
-        "blockers": [
-            {"address": task["address"], "status": task["status"]}
-            for task in tasks
-            if task["status"] in {"needs_boundary", "blocked", "stalled"}
-        ],
+        "blockers": blockers,
         "providers": {
             worker["provider"]: store.provider_status(worker["provider"])
             for worker in config["workers"].values()
@@ -3592,8 +4161,6 @@ def main(argv: list[str] | None = None) -> int:
                     "worker tool permissions have not been reviewed for unattended execution"
                 )
             preflight = _doctor(config, config_path)
-            if not preflight["mcp_connected"]:
-                raise ValueError("AIMemory MCP is not connected in the current OpenCode project")
             ready_names = select_ready_workers(
                 config["workers"],
                 preflight["opencode"]["workers"],
@@ -3637,16 +4204,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(
                     "restricted campaign agent policy is not present in worker worktree(s): "
                     + ", ".join(policy_blocked)
-                )
-            disconnected = [
-                worker_id
-                for worker_id, path in worktrees.items()
-                if not _ai_memory_connected(command, path)
-            ]
-            if disconnected:
-                raise ValueError(
-                    "AIMemory MCP is not connected in worker worktree(s): "
-                    + ", ".join(disconnected)
                 )
             workers = [
                 Worker(
