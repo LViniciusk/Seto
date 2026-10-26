@@ -3081,6 +3081,7 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
             "best_source_snapshot",
             "best_match",
             "last_attempt",
+            "last_diagnostic",
             "last_diagnostic_detail",
             "local_experiments",
             "local_recoveries",
@@ -3137,6 +3138,21 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
                 continue
             available_recoveries.append(item)
         compact_checkpoint["local_recoveries"] = available_recoveries
+    worker_return_guidance = ""
+    last_diagnostic = compact_checkpoint.get("last_diagnostic")
+    if isinstance(last_diagnostic, dict):
+        diagnostic_code = last_diagnostic.get("code")
+        if diagnostic_code == "candidate_source_missing":
+            worker_return_guidance = (
+                "The previous inference did not leave the required C source file. This retry "
+                "must create decomp/src/eboot/func_XXXXXXXX.c with the exact required symbol; "
+                "do not claim completion without a regular source file. "
+            )
+        elif diagnostic_code == "context_unavailable":
+            worker_return_guidance = (
+                "The previous inference was recorded as context_unavailable. Re-read the supplied "
+                "local evidence and produce the required source rather than repeating an empty response. "
+            )
     return (
         "Reconstruct only this EBOOT function in the isolated worker worktree. Treat local "
         "MIPS instructions and full-object matcher results as primary evidence; Ghidra's C "
@@ -3148,7 +3164,8 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
          "evidence. Review the current candidate source and the best prior checkpoint/source "
          "hash before changing anything. `best_match` is the strongest verified result; "
           "`last_attempt` is the latest result and may be worse. Read their exact matcher report "
-          "paths and preserve a stronger hypothesis while recording the first causal divergence. "
+         "paths and preserve a stronger hypothesis while recording the first causal divergence. "
+          f"{worker_return_guidance}"
           "A bounded `last_diagnostic_detail` is a sanitized local MWCC/matcher excerpt; use it "
           "to make a specific correction, not as evidence of equivalence. "
           "`local_recoveries` are independently validated local source/report pairs copied into "

@@ -4459,6 +4459,10 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
                 "code": "compiler_failed",
                 "excerpt": "illegal conversion in the candidate source",
             },
+            "last_diagnostic": {
+                "stage": "worker_return",
+                "code": "candidate_source_missing",
+            },
             "local_experiments": [
                 {
                     "origin_kind": "local_experiment",
@@ -4497,6 +4501,7 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
     assert "26" in prompt and "28" in prompt
     assert "0x14a30004" in prompt and "0x54a30005" in prompt
     assert "last_attempt" in prompt and "producer_attempt_number" in prompt
+    assert "did not leave the required C source file" in prompt
     assert "illegal conversion" in prompt
     assert "conditional-pointer.c" in prompt
     assert "4217c/variant.c" not in prompt
