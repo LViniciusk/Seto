@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Collection, Iterable, Sequence
 from urllib.parse import urlsplit
 
 
@@ -191,6 +191,15 @@ class MatcherIncomplete(ValueError):
 
 class MatcherCompilerError(ValueError):
     """MWCC did not produce a usable candidate object for the requested function."""
+
+
+def _normalize_eboot_address(value: str, *, label: str = "EBOOT address") -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"0[xX][0-9a-fA-F]+", value):
+        raise ValueError(f"{label} must be a hexadecimal address")
+    numeric = int(value, 16)
+    if not 0 <= numeric <= 0xFFFFFFFF:
+        raise ValueError(f"{label} is outside the 32-bit EBOOT address space")
+    return f"0x{numeric:x}"
 
 
 def validate_model_id(model: str, allowed_models: Iterable[str]) -> str:
@@ -776,12 +785,24 @@ class CampaignStore:
                 """
             )
 
-    def seed(self, candidates: Iterable[Candidate]) -> int:
+    def seed(
+        self,
+        candidates: Iterable[Candidate],
+        *,
+        excluded_addresses: Collection[str] = (),
+    ) -> int:
+        excluded: set[str] = set()
+        for value in excluded_addresses:
+            excluded.add(
+                _normalize_eboot_address(value, label="excluded certified address")
+            )
         inserted = 0
         now = time.time()
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             for candidate in candidates:
+                if f"0x{candidate.numeric_address:x}" in excluded:
+                    continue
                 state = candidate.initial_state or (
                     "pending" if candidate.boundary_status == "EXACT" else "needs_boundary"
                 )
@@ -859,10 +880,22 @@ class CampaignStore:
         max_attempts_per_candidate: int = 8,
         max_total_attempts: int | None = None,
         eligible_addresses: Sequence[str] | None = None,
+        excluded_addresses: Collection[str] = (),
         reserve_only: bool = False,
         now: float | None = None,
     ) -> Claim | None:
         now = time.time() if now is None else now
+        normalized_excluded = sorted(
+            {
+                _normalize_eboot_address(value, label="excluded certified address")
+                for value in excluded_addresses
+            }
+        )
+        excluded_clause = (
+            " AND address NOT IN (" + ",".join("?" for _ in normalized_excluded) + ")"
+            if normalized_excluded
+            else ""
+        )
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if max_total_attempts is not None:
@@ -890,8 +923,9 @@ class CampaignStore:
                 )
             db.execute(
                 """UPDATE candidates SET status='stalled',updated_at=?
-                   WHERE status='pending' AND boundary_status='EXACT' AND attempt_count>=?""",
-                (now, max_attempts_per_candidate),
+                   WHERE status='pending' AND boundary_status='EXACT' AND attempt_count>=?"""
+                + excluded_clause,
+                (now, max_attempts_per_candidate, *normalized_excluded),
             )
             address_clause = ""
             parameters: list[Any] = [now, max_attempts_per_candidate, provider]
@@ -902,6 +936,8 @@ class CampaignStore:
                     return None
                 address_clause = " AND address IN (" + ",".join("?" for _ in normalized_addresses) + ")"
                 parameters.extend(normalized_addresses)
+            address_clause += excluded_clause
+            parameters.extend(normalized_excluded)
             row = db.execute(
                 """SELECT * FROM candidates
                 WHERE status='pending' AND boundary_status='EXACT' AND available_at<=?
@@ -1213,17 +1249,29 @@ class CampaignStore:
         worker_id: str,
         *,
         lease_seconds: float = 1800,
+        excluded_addresses: Collection[str] = (),
         now: float | None = None,
     ) -> Claim | None:
         """Lease one UNVERIFIED boundary for Ghidra without creating a model attempt."""
         now = time.time() if now is None else now
+        normalized_excluded = sorted(
+            {
+                _normalize_eboot_address(value, label="excluded certified address")
+                for value in excluded_addresses
+            }
+        )
+        address_clause = (
+            " AND address NOT IN (" + ",".join("?" for _ in normalized_excluded) + ")"
+            if normalized_excluded
+            else ""
+        )
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 """SELECT * FROM candidates
                    WHERE status='needs_boundary' AND boundary_status='UNVERIFIED' AND available_at<=?
-                   ORDER BY priority DESC,address ASC LIMIT 1""",
-                (now,),
+                   """ + address_clause + " ORDER BY priority DESC,address ASC LIMIT 1",
+                (now, *normalized_excluded),
             ).fetchone()
             if row is None:
                 db.commit()
@@ -1752,8 +1800,17 @@ class CampaignStore:
             )
             db.commit()
 
-    def retry_blocked_addresses(self, addresses: Sequence[str]) -> list[str]:
+    def retry_blocked_addresses(
+        self,
+        addresses: Sequence[str],
+        *,
+        excluded_addresses: Collection[str] = (),
+    ) -> list[str]:
         """Unblock only named, lease-free blocked tasks without rewriting history."""
+        excluded = {
+            _normalize_eboot_address(value, label="excluded certified address")
+            for value in excluded_addresses
+        }
         normalized: list[str] = []
         for value in addresses:
             try:
@@ -1763,6 +1820,8 @@ class CampaignStore:
             if not 0 <= numeric <= 0xFFFFFFFF:
                 raise ValueError(f"invalid retry address: {value}")
             address = f"0x{numeric:x}"
+            if address in excluded:
+                raise ValueError(f"certified baseline address cannot be retried: {address}")
             if address in normalized:
                 raise ValueError(f"duplicate retry address: {address}")
             normalized.append(address)
@@ -2025,8 +2084,15 @@ class CampaignStore:
         *,
         max_attempts_per_candidate: int,
         eligible_addresses: Sequence[str] | None = None,
+        excluded_addresses: Collection[str] = (),
     ) -> float | None:
         now = time.time()
+        normalized_excluded = sorted(
+            {
+                _normalize_eboot_address(value, label="excluded certified address")
+                for value in excluded_addresses
+            }
+        )
         with self._connect() as db:
             state = db.execute(
                 "SELECT status,resume_at FROM providers WHERE provider=?", (provider,)
@@ -2042,6 +2108,11 @@ class CampaignStore:
                     return None
                 address_clause = " AND address IN (" + ",".join("?" for _ in normalized) + ")"
                 parameters.extend(normalized)
+            if normalized_excluded:
+                address_clause += " AND address NOT IN (" + ",".join(
+                    "?" for _ in normalized_excluded
+                ) + ")"
+                parameters.extend(normalized_excluded)
             row = db.execute(
                 """SELECT MIN(available_at) FROM candidates
                    WHERE status='pending' AND boundary_status='EXACT' AND attempt_count<?
@@ -2299,6 +2370,7 @@ class CampaignRunner:
         checkpoint_repo_root: Path | None = None,
         max_retry_after_seconds: float = 900,
         candidate_addresses: Iterable[str] | None = None,
+        excluded_addresses: Iterable[str] = (),
         provider_parallelism: dict[str, int] | None = None,
         ghidra_parallelism: int = 1,
         matcher_parallelism: int = 1,
@@ -2343,6 +2415,10 @@ class CampaignRunner:
             None
             if candidate_addresses is None
             else {f"0x{int(address, 0):x}" for address in candidate_addresses}
+        )
+        self.excluded_addresses = frozenset(
+            _normalize_eboot_address(address, label="excluded certified address")
+            for address in excluded_addresses
         )
         self.checkpoint_repo_root = (
             Path(checkpoint_repo_root).resolve(strict=True)
@@ -3656,7 +3732,9 @@ class CampaignRunner:
                             worker_id = available_workers[-1]
                             with boundary_claim_lock:
                                 claim = self.store.claim_boundary(
-                                    worker_id, lease_seconds=self.lease_seconds
+                                    worker_id,
+                                    lease_seconds=self.lease_seconds,
+                                    excluded_addresses=self.excluded_addresses,
                                 )
                             if claim is None:
                                 break
@@ -3714,6 +3792,7 @@ class CampaignRunner:
                         max_attempts_per_candidate=self.max_attempts_per_candidate,
                         max_total_attempts=max_tasks,
                         eligible_addresses=self.candidate_addresses,
+                        excluded_addresses=self.excluded_addresses,
                         reserve_only=True,
                     )
                 except BaseException:
@@ -3741,6 +3820,7 @@ class CampaignRunner:
                             if self.candidate_addresses is None
                             else sorted(self.candidate_addresses)
                         ),
+                        excluded_addresses=self.excluded_addresses,
                     )
                     with condition:
                         has_campaign_work = bool(
@@ -4493,6 +4573,37 @@ def promote_campaign_source(
     return record
 
 
+def normalize_certified_addresses(baseline: Any) -> frozenset[str]:
+    """Normalize and validate the inventory's certified EBOOT address set.
+
+    Inventories predating the address list remain compatible and contribute an
+    empty exclusion set; no MATCHED records are synthesized in campaign SQLite.
+    """
+    if baseline is None:
+        return frozenset()
+    if not isinstance(baseline, dict):
+        raise ValueError("inventory baseline must be an object")
+    if "eboot_matched_addresses" not in baseline:
+        return frozenset()
+    addresses = baseline["eboot_matched_addresses"]
+    if not isinstance(addresses, list):
+        raise ValueError("baseline matched addresses must be a list")
+    normalized = [
+        _normalize_eboot_address(value, label="baseline matched address")
+        for value in addresses
+    ]
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("baseline contains duplicate matched addresses")
+    function_count = baseline.get("eboot_matched_functions")
+    if (
+        isinstance(function_count, bool)
+        or not isinstance(function_count, int)
+        or function_count != len(normalized)
+    ):
+        raise ValueError("baseline matched-address count disagrees with its function total")
+    return frozenset(normalized)
+
+
 def load_inventory(path: Path) -> tuple[list[Candidate], dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 1 or not isinstance(payload.get("candidates"), list):
@@ -4505,18 +4616,8 @@ def load_inventory(path: Path) -> tuple[list[Candidate], dict[str, Any]]:
     if len(nids) != len(set(nids)):
         raise ValueError("campaign inventory contains duplicate EBOOT export NIDs")
     baseline = payload.get("baseline", {})
-    baseline_addresses = baseline.get("eboot_matched_addresses") if isinstance(baseline, dict) else None
-    if baseline_addresses is not None:
-        if not isinstance(baseline_addresses, list):
-            raise ValueError("baseline matched addresses must be a list")
-        try:
-            normalized_baseline = [f"0x{int(str(item), 0):x}" for item in baseline_addresses]
-        except (TypeError, ValueError) as exc:
-            raise ValueError("baseline matched addresses must be hexadecimal") from exc
-        if len(normalized_baseline) != len(set(normalized_baseline)):
-            raise ValueError("baseline contains duplicate matched addresses")
-        if len(normalized_baseline) != int(baseline.get("eboot_matched_functions", -1)):
-            raise ValueError("baseline matched-address count disagrees with its function total")
+    normalized_baseline = normalize_certified_addresses(baseline)
+    if isinstance(baseline, dict) and "eboot_matched_addresses" in baseline:
         ranges = baseline.get("eboot_matched_ranges")
         if ranges is not None:
             if not isinstance(ranges, list):
@@ -6105,6 +6206,7 @@ def _status_report(
             )
         except (OSError, json.JSONDecodeError):
             inventory_baseline = {}
+    certified_addresses = normalize_certified_addresses(inventory_baseline)
     return {
         "execution_enabled": bool(config.get("execution", {}).get("enabled", False)),
         "provider_access_verified": bool(
@@ -6118,12 +6220,17 @@ def _status_report(
         "baseline": inventory_baseline,
         "attempts_cumulative": store.total_attempt_count(),
         "eligible_exact_pending": sum(
-            task["status"] == "pending" and task["boundary_status"] == "EXACT"
+            task["status"] == "pending"
+            and task["boundary_status"] == "EXACT"
+            and task["address"] not in certified_addresses
             for task in tasks
         ),
         "boundaries_pending": sum(
-            task["status"] == "needs_boundary" for task in tasks
+            task["status"] == "needs_boundary"
+            and task["address"] not in certified_addresses
+            for task in tasks
         ),
+        "certified_baseline_addresses_excluded": len(certified_addresses),
         "matched_functions": len(matched),
         "matched_instructions": sum(int(task["size_bytes"]) // 4 for task in matched),
         "reconstructed_c_functions": len(reconstructed),
@@ -6195,15 +6302,25 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(config_path)
         inventory_path, database_path = _config_paths(config, config_path)
         candidates, inventory = load_inventory(inventory_path)
+        certified_addresses = normalize_certified_addresses(
+            inventory.get("baseline", {})
+        )
         if args.command == "doctor":
             _print_json(_doctor(config, config_path))
             return 0
         store = CampaignStore(database_path)
         if args.command == "init":
-            inserted = store.seed(candidates)
+            inserted = store.seed(
+                candidates, excluded_addresses=certified_addresses
+            )
             _print_json({"seeded": inserted, "inventory_candidates": len(candidates), "database": str(database_path)})
             return 0
         if args.command == "plan":
+            certified_candidate_addresses = {
+                candidate.address.lower()
+                for candidate in candidates
+                if f"0x{candidate.numeric_address:x}" in certified_addresses
+            }
             _print_json(
                 {
                     "campaign_enabled": bool(config.get("execution", {}).get("enabled", False)),
@@ -6216,11 +6333,16 @@ def main(argv: list[str] | None = None) -> int:
                     "models": {name: value["model"] for name, value in config["workers"].items()},
                     "inventory_candidates": len(candidates),
                     "pending_with_exact_boundary": sum(
-                        c.boundary_status == "EXACT" for c in candidates
+                        c.boundary_status == "EXACT"
+                        and c.address.lower() not in certified_candidate_addresses
+                        for c in candidates
                     ),
                     "awaiting_ghidra_boundary": sum(
-                        c.boundary_status != "EXACT" for c in candidates
+                        c.boundary_status != "EXACT"
+                        and c.address.lower() not in certified_candidate_addresses
+                        for c in candidates
                     ),
+                    "certified_baseline_excluded": len(certified_addresses),
                     "source_commit": inventory.get("source_commit"),
                     "instruction": "No model process is started by plan/doctor/status.",
                 }
@@ -6249,17 +6371,28 @@ def main(argv: list[str] | None = None) -> int:
                 retried_addresses = _normalize_candidate_addresses(
                     args.retry_address, candidates, required=True
                 ) or []
-                retried_addresses = store.retry_blocked_addresses(retried_addresses)
+                retried_addresses = store.retry_blocked_addresses(
+                    retried_addresses,
+                    excluded_addresses=certified_addresses,
+                )
                 recovered = 0
             else:
                 recovered = store.recover_expired() if args.recover_expired else 0
                 store.resume()
             if args.retry_blocked:
                 with store._connect() as db:
-                    db.execute(
-                        "UPDATE candidates SET status='pending',updated_at=? WHERE status='blocked'",
-                        (time.time(),),
-                    )
+                    if certified_addresses:
+                        placeholders = ",".join("?" for _ in certified_addresses)
+                        db.execute(
+                            "UPDATE candidates SET status='pending',updated_at=? "
+                            f"WHERE status='blocked' AND address NOT IN ({placeholders})",
+                            (time.time(), *sorted(certified_addresses)),
+                        )
+                    else:
+                        db.execute(
+                            "UPDATE candidates SET status='pending',updated_at=? WHERE status='blocked'",
+                            (time.time(),),
+                        )
             if args.retry_address is not None:
                 store.resume()
             _print_json(
@@ -6279,6 +6412,11 @@ def main(argv: list[str] | None = None) -> int:
                 candidate_addresses=args.candidate_address,
                 candidates=candidates,
             )
+            if productive_candidate_addresses is not None and any(
+                address in certified_addresses
+                for address in productive_candidate_addresses
+            ):
+                raise ValueError("certified baseline addresses cannot be selected for productive retry")
             if args.continuous and not config.get("execution", {}).get("continuous", False):
                 raise ValueError("continuous mode is disabled in config")
             if args.continuous and not args.productive:
@@ -6334,12 +6472,7 @@ def main(argv: list[str] | None = None) -> int:
                 if store.integrity_check() != "ok":
                     raise ValueError("campaign SQLite integrity check failed")
                 if args.all_eligible:
-                    baseline = inventory.get("baseline", {})
-                    matched_addresses = list(
-                        baseline.get("eboot_matched_addresses", [])
-                        if isinstance(baseline, dict)
-                        else []
-                    )
+                    matched_addresses = list(certified_addresses)
                     matched_addresses.extend(
                         task["address"]
                         for task in store.list_tasks()
@@ -6354,7 +6487,10 @@ def main(argv: list[str] | None = None) -> int:
                         inventory_path, discovered
                     )
                     candidates, inventory = load_inventory(inventory_path)
-            store.seed(candidates)
+                    certified_addresses = normalize_certified_addresses(
+                        inventory.get("baseline", {})
+                    )
+            store.seed(candidates, excluded_addresses=certified_addresses)
             active_config = dict(config)
             active_config["workers"] = {
                 worker_id: config["workers"][worker_id] for worker_id in ready_names
@@ -6497,6 +6633,7 @@ def main(argv: list[str] | None = None) -> int:
                 checkpoint_repo_root=REPO_ROOT,
                 max_retry_after_seconds=float(limits["max_retry_after_seconds"]),
                 candidate_addresses=candidate_addresses,
+                excluded_addresses=certified_addresses,
                 provider_parallelism=provider_parallelism,
                 ghidra_parallelism=int(limits.get("ghidra_parallelism", 1)),
                 matcher_parallelism=int(limits.get("matcher_parallelism", 1)),

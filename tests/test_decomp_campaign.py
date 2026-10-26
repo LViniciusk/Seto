@@ -853,6 +853,268 @@ def test_measured_resource_finish_is_recorded_before_releasing_its_slot(
     semaphore.release()
 
 
+def test_seed_excludes_certified_addresses_from_new_sqlite_queue(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    candidates = [
+        Candidate("0x2c28c", 112, "0x7187E0F0", 85, "EXACT"),
+        Candidate(
+            "0x31650",
+            0,
+            "0x9EA6989A",
+            48,
+            "UNVERIFIED",
+            initial_state="needs_boundary",
+        ),
+        candidate("0x1000"),
+        Candidate(
+            "0x2000", 0, "0x22222222", 10, "UNVERIFIED", initial_state="needs_boundary"
+        ),
+    ]
+
+    inserted = store.seed(
+        candidates,
+        excluded_addresses=frozenset({"0x2c28c", "0x31650"}),
+    )
+
+    tasks = store.list_tasks()
+    assert inserted == 2
+    assert {task["address"] for task in tasks} == {"0x1000", "0x2000"}
+    assert store.get_task("0x1000")["status"] == "pending"
+    assert store.get_task("0x2000")["status"] == "needs_boundary"
+    assert store.claim_next(
+        "luna-01", "openai", eligible_addresses=["0x2c28c", "0x31650"]
+    ) is None
+    assert store.claim_boundary("ghidra-01") is not None
+    assert store.list_attempts() == []
+
+
+def test_old_inventory_without_certified_address_list_remains_compatible(
+    tmp_path: Path,
+) -> None:
+    inventory_path = tmp_path / "old-inventory.json"
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "baseline": {
+                    "eboot_matched_functions": 8,
+                    "eboot_matched_instructions": 206,
+                },
+                "candidates": [candidate("0x1000").__dict__],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, inventory = decomp_campaign_module.load_inventory(inventory_path)
+    excluded = decomp_campaign_module.normalize_certified_addresses(
+        inventory["baseline"]
+    )
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+
+    assert excluded == frozenset()
+    assert store.seed(candidates, excluded_addresses=excluded) == 1
+    assert store.get_task("0x1000")["status"] == "pending"
+
+
+def test_claims_ignore_certified_rows_already_present_in_an_older_sqlite(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            candidate("0x2c28c"),
+            Candidate(
+                "0x31650", 0, "0x9EA6989A", 48, "UNVERIFIED", initial_state="needs_boundary"
+            ),
+            candidate("0x1000"),
+            Candidate(
+                "0x2000", 0, "0x22222222", 10, "UNVERIFIED", initial_state="needs_boundary"
+            ),
+        ]
+    )
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET attempt_count=8 WHERE address='0x2c28c'"
+        )
+    excluded = frozenset({"0x2c28c", "0x31650"})
+
+    model_claim = store.claim_next(
+        "luna-01", "openai", reserve_only=True, excluded_addresses=excluded
+    )
+    boundary_claim = store.claim_boundary(
+        "ghidra-01", excluded_addresses=excluded
+    )
+
+    assert model_claim is not None and model_claim.address == "0x1000"
+    assert boundary_claim is not None and boundary_claim.address == "0x2000"
+    assert store.get_task("0x2c28c")["status"] == "pending"
+    assert store.get_task("0x31650")["status"] == "needs_boundary"
+    assert store.list_attempts() == []
+
+
+def test_seed_exclusion_preserves_existing_matched_history_and_other_candidates(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    initial = [candidate("0x2c28c"), candidate("0x31650"), candidate("0x1000")]
+    store.seed(initial)
+    with store._connect() as db:
+        for address, attempt_count, session_id in (
+            ("0x2c28c", 3, "ses_2c28c"),
+            ("0x31650", 1, "ses_31650"),
+        ):
+            checkpoint = {"next_experiment": f"checkpoint {address}"}
+            best_result = {"status": "MATCHED", "matching_words": 3, "total_words": 3}
+            db.execute(
+                """UPDATE candidates SET status='matched',boundary_status='EXACT',size_bytes=12,
+                   attempt_count=?,session_id=?,checkpoint_json=?,best_result_json=?,evidence_json=?
+                   WHERE address=?""",
+                (
+                    attempt_count,
+                    session_id,
+                    json.dumps(checkpoint, sort_keys=True),
+                    json.dumps(best_result, sort_keys=True),
+                    json.dumps({"origin": address}, sort_keys=True),
+                    address,
+                ),
+            )
+            for number in range(1, attempt_count + 1):
+                db.execute(
+                    """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,
+                       started_at,ended_at,outcome) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        address,
+                        number,
+                        "luna-01",
+                        "openai",
+                        session_id,
+                        float(number),
+                        float(number) + 0.5,
+                        "matched" if number == attempt_count else "pending",
+                    ),
+                )
+        db.execute(
+            "INSERT INTO events(created_at,kind,address,worker_id,provider,session_id) "
+            "VALUES(1,'historical_match','0x2c28c','luna-01','openai','ses_2c28c')"
+        )
+
+    preserved = {address: store.get_task(address) for address in ("0x2c28c", "0x31650")}
+    attempts_before = store.list_attempts()
+    events_before = store.list_recent_events(limit=20)
+    new_candidate = candidate("0x2000")
+
+    inserted = store.seed(
+        [
+            Candidate("0x2c28c", 0, "0x7187E0F0", 1, "UNVERIFIED"),
+            Candidate(
+                "0x31650", 0, "0x9EA6989A", 1, "UNVERIFIED", initial_state="needs_boundary"
+            ),
+            new_candidate,
+        ],
+        excluded_addresses=frozenset({"0x2c28c", "0x31650"}),
+    )
+
+    assert inserted == 1
+    assert {address: store.get_task(address) for address in preserved} == preserved
+    assert store.list_attempts() == attempts_before
+    assert store.list_recent_events(limit=20) == events_before
+    assert store.get_task("0x2000")["status"] == "pending"
+
+
+def test_main_excludes_baseline_addresses_from_all_eligible_seeding_and_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "campaign.toml"
+    inventory_path = tmp_path / "inventory.json"
+    database_path = tmp_path / "build" / "campaign.sqlite3"
+    certified = ["0x2c28c", "0x31650"]
+    baseline = {
+        "eboot_matched_functions": 2,
+        "eboot_matched_addresses": certified,
+    }
+    candidates = [
+        candidate("0x1000"),
+        candidate("0x2c28c"),
+        Candidate(
+            "0x31650", 0, "0x9EA6989A", 48, "UNVERIFIED", initial_state="needs_boundary"
+        ),
+        Candidate(
+            "0x2000", 0, "0x22222222", 20, "UNVERIFIED", initial_state="needs_boundary"
+        ),
+    ]
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: {})
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (inventory_path, database_path),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "load_inventory",
+        lambda _path: (candidates, {"baseline": baseline}),
+    )
+
+    result = decomp_campaign_module.main(
+        ["--config", str(config_path), "init"]
+    )
+
+    assert result == 0
+    store = CampaignStore(database_path)
+    assert {task["address"] for task in store.list_tasks()} == {"0x1000", "0x2000"}
+    assert store.list_attempts() == []
+    assert store.claim_next(
+        "luna-01", "openai", eligible_addresses=certified
+    ) is None
+    boundary = store.claim_boundary("ghidra-01")
+    assert boundary is not None and boundary.address == "0x2000"
+
+
+@pytest.mark.parametrize(
+    "baseline_addresses",
+    [
+        ["0x2c28c", "0X2C28C"],
+        ["0x2c28c", "0x100000000"],
+    ],
+)
+def test_main_rejects_invalid_certified_baseline_before_database_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_addresses: list[str],
+) -> None:
+    config_path = tmp_path / "campaign.toml"
+    inventory_path = tmp_path / "inventory.json"
+    database_path = tmp_path / "build" / "campaign.sqlite3"
+    inventory = {
+        "schema_version": 1,
+        "baseline": {
+            "eboot_matched_functions": 2,
+            "eboot_matched_addresses": baseline_addresses,
+        },
+        "candidates": [],
+    }
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: {})
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (inventory_path, database_path),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "load_inventory",
+        lambda _path: ([], inventory),
+    )
+
+    result = decomp_campaign_module.main(
+        ["--config", str(config_path), "init"]
+    )
+
+    assert result == 2
+    assert not database_path.exists()
+
+
 def test_seeding_removes_old_provisional_size_without_touching_attempted_rows(
     tmp_path: Path,
 ) -> None:
@@ -1994,6 +2256,7 @@ def test_fast_worker_claims_another_task_before_slow_worker_finishes(tmp_path: P
         worktrees=worktrees,
         verifier=verifier,
         timeout_seconds=5,
+        matcher_parallelism=2,
     )
     result = runner.run(
         [
@@ -4621,7 +4884,14 @@ def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
     config_path.parent.mkdir(parents=True)
     database = tmp_path / "campaign.sqlite3"
     inventory_path = tmp_path / "inventory.json"
-    base_candidates = [candidate("0x1000")]
+    certified_addresses = ["0x2c28c", "0x31650"]
+    base_candidates = [
+        candidate("0x1000"),
+        candidate("0x2c28c"),
+        Candidate(
+            "0x31650", 0, "0x9EA6989A", 48, "UNVERIFIED", initial_state="needs_boundary"
+        ),
+    ]
     discovered = Candidate(
         "0x2000",
         0,
@@ -4678,7 +4948,13 @@ def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
         nonlocal load_count
         load_count += 1
         items = base_candidates if load_count == 1 else [*base_candidates, discovered]
-        return items, {"baseline": {"eboot_matched_addresses": []}, "source_commit": "test"}
+        return items, {
+            "baseline": {
+                "eboot_matched_functions": len(certified_addresses),
+                "eboot_matched_addresses": certified_addresses,
+            },
+            "source_commit": "test",
+        }
 
     monkeypatch.setattr(decomp_campaign_module, "load_inventory", fake_load_inventory)
     monkeypatch.setattr(
@@ -4723,6 +4999,7 @@ def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
             captured["candidate_addresses"] = kwargs.get("candidate_addresses")
             captured["worker_count"] = len(kwargs["worktrees"])
             captured["provider_parallelism"] = kwargs.get("provider_parallelism")
+            captured["excluded_addresses"] = kwargs.get("excluded_addresses")
 
         def run(self, workers: object, *, max_tasks: int) -> dict[str, object]:
             captured["max_tasks"] = max_tasks
@@ -4744,12 +5021,19 @@ def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
     assert captured["candidate_addresses"] is None
     assert captured["worker_count"] == 2
     assert captured["provider_parallelism"] == {"openai": 4, "opencode": 4}
+    assert set(captured["excluded_addresses"]) == set(certified_addresses)
     assert captured["workers"] == 2
     assert captured["max_tasks"] == 10
     assert output["new_candidates_discovered"] == 1
-    assert len(CampaignStore(database).list_tasks()) == 2
-    assert CampaignStore(database).get_task("0x2000")["size_bytes"] == 0
-    assert CampaignStore(database).list_attempts() == []
+    store = CampaignStore(database)
+    assert {task["address"] for task in store.list_tasks()} == {"0x1000", "0x2000"}
+    assert store.get_task("0x2000")["size_bytes"] == 0
+    assert store.list_attempts() == []
+    assert store.claim_next(
+        "luna-01", "openai", eligible_addresses=certified_addresses
+    ) is None
+    boundary = store.claim_boundary("ghidra-01")
+    assert boundary is not None and boundary.address == "0x2000"
 
 
 def test_selective_retry_changes_only_requested_block_and_preserves_history(
@@ -4859,6 +5143,73 @@ def test_resume_main_retries_only_the_requested_blocked_address(
         assert task["session_id"] == snapshots[address][2]
         assert json.dumps(task["checkpoint"], sort_keys=True) == snapshots[address][0]
         assert json.dumps(task["best_result"], sort_keys=True) == snapshots[address][1]
+
+
+def test_resume_retry_modes_never_reenable_certified_baseline_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "campaign.sqlite3"
+    candidates = [candidate("0x2c28c"), candidate("0x1000")]
+    store = CampaignStore(database)
+    store.seed(candidates)
+    snapshots = {}
+    with store._connect() as db:
+        for address, session in (("0x2c28c", "ses_certified"), ("0x1000", "ses_other")):
+            checkpoint = json.dumps({"next_experiment": f"retain {address}"}, sort_keys=True)
+            best = json.dumps({"status": "NONMATCHING", "matching_words": 2}, sort_keys=True)
+            db.execute(
+                "UPDATE candidates SET status='blocked',attempt_count=2,session_id=?,"
+                "checkpoint_json=?,best_result_json=? WHERE address=?",
+                (session, checkpoint, best, address),
+            )
+            snapshots[address] = (checkpoint, best, session)
+            for attempt in (1, 2):
+                db.execute(
+                    """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,
+                       started_at,ended_at,outcome) VALUES(?,?,?,?,?,?,?,?)""",
+                    (address, attempt, "luna-01", "openai", session, float(attempt), float(attempt + 1), "agent_error"),
+                )
+    inventory = {
+        "baseline": {
+            "eboot_matched_functions": 1,
+            "eboot_matched_addresses": ["0x2C28C"],
+        }
+    }
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: {})
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (tmp_path / "inventory.json", database),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "load_inventory",
+        lambda _path: (candidates, inventory),
+    )
+
+    assert decomp_campaign_module.main(
+        ["--config", str(tmp_path / "local.toml"), "resume", "--retry-address", "0x2c28c"]
+    ) == 2
+    certified_after_selective = store.get_task("0x2c28c")
+    other_after_selective = store.get_task("0x1000")
+    assert certified_after_selective["status"] == "blocked"
+    assert other_after_selective["status"] == "blocked"
+    assert len(store.list_attempts()) == 4
+
+    assert decomp_campaign_module.main(
+        ["--config", str(tmp_path / "local.toml"), "resume", "--retry-blocked"]
+    ) == 0
+
+    certified = store.get_task("0x2c28c")
+    retried_other = store.get_task("0x1000")
+    assert certified["status"] == "blocked"
+    assert retried_other["status"] == "pending"
+    for address, task in (("0x2c28c", certified), ("0x1000", retried_other)):
+        assert task["attempt_count"] == 2
+        assert task["session_id"] == snapshots[address][2]
+        assert json.dumps(task["checkpoint"], sort_keys=True) == snapshots[address][0]
+        assert json.dumps(task["best_result"], sort_keys=True) == snapshots[address][1]
+    assert len(store.list_attempts()) == 4
 
 
 def test_local_match_experiment_is_checkpointed_without_changing_campaign_best(

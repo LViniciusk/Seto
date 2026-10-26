@@ -6921,6 +6921,7 @@ Não foram adicionadas fontes experimentais sem certificação.
 - Estendidos `CampaignStore` e `CampaignRunner` existentes: workers repetidos por modelo, capacidade compartilhada por provedor, seleção justa de funções sem tentativa, reservas sem tentativa até iniciar `opencode run`, boundaries Ghidra em paralelo e integração MATCHED assíncrona/serializada.
 - `--all-eligible` é explícito, exclusivo de `--candidate-address` e continua subordinado a `--productive`; `--max-tasks` segue sendo teto cumulativo SQLite. `load_config()` não impõe os tetos históricos de 2 workers / 40 tentativas / 2 horas.
 - Descoberta idempotente adicionou 38 exports com endereço/NID únicos, relocation aplicada e callsites PRX comprovados. A fila cresceu de 20 para 58 candidatos; os novos entraram com tamanho zero e só puderam ser processados depois de boundary Ghidra completo.
+- Correção micro da PR #46: endereços certificados são normalizados/validados em `main()` e passados explicitamente a `seed()`. Baseline `MATCHED` não é sintetizado em SQLite; linhas existentes, checkpoints, sessões e tentativas não são reescritos. Claims de inferência/Ghidra, retries seletivos/em massa e contadores de elegibilidade ignoram essas funções mesmo se houver uma linha antiga pendente/bloqueada. Inventários antigos sem a lista continuam compatíveis.
 - Protegidos `best_result`, checkpoints, sessões anteriores e worktrees. Falhas de sessão OpenCode agora são registradas sem gastar tentativa; falhas de quota durante preparação afetam somente o provedor correspondente.
 - A revisão pós-campanha corrigiu a telemetria dos semáforos (registrar `*_finished` antes de liberar o slot) e o evento duplicado de boundary (validação e conclusão da lease passam a ter eventos distintos). Esses ajustes não alteram os eventos históricos nem os resultados da campanha encerrada.
 - Testes RED/GREEN cobrem 8 workers / mesmos provider-model, teto cumulativo concorrente, cobertura inicial da fila, boundaries sem tentativas, isolamento/hash, pausa por quota, export discovery, timeout/stop e promoção sem bloquear inferência.
@@ -6971,8 +6972,8 @@ A execução ativa tinha carregado o wrapper anterior às correções diagnósti
 
 | Gate final | Resultado |
 |---|---|
-| `tests/test_decomp_campaign.py` | **167 passed** |
-| Suíte completa, Windows / Python 3.12 | **1002 passed, 44 skipped** |
+| `tests/test_decomp_campaign.py` | **175 passed** |
+| Suíte completa, Windows / Python 3.12 | **1010 passed, 44 skipped** |
 | `compileall -q src scripts tests` | clean |
 | `git diff --check` | clean |
 | CI GitHub Actions | **passou** nos dois eventos (push e pull request), Ubuntu/Windows × Python 3.11/3.12; 8 jobs concluídos |
