@@ -2277,7 +2277,12 @@ def test_fast_worker_claims_another_task_before_slow_worker_finishes(tmp_path: P
     slow_done = events / "slow-0x2000-done"
     assert result["attempted"] == 3
     assert fast_next.is_file() and slow_done.is_file()
-    assert fast_next.stat().st_mtime_ns < slow_done.stat().st_mtime_ns
+    fast_next_claim = next(
+        event
+        for event in store.list_recent_events(limit=100)
+        if event["kind"] == "inference_started" and event["address"] == "0x3000"
+    )
+    assert int(float(fast_next_claim["created_at"]) * 1_000_000_000) < slow_done.stat().st_mtime_ns
 
 
 def test_successive_matcher_improvements_refine_same_function_and_session(
@@ -4488,6 +4493,13 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("local-tool-paths\n", encoding="utf-8")
+    local_opencode = repo / ".opencode" / "opencode.json"
+    local_opencode.parent.mkdir(parents=True)
+    local_opencode.write_text(
+        json.dumps({"plugins": ["local-auth-plugin"], "providers": {"openai": {}}}),
+        encoding="utf-8",
+    )
+    local_opencode_hash = hashlib.sha256(local_opencode.read_bytes()).hexdigest()
 
     worker_names = [
         *(f"luna-{index:02d}" for index in range(1, 5)),
@@ -4520,6 +4532,7 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         for input_name, relative in inputs.items():
             assert hashlib.sha256((worktree / relative).read_bytes()).hexdigest() == hashes[input_name]
         assert (worktree / "config/wsl/seto.toml").is_file()
+        assert hashlib.sha256((worktree / ".opencode/opencode.json").read_bytes()).hexdigest() == local_opencode_hash
 
 
 def test_unverified_inventory_boundary_runs_without_spending_model_attempt(

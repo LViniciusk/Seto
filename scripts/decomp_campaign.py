@@ -7343,6 +7343,25 @@ def _copy_local_file(source: Path, destination: Path, *, expected_sha256: str | 
     return source_hash
 
 
+def provision_local_opencode_config(
+    repo_root: Path, worktrees: Mapping[str, Path]
+) -> int:
+    """Copy the verified local OpenCode project config into isolated worker roots."""
+    source = repo_root / ".opencode" / "opencode.json"
+    if not source.exists() and not source.is_symlink():
+        return 0
+    if source.is_symlink() or not source.is_file() or source.stat().st_size > 1_000_000:
+        raise ValueError("local OpenCode project config is missing, unsafe, or too large")
+    copied = 0
+    for worktree in worktrees.values():
+        if worktree.is_symlink() or not worktree.is_dir():
+            raise ValueError("worker worktree is missing or unsafe while provisioning OpenCode config")
+        destination = _safe_worktree_path(worktree, Path(".opencode") / "opencode.json")
+        _copy_local_file(source, destination)
+        copied += 1
+    return copied
+
+
 def provision_local_recovery_evidence(
     store: CampaignStore,
     repo_root: Path,
@@ -7544,6 +7563,7 @@ def prepare_worker_worktrees(
             futures = [pool.submit(provision_inputs, item) for item in worktrees.items()]
             for future in futures:
                 future.result()
+        provision_local_opencode_config(repo_root, worktrees)
     return worktrees
 
 
