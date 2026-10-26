@@ -3636,7 +3636,10 @@ class CampaignRunner:
         if (
             source_root is None
             or not source_relative.startswith(expected_prefix)
-            or not re.fullmatch(r"ghidra-(?:attempt-[1-9][0-9]*|run-[0-9a-f]{32})\.log", filename)
+            or not re.fullmatch(
+                r"ghidra-(?:attempt-[1-9][0-9]*|run-[0-9a-f]{32}|cache-[0-9a-f]{64})\.log",
+                filename,
+            )
             or not HEX_SHA256.fullmatch(source_sha256)
         ):
             return None

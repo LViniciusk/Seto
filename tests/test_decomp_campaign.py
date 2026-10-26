@@ -1581,6 +1581,55 @@ def test_cached_ghidra_evidence_is_reused_only_when_bound_to_address_and_hash(
         validated_cached_ghidra_boundary(worktree, unsafe)
 
 
+def test_prepare_claim_copies_hash_named_archived_ghidra_cache_into_worker(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    claim = store.claim_next("luna-02", "openai", reserve_only=True)
+    assert claim is not None
+    claim = store.bind_session(claim, "ses_test_cache_copy")
+    source_worktree = tmp_path / "archive-luna-01"
+    target_worktree = tmp_path / "luna-02"
+    source_relative = (
+        "decomp-campaign/luna-01/1000/evidence/"
+        "ghidra-cache-" + hashlib.sha256(detailed_ghidra_log().encode()).hexdigest() + ".log"
+    )
+    source_log = campaign_build_path(source_worktree, source_relative)
+    source_log.parent.mkdir(parents=True)
+    source_log.write_text(detailed_ghidra_log(), encoding="utf-8")
+    digest = hashlib.sha256(source_log.read_bytes()).hexdigest()
+    checkpoint = {
+        **claim.checkpoint,
+        "ghidra_log_path": source_relative,
+        "ghidra_log_sha256": digest,
+        "boundary_status": "EXACT",
+    }
+    store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+    claim = replace(claim, checkpoint=checkpoint)
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": source_worktree, "luna-02": target_worktree},
+        verifier=lambda *_args: {},
+        checkpoint_repo_root=tmp_path,
+    )
+
+    boundary = runner._copy_cached_ghidra_evidence(
+        target_worktree,
+        claim,
+        source_worker="luna-01",
+        source_relative=source_relative,
+        source_sha256=digest,
+    )
+
+    assert boundary is not None and boundary["size_bytes"] == 16
+    target_relative = claim.checkpoint["ghidra_log_path"]
+    assert target_relative == f"decomp-campaign/luna-02/1000/evidence/ghidra-cache-{digest}.log"
+    assert campaign_build_path(target_worktree, target_relative).read_bytes() == source_log.read_bytes()
+    assert validated_cached_ghidra_boundary(target_worktree, claim)["size_bytes"] == 16  # type: ignore[index]
+
+
 def test_promotion_preflight_checks_snapshots_reports_ghidra_and_conflicts(tmp_path: Path) -> None:
     store, config, repo, source_hash = promotable_campaign(tmp_path)
     context = _promotion_context(store, repo, config, "0x1000")  # type: ignore[arg-type]
