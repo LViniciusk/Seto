@@ -6,6 +6,7 @@ import json
 import hashlib
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
@@ -26,11 +27,16 @@ from decomp_campaign import (  # noqa: E402
     Worker,
     campaign_build_path,
     classify_failure,
+    discover_proven_exports,
     is_strict_match,
     load_config,
+    productive_candidate_selection,
+    record_inventory_promotion,
     prepare_worker_worktrees,
     _assert_worker_changes_scoped,
     _extract_checkpoint,
+    _explicit_inconclusive_match_report,
+    _raise_matcher_process_error,
     validate_export_evidence,
     validate_ghidra_log,
     validate_model_id,
@@ -54,6 +60,61 @@ def candidate(address: str, *, preferred_provider: str | None = None) -> Candida
         preferred_provider=preferred_provider,
         evidence={"source": "test fixture"},
     )
+
+
+def operational_config_text(
+    *, max_workers: str = "8", max_tasks: str = "261", duration: str = "21600"
+) -> str:
+    worker_sections = []
+    for worker_id, provider, model in (
+        *((f"luna-{index:02d}", "openai", "openai/gpt-6-luna") for index in range(1, 5)),
+        *((f"deepseek-{index:02d}", "opencode", "opencode/deepseek-v4.1-flash-free") for index in range(1, 5)),
+    ):
+        usage_mode = "subscription_included" if provider == "openai" else "free"
+        worker_sections.extend(
+            [
+                f"[workers.{worker_id}]",
+                f'provider = "{provider}"',
+                f'model = "{model}"',
+                'agent = "seto-decomp-worker"',
+                "max_parallel = 4",
+                f'usage_mode = "{usage_mode}"',
+            ]
+        )
+        if provider == "openai":
+            worker_sections.append('auth_method_confirmed = "chatgpt-token-sharing"')
+        else:
+            worker_sections.append("free_model_only = true")
+    return "\n".join(
+        [
+            "schema_version = 1",
+            'inventory = "inventory.json"',
+            'database = "build/campaign.sqlite3"',
+            "",
+            "[models]",
+            'allowlist = ["openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"]',
+            "",
+            *worker_sections,
+            "",
+            "[limits]",
+            f"max_workers = {max_workers}",
+            f"max_tasks = {max_tasks}",
+            f"max_duration_seconds = {duration}",
+            "lease_seconds = 3660",
+            "agent_timeout_seconds = 900",
+            "max_attempts_per_candidate = 8",
+            "max_attempts_without_progress = 3",
+            "max_output_bytes = 1048576",
+            "max_retry_after_seconds = 900",
+            "ghidra_parallelism = 2",
+            "matcher_parallelism = 4",
+            "",
+            "[pilot]",
+            "max_tasks = 4",
+            "max_duration_seconds = 1800",
+            'candidate_addresses = ["0x2c28c", "0x4217c"]',
+        ]
+    ) + "\n"
 
 
 def strict_report(address: str = "0x1000", *, word_count: int = 4) -> dict[str, object]:
@@ -320,6 +381,31 @@ def test_sqlite_claim_is_atomic_and_each_task_has_one_owner(tmp_path: Path) -> N
     assert store.get_task("0x1000")["status"] == "running"
 
 
+def test_candidate_queue_gives_unattempted_functions_coverage_before_refinement(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "queue.sqlite3")
+    store.seed(
+        [
+            Candidate("0x1000", 16, "0x11111111", 100, "EXACT"),
+            Candidate("0x2000", 16, "0x22222222", 40, "EXACT"),
+        ]
+    )
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET attempt_count=1 WHERE address='0x1000'"
+        )
+        db.execute(
+            "INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,started_at,ended_at,outcome) "
+            "VALUES('0x1000',1,'luna-01','openai','ses_previous',1,2,'pending')"
+        )
+
+    claim = store.claim_next("luna-02", "openai")
+
+    assert claim is not None
+    assert claim.address == "0x2000"
+
+
 def test_checkpoint_survives_reopen_and_expired_claim_can_resume(tmp_path: Path) -> None:
     path = tmp_path / "queue.sqlite3"
     store = CampaignStore(path)
@@ -399,6 +485,622 @@ def test_model_execution_is_disabled_until_separately_verified() -> None:
         "openai/gpt-6-luna",
         "opencode/deepseek-v4.1-flash-free",
     ]
+
+
+def test_load_config_allows_operational_multi_instance_campaign_limits(tmp_path: Path) -> None:
+    config_path = tmp_path / "campaign.toml"
+    config_path.write_text(operational_config_text(), encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert len(config["workers"]) == 8
+    assert len({worker["provider"] for worker in config["workers"].values()}) == 2
+    assert len({worker["model"] for worker in config["workers"].values()}) == 2
+    assert config["limits"]["max_workers"] == 8
+    assert config["limits"]["max_tasks"] == 261
+    assert config["limits"]["max_duration_seconds"] == 21600
+    selected = select_ready_workers(
+        config["workers"],
+        {name: {"ready": True} for name in config["workers"]},
+        max_workers=20,
+    )
+    assert len(selected) == 8
+    assert selected[:4] == [f"luna-{index:02d}" for index in range(1, 5)]
+    assert selected[4:] == [f"deepseek-{index:02d}" for index in range(1, 5)]
+
+
+def test_load_config_has_no_permanent_worker_or_attempt_ceiling(tmp_path: Path) -> None:
+    config_path = tmp_path / "campaign.toml"
+    config_path.write_text(
+        operational_config_text(max_workers="20", max_tasks="1000", duration="300000"),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config["limits"]["max_workers"] == 20
+    assert config["limits"]["max_tasks"] == 1000
+    assert config["limits"]["max_duration_seconds"] == 300000
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("max_workers", "0"),
+        ("max_workers", "1.5"),
+        ("max_workers", "true"),
+        ("max_tasks", "0"),
+        ("max_duration_seconds", "0"),
+        ("max_duration_seconds", "nan"),
+    ],
+)
+def test_load_config_rejects_nonpositive_or_noninteger_operational_limits(
+    tmp_path: Path, setting: str, value: str
+) -> None:
+    text = operational_config_text().replace(f"{setting} = 8", f"{setting} = {value}")
+    text = text.replace(f"{setting} = 261", f"{setting} = {value}")
+    text = text.replace(f"{setting} = 21600", f"{setting} = {value}")
+    config_path = tmp_path / "campaign.toml"
+    config_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_config(config_path)
+
+
+def test_unverified_candidate_may_wait_for_ghidra_without_a_guessed_size() -> None:
+    item = Candidate(
+        address="0x1234",
+        size_bytes=0,
+        nid="0x12345678",
+        priority=10,
+        boundary_status="UNVERIFIED",
+    )
+
+    assert item.size_bytes == 0
+    with pytest.raises(ValueError, match="EXACT"):
+        Candidate(
+            address="0x1234",
+            size_bytes=0,
+            nid="0x12345678",
+            priority=10,
+            boundary_status="EXACT",
+        )
+
+
+def test_export_discovery_requires_unique_relocated_nid_and_real_import_call_sites(
+    tmp_path: Path,
+) -> None:
+    triage = {
+        "exports": [
+            {
+                "address": "0x1000",
+                "nid": "0x11111111",
+                "library": "libehsys",
+                "entry_index": 4,
+                "slot_index": 2,
+                "pointer_site": "0x5000",
+                "pointer_relocation": {
+                    "type": "R_MIPS_32",
+                    "addend": 0x1000,
+                    "addend_valid": True,
+                    "application_valid": True,
+                },
+                "importers": [
+                    {"module": "libtutoriallist.prx", "call_sites": ["0x20"], "table_limitations": []}
+                ],
+            },
+            {
+                "address": "0x2000",
+                "nid": "0x22222222",
+                "library": "libehsys",
+                "pointer_relocation": {
+                    "type": "R_MIPS_32",
+                    "addend": 0x2000,
+                    "addend_valid": True,
+                    "application_valid": True,
+                },
+                "importers": [{"module": "libhtml_view.prx", "call_sites": ["0x24"], "table_limitations": []}],
+            },
+            {
+                "address": "0x3000",
+                "nid": "0x22222222",
+                "library": "libehsys",
+                "pointer_relocation": {
+                    "type": "R_MIPS_32",
+                    "addend": 0x3000,
+                    "addend_valid": True,
+                    "application_valid": True,
+                },
+                "importers": [{"module": "libhtml_view.prx", "call_sites": ["0x28"], "table_limitations": []}],
+            },
+            {
+                "address": "0x4000",
+                "nid": "0x44444444",
+                "library": "libehsys",
+                "pointer_relocation": {
+                    "type": "R_MIPS_32",
+                    "addend": 0x4000,
+                    "addend_valid": True,
+                    "application_valid": True,
+                },
+                "importers": [{"module": "libtutoriallist.prx", "call_sites": [], "table_limitations": []}],
+            },
+            {
+                "address": "0x5000",
+                "nid": "0x55555555",
+                "library": "libehsys",
+                "pointer_relocation": {
+                    "type": "R_MIPS_32",
+                    "addend": 0x5000,
+                    "addend_valid": True,
+                    "application_valid": True,
+                },
+                "importers": [{"module": "libtutoriallist.prx", "call_sites": ["0x2c"], "table_limitations": ["truncated"]}],
+            },
+        ]
+    }
+    triage_path = tmp_path / "triage.json"
+    triage_path.write_text(json.dumps(triage), encoding="utf-8")
+    existing = [Candidate("0x6000", 16, "0x66666666", 1, "EXACT")]
+
+    discovered = discover_proven_exports(
+        triage_path,
+        existing,
+        matched_addresses=["0x6000"],
+    )
+
+    assert [item.address for item in discovered] == ["0x1000"]
+    assert discovered[0].size_bytes == 0
+    assert discovered[0].boundary_status == "UNVERIFIED"
+    assert discovered[0].initial_state == "needs_boundary"
+    assert discovered[0].evidence["prx_call_sites"] == [
+        {"module": "libtutoriallist.prx", "sites": ["0x20"]}
+    ]
+
+
+def test_export_discovery_and_inventory_append_are_idempotent(tmp_path: Path) -> None:
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_commit": "test",
+                "baseline": {},
+                "candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    triage_path = tmp_path / "triage.json"
+    triage_path.write_text(
+        json.dumps(
+            {
+                "exports": [
+                    {
+                        "address": "0x1000",
+                        "nid": "0x11111111",
+                        "library": "libehsys",
+                        "pointer_relocation": {
+                            "type": "R_MIPS_32",
+                            "addend": 0x1000,
+                            "addend_valid": True,
+                            "application_valid": True,
+                        },
+                        "importers": [
+                            {"module": "libtutoriallist.prx", "call_sites": ["0x20"], "table_limitations": []}
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    discovered = discover_proven_exports(triage_path, [], matched_addresses=[])
+
+    assert decomp_campaign_module.append_inventory_candidates(inventory_path, discovered) == 1
+    assert decomp_campaign_module.append_inventory_candidates(inventory_path, discovered) == 0
+    candidates, _payload = decomp_campaign_module.load_inventory(inventory_path)
+    assert [(item.address, item.size_bytes, item.boundary_status) for item in candidates] == [
+        ("0x1000", 0, "UNVERIFIED")
+    ]
+
+
+def test_record_inventory_promotion_advances_only_a_new_certified_address(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET status='matched',boundary_status='EXACT',size_bytes=16 "
+            "WHERE address='0x1000'"
+        )
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "baseline": {
+                    "eboot_matched_functions": 1,
+                    "eboot_matched_instructions": 5,
+                    "eboot_matched_addresses": ["0x800"],
+                    "eboot_matched_ranges": [
+                        {"address": "0x800", "size_bytes": 20}
+                    ],
+                },
+                "candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert record_inventory_promotion(inventory_path, store, "0x1000") is True
+    assert record_inventory_promotion(inventory_path, store, "0x1000") is False
+    baseline = json.loads(inventory_path.read_text(encoding="utf-8"))["baseline"]
+    assert baseline == {
+        "eboot_matched_functions": 2,
+        "eboot_matched_instructions": 9,
+        "eboot_matched_addresses": ["0x800", "0x1000"],
+        "eboot_matched_ranges": [
+            {"address": "0x800", "size_bytes": 20},
+            {"address": "0x1000", "size_bytes": 16},
+        ],
+    }
+
+
+def test_integration_failure_is_recorded_without_downgrading_matched_status(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET status='matched',boundary_status='EXACT' WHERE address='0x1000'"
+        )
+
+    store.record_integration_result(
+        "0x1000", "blocked", diagnostic_code="integration_failed"
+    )
+
+    task = store.get_task("0x1000")
+    assert task["status"] == "matched"
+    assert task["evidence"]["promotion"] == {
+        "status": "blocked",
+        "diagnostic": "integration_failed",
+    }
+    assert store.list_attempts() == []
+
+
+def test_boundary_claim_and_failure_never_create_model_attempts(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            Candidate(
+                address="0x1234",
+                size_bytes=0,
+                nid="0x12345678",
+                priority=10,
+                boundary_status="UNVERIFIED",
+                initial_state="needs_boundary",
+            )
+        ]
+    )
+
+    claim = store.claim_boundary("ghidra-01")
+
+    assert claim is not None
+    assert claim.address == "0x1234"
+    assert store.list_attempts() == []
+    assert store.get_task("0x1234")["status"] == "boundary_checking"
+    store.fail_boundary(claim, "ghidra_evidence_invalid")
+    task = store.get_task("0x1234")
+    assert task["status"] == "blocked"
+    assert task["boundary_status"] == "UNVERIFIED"
+    assert task["checkpoint"]["last_diagnostic"] == {
+        "stage": "ghidra",
+        "code": "ghidra_evidence_invalid",
+    }
+    assert store.list_attempts() == []
+
+
+def test_measured_resource_finish_is_recorded_before_releasing_its_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        verifier=lambda *_args: {},
+        matcher_parallelism=2,
+    )
+    semaphore = threading.BoundedSemaphore(2)
+    claim = Claim(
+        "0x1000", 16, "0x12345678", 10, "EXACT", "luna-01", "openai", "ses_test", 1, 0, {}, {}
+    )
+    events: list[str] = []
+    remaining_during_finish: list[int] = []
+    original_record_event = store.record_event
+
+    def observe(kind: str, **kwargs: object) -> None:
+        events.append(kind)
+        if kind == "matcher_finished":
+            available = int(semaphore.acquire(blocking=False))
+            available += int(semaphore.acquire(blocking=False))
+            remaining_during_finish.append(available)
+            for _ in range(available):
+                semaphore.release()
+        original_record_event(kind, **kwargs)
+
+    monkeypatch.setattr(store, "record_event", observe)
+
+    assert runner._run_limited_operation(
+        semaphore,
+        "matcher",
+        claim=claim,
+        deadline=None,
+        operation=lambda: "verified",
+    ) == "verified"
+
+    assert events == ["matcher_started", "matcher_finished"]
+    assert remaining_during_finish == [1]
+    available_after = int(semaphore.acquire(blocking=False))
+    available_after += int(semaphore.acquire(blocking=False))
+    assert available_after == 2
+    semaphore.release()
+    semaphore.release()
+
+
+def test_seeding_removes_old_provisional_size_without_touching_attempted_rows(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    provisional = Candidate(
+        "0x1000", 12, "0x11111111", 10, "UNVERIFIED", initial_state="needs_boundary"
+    )
+    store.seed([provisional])
+    store.seed(
+        [
+            Candidate(
+                "0x1000", 0, "0x11111111", 10, "UNVERIFIED", initial_state="needs_boundary"
+            )
+        ]
+    )
+
+    task = store.get_task("0x1000")
+
+    assert task["size_bytes"] == 0
+    assert task["status"] == "needs_boundary"
+    assert task["attempt_count"] == 0
+    assert store.list_attempts() == []
+
+
+def test_successful_boundary_claim_becomes_exact_without_spending_inference(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            Candidate(
+                address="0x1234",
+                size_bytes=0,
+                nid="0x12345678",
+                priority=10,
+                boundary_status="UNVERIFIED",
+                initial_state="needs_boundary",
+            )
+        ]
+    )
+
+    claim = store.claim_boundary("ghidra-01")
+    assert claim is not None
+    store.update_boundary(claim, 16, {"source": "verified Ghidra test log"})
+    store.finish_boundary(claim)
+
+    task = store.get_task("0x1234")
+    assert task["status"] == "pending"
+    assert task["boundary_status"] == "EXACT"
+    assert task["size_bytes"] == 16
+    assert task["attempt_count"] == 0
+    assert store.list_attempts() == []
+    boundary_events = [event["kind"] for event in store.list_recent_events(limit=10)]
+    assert boundary_events.count("boundary_validated") == 1
+    assert boundary_events.count("boundary_claim_finished") == 1
+    model_claim = store.claim_next("luna-01", "openai")
+    assert model_claim is not None
+    assert model_claim.size_bytes == 16
+
+
+def test_ghidra_boundary_is_rejected_when_it_overlaps_an_exact_export(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            candidate("0x1000"),
+            Candidate("0x1008", 0, "0x22222222", 20, "UNVERIFIED", initial_state="needs_boundary"),
+        ]
+    )
+    claim = store.claim_boundary("ghidra-01")
+    assert claim is not None
+
+    with pytest.raises(ValueError, match="overlaps EXACT"):
+        store.update_boundary(claim, 16, {"source": "overlapping body"})
+
+    store.fail_boundary(claim, "ghidra_evidence_invalid")
+    task = store.get_task("0x1008")
+    assert task["boundary_status"] == "UNVERIFIED"
+    assert task["status"] == "blocked"
+    assert store.list_attempts() == []
+
+
+def test_model_reservation_does_not_count_until_inference_starts(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+
+    reserved = store.claim_next("luna-01", "openai", reserve_only=True)
+
+    assert reserved is not None
+    assert reserved.attempt_number == 0
+    assert store.list_attempts() == []
+    store.release_preparation(reserved, diagnostic_code="ghidra_evidence_invalid")
+    assert store.get_task("0x1000")["status"] == "blocked"
+    assert store.get_task("0x1000")["attempt_count"] == 0
+    assert store.list_attempts() == []
+
+
+def test_paused_provider_releases_prepared_claim_without_counting_inference(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    reserved = store.claim_next("luna-01", "openai", reserve_only=True)
+    assert reserved is not None
+    with store._connect() as db:
+        db.execute(
+            "UPDATE providers SET status='suspended_quota',updated_at=? WHERE provider='openai'",
+            (time.time(),),
+        )
+
+    assert store.start_attempt(reserved, max_total_attempts=10) is None
+    task = store.get_task("0x1000")
+    assert task["status"] == "pending"
+    assert task["owner"] is None
+    assert task["attempt_count"] == 0
+    assert store.list_attempts() == []
+    assert store.claim_next("luna-02", "openai") is None
+
+
+def test_deadline_waiting_for_provider_slot_releases_reservation_safely(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        verifier=lambda *_args: {},
+    )
+    semaphore = threading.BoundedSemaphore(1)
+    assert semaphore.acquire(blocking=False)
+    runner.provider_slots = {"openai": semaphore}
+    claim = store.claim_next("luna-01", "openai", reserve_only=True)
+    assert claim is not None
+
+    outcome = runner._run_claim(
+        Worker("luna-01", "openai", "openai/gpt-6-luna"),
+        claim,
+        time.monotonic() + 0.05,
+        max_total_attempts=10,
+    )
+
+    assert outcome == "interrupted"
+    assert store.get_task("0x1000")["status"] == "pending"
+    assert store.get_task("0x1000")["attempt_count"] == 0
+    assert store.list_attempts() == []
+    semaphore.release()
+
+
+def test_session_setup_rate_limit_releases_reservation_without_model_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        verifier=lambda *_args: {},
+    )
+    claim = store.claim_next("luna-01", "openai", reserve_only=True)
+    assert claim is not None
+
+    def rate_limited(*_args, **_kwargs):
+        raise ValueError("HTTP 429 rate limit; Retry-After: 17")
+
+    monkeypatch.setattr(runner, "_ensure_session", rate_limited)
+
+    result = runner._run_claim(
+        Worker("luna-01", "openai", "openai/gpt-6-luna"),
+        claim,
+        None,
+        max_total_attempts=10,
+    )
+
+    task = store.get_task("0x1000")
+    assert result == "failed"
+    assert task["status"] == "pending"
+    assert task["attempt_count"] == 0
+    assert task["owner"] is None
+    assert task["preferred_provider"] == "openai"
+    assert store.provider_status("openai") == "rate_limited"
+    assert store.list_attempts() == []
+
+
+def test_session_setup_agent_error_blocks_candidate_without_model_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000")])
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        verifier=lambda *_args: {},
+    )
+    claim = store.claim_next("luna-01", "openai", reserve_only=True)
+    assert claim is not None
+    monkeypatch.setattr(
+        runner,
+        "_ensure_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("invalid session response")),
+    )
+
+    result = runner._run_claim(
+        Worker("luna-01", "openai", "openai/gpt-6-luna"),
+        claim,
+        None,
+        max_total_attempts=10,
+    )
+
+    task = store.get_task("0x1000")
+    next_claim = store.claim_next("luna-02", "openai")
+    assert result == "blocked"
+    assert task["status"] == "blocked"
+    assert task["attempt_count"] == 0
+    assert next_claim is not None and next_claim.address == "0x2000"
+    assert [item for item in store.list_attempts() if item["address"] == "0x1000"] == []
+
+
+def test_prepared_session_rebind_does_not_rewrite_previous_attempt_history(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    first = store.claim_next("luna-01", "openai")
+    assert first is not None
+    first = store.bind_session(first, "ses_previous")
+    store.fail(first, Failure(FailureKind.INTERRUPTED))
+    history_before = store.list_attempts()
+    assert history_before[0]["session_id"] == "ses_previous"
+
+    reservation = store.claim_next("luna-02", "openai", reserve_only=True)
+    assert reservation is not None
+    rebound = store.bind_session(reservation, "ses_current")
+    started = store.start_attempt(rebound, max_total_attempts=10)
+
+    assert started is not None
+    attempts = store.list_attempts()
+    assert attempts[0]["session_id"] == "ses_previous"
+    assert attempts[1]["session_id"] == "ses_current"
+    assert attempts[1]["attempt_number"] == 2
 
 
 def test_only_complete_matcher_evidence_can_be_called_matched() -> None:
@@ -523,6 +1225,7 @@ def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
             opencode_command=["opencode"],
             worktrees={"openai": worktree},
             ghidra_windows_home=str(ghidra_home),
+            ghidra_parallelism=2,
         )
     else:
         runner = CampaignRunner(
@@ -530,14 +1233,33 @@ def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
             opencode_command=["opencode"],
             worktrees={"openai": worktree},
             ghidra_home="/ghidra",
+            ghidra_parallelism=2,
         )
 
+    original_record_event = store.record_event
+
+    def observe_slot_at_finish(kind: str, **kwargs: object) -> None:
+        if kind == "ghidra_finished":
+            first = runner.ghidra_slots.acquire(blocking=False)
+            second = runner.ghidra_slots.acquire(blocking=False)
+            observed["ghidra_slots_available_at_finish_event"] = int(first) + int(second)
+            if second:
+                runner.ghidra_slots.release()
+            if first:
+                runner.ghidra_slots.release()
+        original_record_event(kind, **kwargs)
+
+    # The finish event must be durably recorded before the slot is released, so
+    # telemetry never reports more concurrent Ghidra processes than the semaphore.
+    monkeypatch.setattr(store, "record_event", observe_slot_at_finish)
     prepared = runner._prepare_claim(worktree, retry, None)
     new_log = campaign_build_path(worktree, prepared.checkpoint["ghidra_log_path"])
 
     assert observed["argv"]
+    assert observed["ghidra_slots_available_at_finish_event"] == 1
     assert "SetoAnalyzeEntry.java" in observed["argv"]
-    assert prepared.checkpoint["ghidra_log_path"].endswith("ghidra-attempt-2.log")
+    assert "/evidence/ghidra-run-" in prepared.checkpoint["ghidra_log_path"]
+    assert prepared.checkpoint["ghidra_log_path"].endswith(".log")
     assert "SETO_INSN=0x1000 SIZE=4 nop" in new_log.read_text(encoding="utf-8")
     assert "SETO_DECOMP_C_BEGIN" in new_log.read_text(encoding="utf-8")
     assert decomp_campaign_module._ghidra_log_has_reconstruction_details(
@@ -695,7 +1417,7 @@ def test_promotion_documentation_is_idempotent_and_keeps_session_and_hash(tmp_pa
     _append_promotion_documentation(tmp_path, record)
     _append_promotion_documentation(tmp_path, record)
     text = progress.read_text(encoding="utf-8")
-    assert "## SETO-DECOMP-044 — Promoções certificadas" in text
+    assert "## SETO-DECOMP-045 — Promoções certificadas" in text
     assert text.count("`0x1000`") == 1
     assert "ses_test_promotion" in text
     assert "`" + "a" * 64 + "`" in text
@@ -1434,6 +2156,236 @@ def test_cumulative_attempt_ceiling_is_atomic_with_historical_attempts(
     assert len(store.list_attempts()) == 12
     assert sum(sum(outcomes.values()) for outcomes in store.attempt_summary().values()) == 12
     assert all(task["status"] != "running" for task in store.list_tasks())
+
+
+def test_repeated_provider_workers_share_provider_capacity_and_run_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    candidates = [candidate(f"0x{0x1000 + index * 0x10:x}") for index in range(8)]
+    store.seed(candidates)
+    worker_specs = [
+        *(Worker(f"luna-{index:02d}", "openai", "openai/gpt-6-luna") for index in range(1, 5)),
+        *(Worker(f"deepseek-{index:02d}", "opencode", "opencode/deepseek-v4.1-flash-free") for index in range(1, 5)),
+    ]
+    worktrees = {worker.worker_id: tmp_path / worker.worker_id for worker in worker_specs}
+    for worktree in worktrees.values():
+        worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees=worktrees,
+        verifier=lambda *_args: {},
+        provider_parallelism={"openai": 2, "opencode": 2},
+    )
+    active: dict[str, int] = {"openai": 0, "opencode": 0}
+    observed_max: dict[str, int] = {"openai": 0, "opencode": 0}
+    first_wave = threading.Barrier(4)
+    wave_count = 0
+    lock = threading.Lock()
+
+    def simulated_claim(
+        worker: Worker,
+        claim: Claim,
+        _deadline: float | None,
+        *,
+        max_total_attempts: int | None,
+        on_attempt_started,
+    ) -> str:
+        nonlocal wave_count
+        slot = runner.provider_slots[worker.provider]
+        with slot:
+            started = store.start_attempt(
+                claim,
+                max_total_attempts=max_total_attempts,
+                lease_seconds=runner.lease_seconds,
+            )
+            if started is None:
+                return "budget_exhausted"
+            on_attempt_started()
+            with lock:
+                active[worker.provider] += 1
+                observed_max[worker.provider] = max(
+                    observed_max[worker.provider], active[worker.provider]
+                )
+                wave_count += 1
+                wait_for_first_wave = wave_count <= 4
+            if wait_for_first_wave:
+                first_wave.wait(timeout=5)
+            report = strict_report(started.address)
+            result = {
+                "status": "MATCHED",
+                "source_sha256": report["provenance"]["source_sha256"],
+                "matching_words": 4,
+                "total_words": 4,
+                "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+                "reports": [report, report],
+            }
+            try:
+                return store.complete(
+                    started,
+                    {},
+                    result,
+                    max_attempts_without_progress=3,
+                    max_attempts_per_candidate=8,
+                )
+            finally:
+                with lock:
+                    active[worker.provider] -= 1
+
+    monkeypatch.setattr(runner, "_run_claim", simulated_claim)
+
+    result = runner.run(worker_specs, max_tasks=8)
+
+    assert result["attempted"] == 8
+    assert len(store.list_attempts()) == 8
+    assert observed_max == {"openai": 2, "opencode": 2}
+    assert all(task["status"] == "matched" for task in store.list_tasks())
+
+
+def test_promotion_runs_without_pausing_other_workers_and_failure_keeps_matched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000")])
+    worker_specs = [
+        Worker("luna-01", "openai", "openai/gpt-6-luna"),
+        Worker("luna-02", "openai", "openai/gpt-6-luna"),
+    ]
+    worktrees = {worker.worker_id: tmp_path / worker.worker_id for worker in worker_specs}
+    for worktree in worktrees.values():
+        worktree.mkdir()
+    other_model_completed = threading.Event()
+    both_started = threading.Barrier(2)
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees=worktrees,
+        verifier=lambda *_args: {},
+        provider_parallelism={"openai": 2},
+        promotion_callback=lambda address, _deadline: (
+            {} if address == "0x1000" and other_model_completed.wait(5)
+            else (_ for _ in ()).throw(RuntimeError("integration unavailable"))
+        ),
+    )
+
+    def simulated_claim(
+        _worker: Worker,
+        claim: Claim,
+        _deadline: float | None,
+        *,
+        max_total_attempts: int | None,
+        on_attempt_started,
+    ) -> str:
+        started = store.start_attempt(claim, max_total_attempts=max_total_attempts)
+        assert started is not None
+        on_attempt_started()
+        both_started.wait(timeout=5)
+        report = strict_report(started.address)
+        result = {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+        status = store.complete(
+            started,
+            {},
+            result,
+            max_attempts_without_progress=3,
+            max_attempts_per_candidate=8,
+        )
+        if started.address == "0x2000":
+            other_model_completed.set()
+        return status
+
+    monkeypatch.setattr(runner, "_run_claim", simulated_claim)
+
+    result = runner.run(worker_specs, max_tasks=2)
+
+    assert result["attempted"] == 2
+    assert result["integrations_promoted"] == ["0x1000"]
+    assert result["integration_blocked"] == ["0x2000"]
+    assert store.get_task("0x1000")["status"] == "matched"
+    assert store.get_task("0x1000")["evidence"]["promotion"]["status"] == "promoted"
+    assert store.get_task("0x2000")["status"] == "matched"
+    assert store.get_task("0x2000")["evidence"]["promotion"] == {
+        "status": "blocked",
+        "diagnostic": "integration_failed",
+    }
+
+
+def test_model_workers_continue_claiming_while_promotion_queue_is_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000"), candidate("0x3000")])
+    workers = [
+        Worker("luna-01", "openai", "openai/gpt-6-luna"),
+        Worker("luna-02", "openai", "openai/gpt-6-luna"),
+    ]
+    worktrees = {worker.worker_id: tmp_path / worker.worker_id for worker in workers}
+    for worktree in worktrees.values():
+        worktree.mkdir()
+    third_model_completed = threading.Event()
+    promotion_waiting = threading.Event()
+
+    def promote(address: str, _deadline: float | None) -> dict[str, object]:
+        if address == "0x1000":
+            promotion_waiting.set()
+            if not third_model_completed.wait(5):
+                raise TimeoutError("model workers stopped while promotion was in progress")
+        return {"address": address, "status": "MATCHED"}
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees=worktrees,
+        verifier=lambda *_args: {},
+        provider_parallelism={"openai": 2},
+        promotion_callback=promote,
+    )
+
+    def simulated_claim(
+        _worker: Worker,
+        claim: Claim,
+        _deadline: float | None,
+        *,
+        max_total_attempts: int | None,
+        on_attempt_started,
+    ) -> str:
+        started = store.start_attempt(claim, max_total_attempts=max_total_attempts)
+        assert started is not None
+        on_attempt_started()
+        report = strict_report(started.address)
+        status = store.complete(
+            started,
+            {},
+            {
+                "status": "MATCHED",
+                "source_sha256": report["provenance"]["source_sha256"],
+                "matching_words": 4,
+                "total_words": 4,
+                "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+                "reports": [report, report],
+            },
+            max_attempts_without_progress=3,
+            max_attempts_per_candidate=8,
+        )
+        if started.address == "0x3000":
+            third_model_completed.set()
+        return status
+
+    monkeypatch.setattr(runner, "_run_claim", simulated_claim)
+
+    result = runner.run(workers, max_tasks=3)
+
+    assert promotion_waiting.is_set()
+    assert third_model_completed.is_set()
+    assert result["attempted"] == 3
+    assert set(result["integrations_promoted"]) == {"0x1000", "0x2000", "0x3000"}
 
 
 def test_provider_preflight_selects_only_verified_free_worker() -> None:
@@ -2622,6 +3574,204 @@ def test_status_report_exposes_only_the_bounded_diagnostic(tmp_path: Path) -> No
     ]
 
 
+def test_status_report_shows_configured_active_and_idle_workers(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            candidate("0x1000"),
+            Candidate("0x2000", 0, "0x22222222", 40, "UNVERIFIED", initial_state="needs_boundary"),
+        ]
+    )
+    model_claim = store.claim_next("luna-01", "openai")
+    boundary_claim = store.claim_boundary("deepseek-01")
+    assert model_claim is not None and boundary_claim is not None
+    config = {
+        "execution": {},
+        "inventory": "config/decomp_campaign_inventory.json",
+        "worktrees": {"root": "build/decomp-campaign/worktrees"},
+        "workers": {
+            "luna-01": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 4},
+            "luna-02": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 4},
+            "deepseek-01": {"provider": "opencode", "model": "opencode/deepseek-v4.1-flash-free", "max_parallel": 4},
+        },
+    }
+
+    report = decomp_campaign_module._status_report(store, config, tmp_path)
+
+    assert report["worker_pool"]["configured"] == 3
+    assert report["worker_pool"]["active"] == 2
+    assert report["worker_pool"]["idle"] == 1
+    assert report["worker_pool"]["workers"]["luna-01"]["assignments"] == [
+        {"address": "0x1000", "status": "running", "stage": "inference"}
+    ]
+    assert report["worker_pool"]["workers"]["deepseek-01"]["assignments"] == [
+        {"address": "0x2000", "status": "boundary_checking", "stage": "ghidra"}
+    ]
+
+
+def test_explicit_precomparison_inconclusive_keeps_object_provenance_without_certifying(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "func_00001000.c"
+    source.write_text("void func_00001000(void) { return; }\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    object_path = out / "func_00001000.o"
+    object_path.write_bytes(b"compiled-object-fixture")
+    claim = Claim(
+        "0x1000", 16, "0x12345678", 50, "EXACT", "luna-01", "openai", "ses_test", 1, 0, {}, {}
+    )
+    result = decomp_campaign_module.WorkResult(
+        5,
+        "",
+        "INCONCLUSIVE: symbol 'FUN_00001000' is not present in the candidate",
+    )
+
+    report = _explicit_inconclusive_match_report(
+        result,
+        claim=claim,
+        source=source,
+        out=out,
+        report_relative="decomp-campaign/luna-01/1000/attempt-1/verify-1",
+        compiler="mwccpsp.exe",
+        flags=["-O4,p", "-sdatathreshold", "0"],
+        includes=["decomp/include"],
+    )
+
+    assert report is not None
+    assert report["status"] == "INCONCLUSIVE"
+    assert report["symbol"] is None
+    assert report["requested_symbol"] == "func_00001000"
+    assert report["provenance"]["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert report["provenance"]["object_sha256"] == hashlib.sha256(object_path.read_bytes()).hexdigest()
+    assert report["match"]["comparison_complete"] is False
+    assert report["match"]["matching_words"] == -1
+    assert not is_strict_match(report, expected_address=0x1000, expected_size=16)
+    decomp_campaign_module._validate_complete_matcher_report(
+        report,
+        expected_address=0x1000,
+        expected_size=16,
+        expected_source_sha256=report["provenance"]["source_sha256"],
+    )
+
+
+def test_explicit_precomparison_inconclusive_requires_a_compiled_object(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "func_00001000.c"
+    source.write_text("void func_00001000(void) { return; }\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    claim = Claim(
+        "0x1000", 16, "0x12345678", 50, "EXACT", "luna-01", "openai", "ses_test", 1, 0, {}, {}
+    )
+
+    report = _explicit_inconclusive_match_report(
+        decomp_campaign_module.WorkResult(
+            5, "", "INCONCLUSIVE: no function was discovered in '.text'"
+        ),
+        claim=claim,
+        source=source,
+        out=out,
+        report_relative="decomp-campaign/luna-01/1000/attempt-1/verify-1",
+        compiler="mwccpsp.exe",
+        flags=["-O4,p", "-sdatathreshold", "0"],
+        includes=["decomp/include"],
+    )
+
+    assert report is None
+
+
+def test_matcher_wrapper_persists_explicit_inconclusive_with_source_object_provenance(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "func_00001000.c"
+    source.write_text("void FUN_00001000(void) { return; }\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "func_00001000.o").write_bytes(b"compiled object")
+    config = tmp_path / "seto.toml"
+    config.write_text(
+        '[tools.mwccpsp]\npath = "/tools/mwccpsp.exe"\n'
+        '[match]\nflags = ["-O4,p", "-sdatathreshold", "0"]\n'
+        'includes = ["decomp/include"]\n',
+        encoding="utf-8",
+    )
+    claim = Claim(
+        "0x1000", 16, "0x12345678", 50, "EXACT", "luna-01", "openai", "ses_test", 1, 0, {}, {}
+    )
+
+    report = decomp_campaign_module._matcher_report_from_process(
+        decomp_campaign_module.WorkResult(
+            5, "", "INCONCLUSIVE: symbol 'FUN_00001000' is not present in the candidate"
+        ),
+        claim=claim,
+        source=source,
+        out=out,
+        config=config,
+        relative_out="decomp-campaign/luna-01/1000/attempt-1/verify-1",
+    )
+
+    assert report["status"] == "INCONCLUSIVE"
+    assert report["provenance"]["compiler"] == "/tools/mwccpsp.exe"
+    assert report["report_path"] == (
+        "build/decomp-campaign/luna-01/1000/attempt-1/verify-1/func_00001000.match.json"
+    )
+    assert (out / "func_00001000.match.json").is_file()
+
+
+def test_matcher_wrapper_does_not_replace_malformed_json_with_text_diagnostic(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "func_00001000.c"
+    source.write_text("void func_00001000(void) { return; }\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "func_00001000.o").write_bytes(b"compiled object")
+    config = tmp_path / "seto.toml"
+    config.write_text(
+        '[tools.mwccpsp]\npath = "/tools/mwccpsp.exe"\n'
+        '[match]\nflags = ["-O4,p"]\nincludes = ["decomp/include"]\n',
+        encoding="utf-8",
+    )
+    claim = Claim(
+        "0x1000", 16, "0x12345678", 50, "EXACT", "luna-01", "openai", "ses_test", 1, 0, {}, {}
+    )
+
+    with pytest.raises(ValueError, match="JSON"):
+        decomp_campaign_module._matcher_report_from_process(
+            decomp_campaign_module.WorkResult(
+                5, "{malformed", "INCONCLUSIVE: symbol is not present"
+            ),
+            claim=claim,
+            source=source,
+            out=out,
+            config=config,
+            relative_out="decomp-campaign/luna-01/1000/attempt-1/verify-1",
+        )
+
+    assert not (out / "func_00001000.match.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("stderr", "error_type"),
+    [
+        ("error: compilation failed (exit 1)", decomp_campaign_module.MatcherCompilerError),
+        (
+            "error: candidate section '.text': needs 36 bytes at offset 0 but the section is 20 bytes",
+            decomp_campaign_module.MatcherIncomplete,
+        ),
+    ],
+)
+def test_matcher_process_failures_keep_compiler_and_incomplete_distinctions(
+    stderr: str, error_type: type[Exception]
+) -> None:
+    with pytest.raises(error_type):
+        _raise_matcher_process_error(
+            decomp_campaign_module.WorkResult(1, "", stderr)
+        )
+
+
 def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
     claim = Claim(
         "0x2c28c",
@@ -2700,6 +3850,8 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
     assert "last_attempt" in prompt and "producer_attempt_number" in prompt
     assert "conditional-pointer.c" in prompt
     assert "4217c/variant.c" not in prompt
+    assert "func_0002C28C" in prompt
+    assert "Ghidra's autogenerated FUN_ label" in prompt
     assert "optional" in prompt.lower()
     assert "if retrieval is unavailable, report that limitation" in prompt
     assert "first use" not in prompt.lower()
@@ -2741,8 +3893,12 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("local-tool-paths\n", encoding="utf-8")
 
+    worker_names = [
+        *(f"luna-{index:02d}" for index in range(1, 5)),
+        *(f"deepseek-{index:02d}" for index in range(1, 5)),
+    ]
     config = {
-        "workers": {"openai": {}, "deepseek": {}},
+        "workers": {name: {} for name in worker_names},
         "inputs": {
             **inputs,
             "eboot_sha256": hashes["eboot"],
@@ -2759,8 +3915,8 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         },
     }
     workers = prepare_worker_worktrees(repo, config)
-    assert set(workers) == {"openai", "deepseek"}
-    assert workers["openai"] != workers["deepseek"]
+    assert set(workers) == set(worker_names)
+    assert len({path.resolve() for path in workers.values()}) == 8
     for name, worktree in workers.items():
         assert subprocess.run(
             ["git", "branch", "--show-current"], cwd=worktree, check=True, capture_output=True, text=True
@@ -2770,13 +3926,15 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         assert (worktree / "config/wsl/seto.toml").is_file()
 
 
-def test_unverified_inventory_item_must_pass_ghidra_before_matching(tmp_path: Path) -> None:
+def test_unverified_inventory_boundary_runs_without_spending_model_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = CampaignStore(tmp_path / "campaign.sqlite3")
     store.seed(
         [
             Candidate(
                 address="0x1000",
-                size_bytes=12,
+                size_bytes=0,
                 nid="0x12345678",
                 priority=10,
                 boundary_status="UNVERIFIED",
@@ -2818,12 +3976,170 @@ def test_unverified_inventory_item_must_pass_ghidra_before_matching(tmp_path: Pa
         worktrees={"openai": worktree},
         verifier=verifier,
     )
+
+    def fake_prepare(_worktree: Path, claim: Claim, _deadline: float | None) -> Claim:
+        assert claim.boundary_status == "UNVERIFIED"
+        store.update_boundary(claim, 16, {"source": "synthetic Ghidra test"})
+        return replace(claim, size_bytes=16, boundary_status="EXACT")
+
+    monkeypatch.setattr(runner, "_prepare_claim", fake_prepare)
     result = runner.run([Worker("openai", "openai", "openai/gpt-6-luna")], max_tasks=2)
     task = store.get_task("0x1000")
-    assert result["attempted"] == 2
+    assert result["attempted"] == 1
+    assert result["boundary_outcomes"] == {"boundary_validated": 1}
+    assert len(store.list_attempts()) == 1
     assert task["boundary_status"] == "EXACT"
     assert task["size_bytes"] == 16
     assert task["status"] == "matched"
+
+
+def test_model_worker_waits_for_parallel_boundary_discovery_and_claims_new_exact_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            candidate("0x1000"),
+            Candidate(
+                "0x2000", 0, "0x22222222", 20, "UNVERIFIED", initial_state="needs_boundary"
+            ),
+        ]
+    )
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        verifier=lambda *_args: {},
+        ghidra_parallelism=1,
+    )
+    boundary_started = threading.Event()
+    release_boundary = threading.Event()
+    first_model_finished = threading.Event()
+
+    def fake_prepare(_worktree: Path, claim: Claim, _deadline: float | None) -> Claim:
+        boundary_started.set()
+        assert release_boundary.wait(timeout=10)
+        store.update_boundary(claim, 16, {"source": "parallel Ghidra proof"})
+        return replace(claim, size_bytes=16, boundary_status="EXACT")
+
+    def fake_model(
+        _worker: Worker,
+        claim: Claim,
+        _deadline: float | None,
+        *,
+        max_total_attempts: int | None,
+        on_attempt_started,
+    ) -> str:
+        started = store.start_attempt(claim, max_total_attempts=max_total_attempts)
+        assert started is not None
+        on_attempt_started()
+        report = strict_report(started.address)
+        result = {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+        status = store.complete(
+            started,
+            {},
+            result,
+            max_attempts_without_progress=3,
+            max_attempts_per_candidate=8,
+        )
+        if started.address == "0x1000":
+            first_model_finished.set()
+        return status
+
+    monkeypatch.setattr(runner, "_prepare_claim", fake_prepare)
+    monkeypatch.setattr(runner, "_run_claim", fake_model)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            runner.run,
+            [Worker("luna-01", "openai", "openai/gpt-6-luna")],
+            max_tasks=10,
+        )
+        assert boundary_started.wait(timeout=5)
+        assert first_model_finished.wait(timeout=5)
+        assert store.get_task("0x2000")["status"] == "boundary_checking"
+        release_boundary.set()
+        result = future.result(timeout=15)
+
+    assert result["attempted"] == 2
+    assert result["boundary_outcomes"] == {"boundary_validated": 1}
+    assert store.get_task("0x2000")["status"] == "matched"
+    assert len(store.list_attempts()) == 2
+
+
+def test_ghidra_boundary_failure_blocks_only_that_candidate_without_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed(
+        [
+            candidate("0x1000"),
+            Candidate(
+                "0x2000", 0, "0x22222222", 20, "UNVERIFIED", initial_state="needs_boundary"
+            ),
+        ]
+    )
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        verifier=lambda *_args: {},
+    )
+
+    def failed_prepare(_worktree: Path, _claim: Claim, _deadline: float | None) -> Claim:
+        raise ValueError("ambiguous Ghidra body")
+
+    def fake_model(
+        _worker: Worker,
+        claim: Claim,
+        _deadline: float | None,
+        *,
+        max_total_attempts: int | None,
+        on_attempt_started,
+    ) -> str:
+        started = store.start_attempt(claim, max_total_attempts=max_total_attempts)
+        assert started is not None
+        on_attempt_started()
+        report = strict_report(started.address)
+        return store.complete(
+            started,
+            {},
+            {
+                "status": "MATCHED",
+                "source_sha256": report["provenance"]["source_sha256"],
+                "matching_words": 4,
+                "total_words": 4,
+                "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+                "reports": [report, report],
+            },
+            max_attempts_without_progress=3,
+            max_attempts_per_candidate=8,
+        )
+
+    monkeypatch.setattr(runner, "_prepare_claim", failed_prepare)
+    monkeypatch.setattr(runner, "_run_claim", fake_model)
+
+    result = runner.run(
+        [Worker("luna-01", "openai", "openai/gpt-6-luna")], max_tasks=10
+    )
+
+    assert result["attempted"] == 1
+    assert result["boundary_outcomes"] == {"boundary_blocked": 1}
+    assert store.get_task("0x1000")["status"] == "matched"
+    assert store.get_task("0x2000")["status"] == "blocked"
+    assert store.get_task("0x2000")["attempt_count"] == 0
+    assert len(store.list_attempts()) == 1
 
 
 def test_best_source_snapshot_survives_a_lower_scoring_retry(tmp_path: Path) -> None:
@@ -3093,6 +4409,34 @@ def test_cli_accepts_repeated_productive_candidate_filters() -> None:
     assert args.candidate_address == ["0x2c28c", "0x4217c"]
 
 
+def test_all_eligible_requires_explicit_productive_scope_and_conflicts_with_address_filter() -> None:
+    args = decomp_campaign_module.build_parser().parse_args(
+        ["run", "--confirm", "--productive", "--continuous", "--all-eligible"]
+    )
+    assert args.all_eligible is True
+    assert args.candidate_address is None
+    assert productive_candidate_selection(
+        productive=True,
+        all_eligible=True,
+        candidate_addresses=None,
+        candidates=[candidate("0x1000")],
+    ) is None
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        productive_candidate_selection(
+            productive=True,
+            all_eligible=True,
+            candidate_addresses=["0x1000"],
+            candidates=[candidate("0x1000")],
+        )
+    with pytest.raises(ValueError, match="require --productive"):
+        productive_candidate_selection(
+            productive=False,
+            all_eligible=True,
+            candidate_addresses=None,
+            candidates=[candidate("0x1000")],
+        )
+
+
 def test_resume_cli_accepts_selective_retry_address() -> None:
     args = decomp_campaign_module.build_parser().parse_args(
         ["resume", "--retry-address", "0x4217c"]
@@ -3224,6 +4568,11 @@ def test_productive_run_max_tasks_is_a_cumulative_sqlite_ceiling(
     )
     monkeypatch.setattr(decomp_campaign_module, "_sanitize_opencode_prefix", lambda command: command)
     monkeypatch.setattr(decomp_campaign_module, "_effective_worker_policy_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "verify_campaign_inputs",
+        lambda *_args: {name: {"matches": True} for name in ("eboot", "libtutoriallist", "libhtml_view", "triage")},
+    )
     worker_roots = {name: tmp_path / name for name in ("openai", "deepseek")}
     for path in worker_roots.values():
         path.mkdir()
@@ -3263,6 +4612,144 @@ def test_productive_run_max_tasks_is_a_cumulative_sqlite_ceiling(
         assert captured.get("max_tasks") == total_ceiling
     elif expected_new_attempts == 0:
         assert "max_tasks" not in captured
+
+
+def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config" / "run.toml"
+    config_path.parent.mkdir(parents=True)
+    database = tmp_path / "campaign.sqlite3"
+    inventory_path = tmp_path / "inventory.json"
+    base_candidates = [candidate("0x1000")]
+    discovered = Candidate(
+        "0x2000",
+        0,
+        "0x22222222",
+        21,
+        "UNVERIFIED",
+        evidence={"source": "verified triage export", "prx_call_sites": []},
+        initial_state="needs_boundary",
+    )
+    config = {
+        "execution": {
+            "enabled": True,
+            "continuous": True,
+            "provider_access_verified": True,
+            "worker_permissions_reviewed": True,
+            "pilot_verified": True,
+            "productive_expansion_authorized": True,
+        },
+        "opencode": {"command": ["opencode"]},
+        "models": {"allowlist": ["openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"]},
+        "workers": {
+            "luna-01": {"provider": "openai", "model": "openai/gpt-6-luna", "agent": "seto-decomp-worker", "max_parallel": 4},
+            "deepseek-01": {"provider": "opencode", "model": "opencode/deepseek-v4.1-flash-free", "agent": "seto-decomp-worker", "max_parallel": 4},
+        },
+        "limits": {
+            "max_workers": 2,
+            "max_tasks": 20,
+            "max_duration_seconds": 21600,
+            "agent_timeout_seconds": 900,
+            "max_output_bytes": 1048576,
+            "max_attempts_without_progress": 3,
+            "max_attempts_per_candidate": 8,
+            "lease_seconds": 3660,
+            "max_retry_after_seconds": 900,
+            "ghidra_parallelism": 1,
+            "matcher_parallelism": 2,
+        },
+        "pilot": {"max_tasks": 4, "max_duration_seconds": 1800, "candidate_addresses": ["0x1000", "0x2000"]},
+        "toolchain": {"wsl_distro": "Ubuntu", "ghidra_local_config": "config/decomp_campaign.local.toml", "mwcc_config": "config/wsl/seto.toml"},
+        "inputs": {"eboot_sha256": "a" * 64, "triage_report": "build/seto035/export-triage.json"},
+        "worktrees": {"root": "build/decomp-campaign/worktrees", "branch_prefix": "seto/decomp-campaign"},
+    }
+    (tmp_path / "config" / "decomp_campaign.local.toml").write_text("[ghidra]\n", encoding="utf-8")
+    monkeypatch.setattr(decomp_campaign_module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (inventory_path, database),
+    )
+    load_count = 0
+
+    def fake_load_inventory(_path: Path):
+        nonlocal load_count
+        load_count += 1
+        items = base_candidates if load_count == 1 else [*base_candidates, discovered]
+        return items, {"baseline": {"eboot_matched_addresses": []}, "source_commit": "test"}
+
+    monkeypatch.setattr(decomp_campaign_module, "load_inventory", fake_load_inventory)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "discover_proven_exports",
+        lambda *_args, **_kwargs: [discovered],
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "append_inventory_candidates",
+        lambda _path, items: len(items),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_doctor",
+        lambda *_args: {
+            "opencode": {
+                "workers": {
+                    "luna-01": {"ready": True},
+                    "deepseek-01": {"ready": True},
+                }
+            },
+            "wsl_python": "Python 3.12",
+            "toolchain": {"ghidra": "READY", "mwcc": "READY", "wibo": "READY"},
+        },
+    )
+    monkeypatch.setattr(decomp_campaign_module, "_sanitize_opencode_prefix", lambda command: command)
+    monkeypatch.setattr(decomp_campaign_module, "_effective_worker_policy_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "verify_campaign_inputs",
+        lambda *_args: {name: {"matches": True} for name in ("eboot", "libtutoriallist", "libhtml_view", "triage")},
+    )
+    worker_roots = {name: tmp_path / name for name in config["workers"]}
+    for worktree in worker_roots.values():
+        worktree.mkdir()
+    monkeypatch.setattr(decomp_campaign_module, "prepare_worker_worktrees", lambda *_args: worker_roots)
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            captured["candidate_addresses"] = kwargs.get("candidate_addresses")
+            captured["worker_count"] = len(kwargs["worktrees"])
+            captured["provider_parallelism"] = kwargs.get("provider_parallelism")
+
+        def run(self, workers: object, *, max_tasks: int) -> dict[str, object]:
+            captured["max_tasks"] = max_tasks
+            captured["workers"] = len(workers)  # type: ignore[arg-type]
+            return {"attempted": 0, "outcomes": {}, "boundary_outcomes": {}, "stopped": False}
+
+    monkeypatch.setattr(decomp_campaign_module, "CampaignRunner", FakeRunner)
+    output: dict[str, object] = {}
+    monkeypatch.setattr(decomp_campaign_module, "_print_json", output.update)
+
+    assert decomp_campaign_module.main(
+        [
+            "--config", str(config_path), "run", "--confirm", "--productive",
+            "--continuous", "--all-eligible", "--allow-openai-usage",
+            "--allow-free-model-usage", "--max-tasks", "10",
+        ]
+    ) == 0
+
+    assert captured["candidate_addresses"] is None
+    assert captured["worker_count"] == 2
+    assert captured["provider_parallelism"] == {"openai": 4, "opencode": 4}
+    assert captured["workers"] == 2
+    assert captured["max_tasks"] == 10
+    assert output["new_candidates_discovered"] == 1
+    assert len(CampaignStore(database).list_tasks()) == 2
+    assert CampaignStore(database).get_task("0x2000")["size_bytes"] == 0
+    assert CampaignStore(database).list_attempts() == []
 
 
 def test_selective_retry_changes_only_requested_block_and_preserves_history(
