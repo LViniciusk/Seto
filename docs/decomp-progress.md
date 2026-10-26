@@ -6979,3 +6979,120 @@ A execução ativa tinha carregado o wrapper anterior às correções diagnósti
 | CI GitHub Actions | **passou** nos dois eventos (push e pull request), Ubuntu/Windows × Python 3.11/3.12; 8 jobs concluídos |
 
 Token/custo não são reportados pela integração OpenCode atual. O throughput de inferência foi 82 tentativas em 5.357,39 s (**55,1 tentativas/h**); os eventos mediram 60 execuções OpenAI (média 38,8 s) e 22 OpenCode/DeepSeek (média 411,3 s, incluindo timeouts).
+
+## SETO-DECOMP-046 — Iterative Matching & Candidate Recovery
+
+### Orquestrador e recuperação local
+
+- A branch `feat/seto-decomp-046` parte do `main` em `9fc4dcd` (PR #46 já
+  merged). O trabalho está isolado nesta branch; não realizar merge.
+- `CampaignRunner` agora oferece até três chamadas Luna consecutivas por
+  função, preserva uma linha SQLite por inferência e reutiliza a mesma sessão
+  validada. A continuação exige melhoria verificável no score/compilação ou um
+  bloqueio que passou a ser comparável; SHA de fonte repetido não é recompilado.
+  A melhor fonte verificada continua separada da hipótese local mais recente.
+- Relatórios completos do matcher são persistidos junto aos objetos, inclusive
+  quando a primeira comparação é `NONMATCHING`. `INCONCLUSIVE` por símbolo,
+  objeto curto e erro de compilação têm tratamentos distintos. O aviso conhecido
+  `MWCIncludes not found` é não fatal; mensagens de erro C reais continuam sendo
+  devolvidas ao modelo em trecho sanitizado.
+- O cache Ghidra local usa nomes `ghidra-cache-<sha256>.log`; o copiador hash-bound
+  agora aceita esse formato. A primeira tentativa de execução não consumiu
+  inferências porque o preflight da política OpenCode não passou; após inicializar
+  a configuração local nos oito worktrees, o gate passou. A primeira janela
+  produtiva ainda refez análises Ghidra desnecessárias e gerou logs JVM de OOM.
+  Depois de corrigir o cache, as continuações não registraram novas falhas
+  `ghidra_evidence_invalid` nem novos logs de OOM.
+- Retomada seletiva aceita somente candidatos `blocked`/`stalled` `EXACT`, sem
+  lease ou melhor resultado MATCHED, com justificativa vinculada ao checkpoint.
+  O contador/sessões/histórico não são reiniciados; 046 usa limite explícito de
+  20 tentativas por candidato.
+- Recuperação local executada antes de qualquer nova inferência: SQLite
+  `integrity_check=ok`, **87 tentativas antes e depois**, 55 candidatos não
+  certificados examinados, 41 com boundary `EXACT` e 36 variantes C escolhidas
+  de snapshots/worktrees conhecidos. Foram registradas **9 comparações completas
+  NONMATCHING**, **12 INCONCLUSIVE** por identidade/símbolo insuficiente, **12
+  objetos incompletos** e **3 erros C de compilação**. Nenhum MATCHED local novo;
+  fontes/relatórios/snapshots foram mantidos sob `build/decomp-campaign/`.
+- Ao longo das fases de recuperação/cache/contexto, **41 endereços `EXACT`
+  distintos** foram reabertos seletivamente, com 72 eventos de reabertura
+  idempotentes e justificativas vinculadas ao checkpoint. As fontes ausentes
+  foram encaminhadas para reconstrução somente quando havia log Ghidra e
+  export/import verificáveis. As 14 funções com boundary inválido/zero-size não
+  foram reagendadas. No estado final, `0x4217C` permanece `blocked` com suas 2
+  tentativas históricas; dois outros candidatos permanecem `blocked` pelo guard
+  de inputs protegidos. `0x2C28C` e `0x31650` permaneceram MATCHED e não foram
+  reconstruídos.
+- A configuração local `config/decomp_campaign.run.046.local.toml` usa apenas
+  `openai/gpt-6-luna`, oito workers, autenticação `chatgpt-token-sharing`, teto
+  cumulativo 599 (`87 + 512`), quatro horas e três chamadas consecutivas. Novos
+  worktrees usam `build/decomp-campaign/worktrees-046`; os da 045 permanecem
+  intactos. Cache Ghidra e pares source/report locais são copiados aos worktrees
+  novos apenas após validar endereço, boundary, símbolo e SHA-256. Após os erros
+  JVM observados, o limite local Ghidra foi reduzido para um slot; matcher ficou
+  em quatro.
+
+### Janela produtiva SETO-DECOMP-046
+
+| Medida | Resultado |
+|---|---:|
+| Workers/modelo | 8 Luna / `openai/gpt-6-luna` |
+| Tentativas SQLite iniciais | 87 |
+| Tentativas novas / cumulativas finais | **82 / 169** (teto 599; orçamento inicial 512; 430 não consumidas) |
+| Duração ativa do runner | **1.797,578 s** (29 min 58 s; teto global 14.400 s) |
+| Pico concorrente observado | 8 inferências Luna; 1 Ghidra; 3 matcher (capacidade 4) |
+| Sessões / distribuição | 54 sessões; Luna 01–08, somente OpenAI |
+| Novos objetos / funções compiladas | **43 objetos / 17 endereços** |
+| Comparações integrais | **16 pares / 7 endereços**; 30 relatórios `NONMATCHING` e 2 `INCONCLUSIVE` com range completo |
+| Novos MATCHED / instruções | **0 / 0**; nenhuma promoção |
+| Estado SQLite final | integridade `ok`, 0 leases, 0 `pending` `EXACT`; 39 `stalled`, 3 `blocked` `EXACT`, 14 boundaries não verificados |
+| Provedor | OpenAI ativo; OpenCode/DeepSeek suspenso por quota, não utilizado em 046 |
+
+A janela foi dividida em quatro invocações produtivas da mesma campanha/SQLite para corrigir
+os gates e continuar a recuperação; uma invocação inicial terminou no gate de
+política antes de qualquer tentativa. As quatro durações reportadas pelo runner
+foram 839,062 s + 531,422 s + 344,562 s + 82,532 s. O SQLite final contém 82
+novas linhas de tentativa, todas `openai`; a soma de tentativas em andamento e
+históricas não excedeu 169/599. A lista exata de 41 candidatos foi consumida até
+não haver `pending EXACT`: 38 inferências retornaram o mesmo source SHA e foram
+encerradas sem recompilação redundante, 15 produziram comparações pendentes de
+melhoria, 10 falharam em contexto, 11 tiveram matcher incompleto, 4 compilações C
+falharam, 2 foram bloqueadas pelo guard de inputs protegidos, 1 não deixou fonte
+C e 1 foi encerrada sem progresso. Scores parciais não foram certificados. O
+último retry de `0x6694` também terminou sem avanço; `0x4217C` e os dois candidatos
+com violação do guard permaneceram bloqueados.
+
+Foram observados **116** logs JVM `hs_err_pid` em quatro worktrees; 97 registram
+falha G1 ao mapear 512 MiB (`Out of Memory Error`, heap reportado de 8 GiB). Os
+logs foram preservados em `build/`; nenhum foi adicionado ao Git. A evidência
+aponta para reanálise Ghidra desnecessária causada pelo sufixo de cache não
+reconhecido. Após aceitar `ghidra-cache-<sha256>.log`, a continuação reutilizou
+os caches e não produziu novos logs OOM. O shell de controle foi cancelado por
+reinício do servidor em uma das continuações, mas o processo Python filho terminou
+e registrou seu resultado no log local.
+
+O throughput agregado foi **164,2 inferências/h** (82 em 1.797,578 s); a métrica
+principal, novas funções MATCHED por hora, foi **0/h**. O esgotamento antecipado
+decorreu do encerramento/stall das 41 funções `EXACT` reabertas, não do teto de
+tentativas, duração, quota OpenAI ou stop global.
+
+As medições de recurso agregadas dos eventos foram: **3.712,403 s** de chamadas
+Luna (82 intervalos), **973,205 s** de Ghidra (20 intervalos) e **262,824 s** de
+matcher (31 intervalos). São somas por worker e **se sobrepõem** pela execução
+paralela; o tempo de parede do runner é a medida de duração da janela acima. O
+tempo de preparação/local recovery não foi instrumentado separadamente; a
+recuperação local não alterou o contador de tentativas.
+
+Baselines antes/depois da janela: EBOOT **10/237 → 10/237 MATCHED/instruções**;
+PRXs **16/912 → 16/912**. `0x4217C` continuou com 2 tentativas e `checkpoint_invalid`;
+os únicos endereços MATCHED permanecem `0x2C28C` e `0x31650`.
+
+### Validação e entrega
+
+| Gate | Resultado |
+|---|---|
+| `tests/test_decomp_campaign.py` | **184 passed** |
+| Suíte completa Windows / Python 3.12 | **1019 passed, 44 skipped** |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+| CI Ubuntu/Windows × Python 3.11/3.12 | _(aguardando checks da PR; Python 3.11 não está instalado localmente)_ |
