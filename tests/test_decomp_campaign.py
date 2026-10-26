@@ -499,6 +499,109 @@ def test_run_execution_target_defaults_to_local_and_accepts_all_modes() -> None:
     assert all_workers.execution_target == "all"
 
 
+@pytest.mark.skipif(decomp_campaign_module.os.name != "nt", reason="Windows campaign uses the .bat launcher")
+def test_windows_doctor_probes_the_same_ghidra_launcher_as_prepare_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config" / "campaign.toml"
+    config_path.parent.mkdir(parents=True)
+    toolchain = tmp_path / "config" / "seto.toml"
+    toolchain.write_text(
+        '[tools.mwccpsp]\npath = "/mwcc"\n[tools.wibo]\npath = "/wibo"\n',
+        encoding="utf-8",
+    )
+    windows_home = tmp_path / "windows-ghidra"
+    launcher = windows_home / "support" / "analyzeHeadless.bat"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("@echo off\n", encoding="utf-8")
+    java_home = tmp_path / "jdk-21"
+    java_executable = java_home / "bin" / "java.exe"
+    java_executable.parent.mkdir(parents=True)
+    java_executable.write_bytes(b"java test executable")
+    wrapper = tmp_path / "scripts" / "run_ghidra_headless.ps1"
+    wrapper.parent.mkdir()
+    wrapper.write_text("param()\n", encoding="utf-8")
+    ghidra_config = tmp_path / "config" / "ghidra.toml"
+    ghidra_config.write_text(
+        f'[ghidra]\nhome = "/wsl/ghidra"\nwindows_home = "{windows_home.as_posix()}"\n'
+        f'java_home = "{java_home.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    config = {
+        "workers": {
+            "remote-kita": {
+                "transport": "ssh",
+                "provider": "opencode",
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "host": "kita-server",
+                "remote_dir": "/home/worker/seto-worker",
+            }
+        },
+        "opencode": {"command": ["opencode-test"]},
+        "toolchain": {
+            "wsl_distro": "Ubuntu",
+            "mwcc_config": "config/seto.toml",
+            "ghidra_local_config": "config/ghidra.toml",
+        },
+        "inputs": {},
+    }
+    monkeypatch.setattr(decomp_campaign_module, "_sanitize_opencode_prefix", lambda _command: ["opencode-test"])
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_opencode_preflight",
+        lambda *_args, **_kwargs: {"workers": {"remote-kita": {"ready": True, "agent_policy": True}}},
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module.shutil,
+        "which",
+        lambda name: {
+            "wsl.exe": "wsl.exe",
+            "powershell.exe": "powershell.exe",
+            "ai-memory": None,
+        }.get(name),
+    )
+    commands: list[list[str]] = []
+    launcher_environments: list[dict[str, str]] = []
+
+    def fake_run(argv, **kwargs):
+        command = [str(item) for item in argv]
+        commands.append(command)
+        if "-File" in command:
+            launcher_environments.append(kwargs.get("env", {}))
+            return subprocess.CompletedProcess(command, 1, "", "unsupported Windows launcher")
+        if command[:3] == ["wsl.exe", "-d", "Ubuntu"]:
+            return subprocess.CompletedProcess(command, 0, "ready", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(decomp_campaign_module.subprocess, "run", fake_run)
+
+    report = decomp_campaign_module._doctor(
+        config,
+        config_path,
+        execution_target="remote",
+    )
+
+    windows_probe = next((command for command in commands if "-File" in command), None)
+    assert windows_probe is not None
+    assert str(launcher) in windows_probe
+    assert launcher_environments[0]["JAVA_HOME"] == str(java_home)
+    assert str(java_home / "bin") in launcher_environments[0]["PATH"].split(";")
+    assert report["toolchain"]["ghidra"] == "BLOCKED"
+
+
+def test_ghidra_settings_environment_isolates_and_quotes_user_settings(
+    tmp_path: Path,
+) -> None:
+    plain = tmp_path / "plain" / "user-settings"
+    assert decomp_campaign_module._ghidra_settings_environment(plain) == {
+        "GHIDRA_JAVA_OPTIONS": f"-Dapplication.settingsdir={plain}"
+    }
+    spaced = tmp_path / "with space" / "user-settings"
+    assert decomp_campaign_module._ghidra_settings_environment(spaced) == {
+        "GHIDRA_JAVA_OPTIONS": f'-Dapplication.settingsdir="{spaced}"'
+    }
+
+
 def test_configured_public_zero_cost_opencode_model_can_be_verified_exactly() -> None:
     model = "opencode/beam-free"
     readiness = worker_readiness(
@@ -2005,6 +2108,7 @@ def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
 
     def fake_ghidra(argv, **_kwargs):
         observed["argv"] = list(argv)
+        observed["environment"] = _kwargs.get("environment_overrides")
         console_lines = []
         for line in detailed_ghidra_log().splitlines():
             if line.startswith("SETO_") or line == "}":
@@ -2062,6 +2166,15 @@ def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
     assert observed["argv"]
     assert observed["ghidra_slots_available_at_finish_event"] == 1
     assert "SetoAnalyzeEntry.java" in observed["argv"]
+    environment = observed["environment"]
+    assert isinstance(environment, dict)
+    settings_option = environment.get("GHIDRA_JAVA_OPTIONS", "")
+    assert settings_option.startswith("-Dapplication.settingsdir=")
+    settings_path = Path(settings_option.split("=", 1)[1].strip('"'))
+    assert settings_path.name == "user-settings"
+    assert settings_path.is_relative_to(
+        worktree / "build" / "decomp-campaign" / "openai" / "1000"
+    )
     assert "/evidence/ghidra-run-" in prepared.checkpoint["ghidra_log_path"]
     assert prepared.checkpoint["ghidra_log_path"].endswith(".log")
     assert "SETO_INSN=0x1000 SIZE=4 nop" in new_log.read_text(encoding="utf-8")

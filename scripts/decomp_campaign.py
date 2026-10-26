@@ -2980,6 +2980,35 @@ def _safe_child_environment() -> dict[str, str]:
     return env
 
 
+def _ghidra_java_environment(java_home: str | None) -> dict[str, str]:
+    if not isinstance(java_home, str) or not java_home:
+        return {}
+    home = Path(java_home)
+    java_binary = home / "bin" / ("java.exe" if os.name == "nt" else "java")
+    if home.is_symlink() or java_binary.is_symlink() or not java_binary.is_file():
+        return {}
+    current_path = os.environ.get("PATH", "")
+    return {
+        "JAVA_HOME": str(home),
+        "PATH": str(home / "bin") + (os.pathsep + current_path if current_path else ""),
+    }
+
+
+def _ghidra_settings_environment(settings_dir: Path) -> dict[str, str]:
+    """Give each Ghidra run a private user-settings tree.
+
+    Ghidra caches compiled Java scripts below the user settings directory and
+    does not key that cache by the JVM that produced it.  Reusing the global
+    cache after a JDK change loads class files with an unsupported version and
+    aborts before the boundary script executes.  A per-run directory forces
+    compilation with the JVM selected for this run.
+    """
+    value = str(settings_dir)
+    if any(character.isspace() for character in value):
+        value = f'"{value}"'
+    return {"GHIDRA_JAVA_OPTIONS": f"-Dapplication.settingsdir={value}"}
+
+
 def _drain_bounded(stream: Any, output: bytearray, limit: int) -> None:
     while True:
         chunk = stream.read(8192)
@@ -3026,13 +3055,16 @@ def _run_process(
     stop_requested: Callable[[], bool],
     deadline: float | None = None,
     input_text: str | None = None,
+    environment_overrides: Mapping[str, str] | None = None,
 ) -> WorkResult:
     if not argv or not cwd.is_dir():
         raise ValueError("process command and worktree directory are required")
+    environment = _safe_child_environment()
+    environment.update(environment_overrides or {})
     process = subprocess.Popen(
         list(argv),
         cwd=cwd,
-        env=_safe_child_environment(),
+        env=environment,
         stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -3304,6 +3336,7 @@ class CampaignRunner:
         lease_seconds: float = 3660,
         ghidra_home: str | None = None,
         ghidra_windows_home: str | None = None,
+        ghidra_java_home: str | None = None,
         wsl_distro: str = "Ubuntu",
         expected_eboot_sha256: str | None = None,
         checkpoint_repo_root: Path | None = None,
@@ -3351,6 +3384,7 @@ class CampaignRunner:
         self.lease_seconds = max(60.0, lease_seconds)
         self.ghidra_home = ghidra_home
         self.ghidra_windows_home = ghidra_windows_home
+        self.ghidra_java_home = ghidra_java_home
         self.wsl_distro = wsl_distro
         self.expected_eboot_sha256 = expected_eboot_sha256
         self.max_retry_after_seconds = max(1.0, max_retry_after_seconds)
@@ -4175,6 +4209,8 @@ class CampaignRunner:
         if os.name == "nt":
             if not self.ghidra_windows_home:
                 raise ValueError("machine-local Windows Ghidra home is not configured")
+            if self.ghidra_windows_home.startswith(("\\\\", "//")):
+                raise ValueError("Windows Ghidra home must be local; UNC launcher paths are not supported")
         elif not self.ghidra_home or not self.ghidra_home.startswith("/"):
             raise ValueError("machine-local WSL/Linux Ghidra home is not configured")
 
@@ -4194,6 +4230,9 @@ class CampaignRunner:
             raise ValueError("refusing to overwrite existing Ghidra project/evidence")
         project_dir.mkdir(parents=True, exist_ok=False)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_dir = project_dir / "user-settings"
+        settings_dir.mkdir(parents=True, exist_ok=False)
+        ghidra_environment = _ghidra_settings_environment(settings_dir)
         project_name = f"seto_eboot_{address}_run_{analysis_id}"
         script_dir = worktree / "scripts" / "ghidra"
         if os.name == "nt":
@@ -4202,6 +4241,10 @@ class CampaignRunner:
             wrapper = worktree / "scripts" / "run_ghidra_headless.ps1"
             if powershell is None or ghidra_bat.is_symlink() or not ghidra_bat.is_file() or not wrapper.is_file():
                 raise ValueError("Windows Ghidra headless launcher or safe wrapper is missing")
+            java_environment = _ghidra_java_environment(self.ghidra_java_home)
+            if self.ghidra_java_home and not java_environment:
+                raise ValueError("configured Windows JDK is missing or invalid")
+            ghidra_environment.update(java_environment)
             argv = [
                 powershell,
                 "-NoProfile",
@@ -4243,6 +4286,7 @@ class CampaignRunner:
                 output_limit=8_000_000,
                 stop_requested=self.store.stop_requested,
                 deadline=deadline,
+                environment_overrides=ghidra_environment,
             ),
         )
         if process.interrupted:
@@ -8787,34 +8831,52 @@ def _doctor(
                 for name, argv in checks.items():
                     checked = subprocess.run(argv, capture_output=True, timeout=30, check=False)
                     toolchain[name] = "READY" if checked.returncode == 0 else "BLOCKED"
-                java_check = subprocess.run(
-                    [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", "/usr/bin/java"],
-                    capture_output=True,
-                    timeout=30,
-                    check=False,
-                )
                 ghidra_config = repo_root / config["toolchain"]["ghidra_local_config"]
                 if ghidra_config.is_file() and not ghidra_config.is_symlink():
                     ghidra_settings = tomllib.loads(ghidra_config.read_text(encoding="utf-8"))
                     ghidra_home = ghidra_settings.get("ghidra", {}).get("home")
-                    if java_check.returncode == 0 and isinstance(ghidra_home, str) and ghidra_home.startswith("/"):
-                        headless = f"{ghidra_home.rstrip('/')}/support/analyzeHeadless"
-                        checked = subprocess.run(
-                            [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", headless],
+                    native_windows = os.name == "nt"
+                    if not native_windows:
+                        java_check = subprocess.run(
+                            [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", "/usr/bin/java"],
                             capture_output=True,
                             timeout=30,
                             check=False,
                         )
-                        toolchain["ghidra"] = "READY" if checked.returncode == 0 else "BLOCKED"
-                    if toolchain["ghidra"] != "READY":
-                        windows_home = ghidra_settings.get("ghidra", {}).get("windows_home")
+                        if java_check.returncode == 0 and isinstance(ghidra_home, str) and ghidra_home.startswith("/"):
+                            headless = f"{ghidra_home.rstrip('/')}/support/analyzeHeadless"
+                            checked = subprocess.run(
+                                [wsl, "-d", config["toolchain"]["wsl_distro"], "--exec", "test", "-x", headless],
+                                capture_output=True,
+                                timeout=30,
+                                check=False,
+                            )
+                            toolchain["ghidra"] = "READY" if checked.returncode == 0 else "BLOCKED"
+
+                    # CampaignRunner._prepare_claim invokes analyzeHeadless.bat
+                    # on Windows even when the WSL installation is executable.
+                    # Windows readiness therefore exercises the same local
+                    # launcher, rather than accepting the unrelated WSL binary.
+                    if native_windows or toolchain["ghidra"] != "READY":
+                        ghidra_settings_entry = ghidra_settings.get("ghidra", {})
+                        windows_home = ghidra_settings_entry.get("windows_home")
+                        java_home = ghidra_settings_entry.get("java_home")
                         powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
                         wrapper = repo_root / "scripts" / "run_ghidra_headless.ps1"
-                        if isinstance(windows_home, str) and powershell and wrapper.is_file():
+                        java_environment = _ghidra_java_environment(java_home)
+                        local_windows_home = (
+                            isinstance(windows_home, str)
+                            and not windows_home.startswith(("\\\\", "//"))
+                        )
+                        if local_windows_home and java_environment and powershell and wrapper.is_file():
                             launcher = Path(windows_home) / "support" / "analyzeHeadless.bat"
                             if launcher.is_file() and not launcher.is_symlink():
+                                env = _safe_child_environment()
+                                env.update(java_environment)
                                 checked = subprocess.run(
                                     [powershell, "-NoProfile", "-File", str(wrapper), str(launcher), "--help"],
+                                    cwd=repo_root,
+                                    env=env,
                                     capture_output=True,
                                     text=True,
                                     timeout=120,
@@ -9621,6 +9683,7 @@ def main(argv: list[str] | None = None) -> int:
                 lease_seconds=float(limits["lease_seconds"]),
                 ghidra_home=local_ghidra.get("home"),
                 ghidra_windows_home=local_ghidra.get("windows_home"),
+                ghidra_java_home=local_ghidra.get("java_home"),
                 wsl_distro=config["toolchain"]["wsl_distro"],
                 expected_eboot_sha256=config["inputs"]["eboot_sha256"],
                 checkpoint_repo_root=REPO_ROOT,

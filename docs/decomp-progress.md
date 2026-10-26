@@ -7154,25 +7154,50 @@ históricas, 24 no escopo legado `opencode` (suspenso por quota), 1 em Kita e 1
 em Alluka. Ambos os escopos remotos permanecem ativos; nenhum host alterou a
 quota registrada dos demais.
 
-O próximo candidato foi seletivamente reaberto com hipótese documentada
-(`0x38B58`, exact, 4/24, sem limitações), mas a execução adicional parou antes
-de qualquer inferência porque o preflight local de Ghidra ficou BLOCKED. Causa
-observada: WSL não tem `/usr/bin/java`/`/usr/lib/jvm`; `JAVA_HOME` global aponta
-para Corretto 25, incompatível com Ghidra 12.1.3; o JDK 21.0.3 instalado também
-foi recusado como versão não suportada. O launcher Windows pelo caminho UNC
-terminou com erro de sintaxe CMD. Nenhum JDK foi instalado, nenhuma verificação
-foi contornada e o candidato `0x38B58` permanece `pending` sem tentativa. A
-retomada produtiva aguarda um Java suportado/local Ghidra READY; o orçamento
-cumulativo continua em 937 e o limite de duração local permanece 21.255 s.
+O candidato seguinte (`0x38B58`) foi reaberto com hipótese documentada, mas a
+primeira execução parou antes de qualquer inferência porque o preflight de
+Ghidra ficou BLOCKED: o WSL não tinha `/usr/bin/java`, o `JAVA_HOME` global
+apontava para Corretto 25 e o JDK 21.0.3 instalado era recusado. Com o Ghidra
+12.1.3 e o JDK 21.0.3 no Windows, uma nova análise fresca ainda falhava antes
+do script de boundary. A causa raiz foi o cache global de scripts compilados:
+`SetoAnalyzeEntry` havia sido compilado sob JDK 25 (class file 69) e o runtime
+JDK 21 (65) abortava com `UnsupportedClassVersionError`; o cache não é
+versionado por JVM. A correção mantém Ghidra/MWCC/matcher no Windows e dá a cada
+execução um diretório privado de user settings
+(`-Dapplication.settingsdir=<projeto>/user-settings`), forçando a recompilação
+com o JDK selecionado. Um teste RED→GREEN cobre o isolamento e o quoting do
+caminho; a análise fresca real de `0x38B58` com JDK 21 passou a emitir os
+marcadores de boundary.
 
-Estado de proteção: SQLite integrity `ok`, 0 leases ativos, `0x4217C` continua
-blocked, `0x2C28C`/`0x31650` não foram reconstruídos, e o baseline MATCHED não
-mudou. `tests/test_decomp_campaign.py` passou com **195 testes**. As últimas duas
-execuções locais da suíte completa foram limitadas por recursos do PC: uma teve
-`OutOfMemoryError` do Ghidra ao alocar 3,2 MB de memória nativa; a mais recente
-teve `RuntimeError: can't start new thread` ao executar Git/subprocesso, com
-menos de 1 GB de commit virtual disponível (`1036 passed, 44 skipped, 1 failed`).
-Os oito jobs CI do head `7edee54`
-passaram em Ubuntu/Windows × Python 3.11/3.12. `compileall` e `git diff --check`
-passaram. A documentação/configuração está na branch `feat/seto-decomp-046`; PR
-#47 permanece sem merge.
+`0x3D868` foi reaberto com hipótese exata e certificado na tentativa 197
+(`remote-alluka`, sessão `ses_e85edf733ffeJ0d7AuVhhXKAfM`) com 24/24 words e
+dois builds locais idênticos. Para `0x38B58`, um experimento local determinístico
+MWCC/matcher produziu 24/24 MATCHED com source SHA-256
+`5b3bd2c8a6dbcb89fa6dc436fe9f805d159898da7c4289f9af80f6d6d2424c01` e object
+SHA-256 `d1771b55dec3262e3e23bdc19e36f5bf50545835a46f4de14e0d7a0551255fd0` em
+dois builds independentes. O experimento foi registrado no SQLite pelo mecanismo
+existente e a fonte exata foi semeada como hipótese. A tentativa 198
+(`remote-kita`) passou o Ghidra, mas terminou em `quota_exhausted` após 3 s; a
+tentativa 199 (`remote-alluka`, sessão `ses_e8570f94bffeNoeZBp9Aicaz2o`) adotou
+a fonte registrada e foi certificada pelos dois builds locais, promovendo
+`0x38B58`. Nenhum resultado parcial foi promovido.
+
+Baseline após a janela: EBOOT **10/237 → 12/285 MATCHED/instruções**; PRXs
+permanecem **16/912**. Totais SQLite: **199 tentativas**, integridade `ok`, 0
+leases ativos; 4 candidatos `matched`, 35 `stalled` e 19 `blocked`. `0x4217C`
+continua blocked e `0x2C28C`/`0x31650` não foram reconstruídos. O escopo
+`opencode:kita-server` ficou `suspended_quota`; `opencode:alluka` e `openai`
+permanecem ativos. `tests/test_decomp_campaign.py` (foco Ghidra) e
+`tests/test_decomp_ssh.py` passaram; `compileall` e `git diff --check` estão
+limpos. As últimas execuções locais da suíte completa foram limitadas por
+recursos do PC (`OutOfMemoryError` do Ghidra e `RuntimeError: can't start new
+thread` com menos de 1 GB de commit virtual). A documentação/configuração está
+na branch `feat/seto-decomp-046`; PR #47 permanece aberta e sem merge.
+
+## SETO-DECOMP-046 — Promoções certificadas
+
+Baseline final: EBOOT **12/285** funções/instruções MATCHED; PRXs **16/912**;
+SQLite com **199** tentativas e integridade `ok`.
+
+- `0x3d868` — 24 instruções, source SHA-256 `1d232ac72f77ed74124612db8ae0863ad25042c4edc6967e109d71c0c04f404d`; origem `remote-alluka` / sessão `ses_e85edf733ffeJ0d7AuVhhXKAfM`; dois builds MWCC certificados: `af6b71a909cbbe3f51434bc839aaf3532f03462347c5abe103983b6d3f9adb24, af6b71a909cbbe3f51434bc839aaf3532f03462347c5abe103983b6d3f9adb24`.
+- `0x38b58` — 24 instruções, source SHA-256 `5b3bd2c8a6dbcb89fa6dc436fe9f805d159898da7c4289f9af80f6d6d2424c01`; origem `remote-alluka` / sessão `ses_e8570f94bffeNoeZBp9Aicaz2o`; dois builds MWCC certificados: `d1771b55dec3262e3e23bdc19e36f5bf50545835a46f4de14e0d7a0551255fd0, d1771b55dec3262e3e23bdc19e36f5bf50545835a46f4de14e0d7a0551255fd0`.
