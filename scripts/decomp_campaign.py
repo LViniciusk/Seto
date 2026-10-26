@@ -3162,9 +3162,14 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
         "build/seto035/export-triage.json for the export/NID, proven call sites, relocations, "
          "and references; follow only evidence paths actually present in the supplied task "
          "evidence. Review the current candidate source and the best prior checkpoint/source "
-         "hash before changing anything. `best_match` is the strongest verified result; "
+          "hash before changing anything. `best_match` is the strongest verified result; "
           "`last_attempt` is the latest result and may be worse. Read their exact matcher report "
-         "paths and preserve a stronger hypothesis while recording the first causal divergence. "
+          "paths and preserve a stronger hypothesis while recording the first causal divergence. "
+          "Work on the first binary divergence verified by a complete matcher report. Before "
+          "editing, state one concrete C change and its expected MIPS effect; preserve the "
+          "strongest source and do not repeat a tested source hash as a new attempt. If no "
+          "evidence-backed change is available, name the missing evidence and release the "
+          "function rather than guessing. "
           f"{worker_return_guidance}"
           "A bounded `last_diagnostic_detail` is a sanitized local MWCC/matcher excerpt; use it "
           "to make a specific correction, not as evidence of equivalence. "
@@ -4397,6 +4402,8 @@ class CampaignRunner:
                 "best_match",
                 "last_attempt",
                 "local_experiments",
+                "local_recoveries",
+                "recovery_reason",
             ):
                 if key in claim.checkpoint:
                     checkpoint[key] = claim.checkpoint[key]
