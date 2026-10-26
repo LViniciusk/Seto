@@ -7167,6 +7167,12 @@ cumulativo continua em 937 e o limite de duração local permanece 21.255 s.
 
 Estado de proteção: SQLite integrity `ok`, 0 leases ativos, `0x4217C` continua
 blocked, `0x2C28C`/`0x31650` não foram reconstruídos, e o baseline MATCHED não
-mudou. O teste local concluiu 1.037 passed e 44 skipped; os skips são integrações
-reais opcionais/WSl ausentes, não falhas do transporte. A documentação/configuração
-está na branch `feat/seto-decomp-046`; PR #47 permanece sem merge.
+mudou. `tests/test_decomp_campaign.py` passou com **195 testes**. As últimas duas
+execuções locais da suíte completa foram limitadas por recursos do PC: uma teve
+`OutOfMemoryError` do Ghidra ao alocar 3,2 MB de memória nativa; a mais recente
+teve `RuntimeError: can't start new thread` ao executar Git/subprocesso, com
+menos de 1 GB de commit virtual disponível (`1036 passed, 44 skipped, 1 failed`).
+Os oito jobs CI do head `7edee54`
+passaram em Ubuntu/Windows × Python 3.11/3.12. `compileall` e `git diff --check`
+passaram. A documentação/configuração está na branch `feat/seto-decomp-046`; PR
+#47 permanece sem merge.
