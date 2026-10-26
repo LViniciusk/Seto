@@ -6909,3 +6909,73 @@ Não foram adicionadas fontes experimentais sem certificação.
 | MWCC / matcher local | quatro builds 28/28 para `conditional-pointer`; tentativa produtiva 28/28; dois builds adicionais na promoção |
 | Campanha / SQLite | 1 tentativa produtiva nova, 5 cumulativas, nenhuma em execução; limite 12 e duração máxima 5.400 s respeitados |
 | CI GitHub Actions | **passou** nos quatro jobs Ubuntu/Windows × Python 3.11/3.12; ambos os eventos push e pull request concluíram com sucesso |
+
+## SETO-DECOMP-045 — Promoções certificadas
+
+- `0x31650` — 3 instruções, source SHA-256 `2cf528a4ffe13596853f04ff551d15229e234372d5600c65ed0806c46db0579f`; origem `deepseek-04` / sessão `ses_e8a14f981ffenhr9v6o6Y1SFfq`; dois builds MWCC certificados: `2fc3c31734199ba4f4b038009886542c26521c8049d66f74cd2f6f16ffeb8fe5, 2fc3c31734199ba4f4b038009886542c26521c8049d66f74cd2f6f16ffeb8fe5`.
+
+## SETO-DECOMP-045 — Campanha massiva e resultados
+
+### Orquestrador e testes
+
+- Estendidos `CampaignStore` e `CampaignRunner` existentes: workers repetidos por modelo, capacidade compartilhada por provedor, seleção justa de funções sem tentativa, reservas sem tentativa até iniciar `opencode run`, boundaries Ghidra em paralelo e integração MATCHED assíncrona/serializada.
+- `--all-eligible` é explícito, exclusivo de `--candidate-address` e continua subordinado a `--productive`; `--max-tasks` segue sendo teto cumulativo SQLite. `load_config()` não impõe os tetos históricos de 2 workers / 40 tentativas / 2 horas.
+- Descoberta idempotente adicionou 38 exports com endereço/NID únicos, relocation aplicada e callsites PRX comprovados. A fila cresceu de 20 para 58 candidatos; os novos entraram com tamanho zero e só puderam ser processados depois de boundary Ghidra completo.
+- Correção micro da PR #46: endereços certificados são normalizados/validados em `main()` e passados explicitamente a `seed()`. Baseline `MATCHED` não é sintetizado em SQLite; linhas existentes, checkpoints, sessões e tentativas não são reescritos. Claims de inferência/Ghidra, retries seletivos/em massa e contadores de elegibilidade ignoram essas funções mesmo se houver uma linha antiga pendente/bloqueada. Inventários antigos sem a lista continuam compatíveis.
+- Protegidos `best_result`, checkpoints, sessões anteriores e worktrees. Falhas de sessão OpenCode agora são registradas sem gastar tentativa; falhas de quota durante preparação afetam somente o provedor correspondente.
+- A revisão pós-campanha corrigiu a telemetria dos semáforos (registrar `*_finished` antes de liberar o slot) e o evento duplicado de boundary (validação e conclusão da lease passam a ter eventos distintos). Esses ajustes não alteram os eventos históricos nem os resultados da campanha encerrada.
+- Testes RED/GREEN cobrem 8 workers / mesmos provider-model, teto cumulativo concorrente, cobertura inicial da fila, boundaries sem tentativas, isolamento/hash, pausa por quota, export discovery, timeout/stop e promoção sem bloquear inferência.
+
+### Janela autorizada
+
+| Medida | Resultado |
+|---|---:|
+| Workers configurados | 8 (4 Luna + 4 DeepSeek) |
+| Limites de recurso | 4 inferências/provedor, 2 slots Ghidra, 4 matcher |
+| Tentativas SQLite ao iniciar | 5 |
+| Novas tentativas / cumulativo final | 82 / **87** (teto 261; orçamento de 256 novas) |
+| Duração | **5.357,39 s** (1 h 29 min; teto 6 h) |
+| Workers em inferência simultânea | pico observado: 4 OpenAI + 4 OpenCode; pico total 6 |
+| Boundary independente | 36 validados / 14 bloqueados, de 50 candidatos `UNVERIFIED` |
+| Novos exports descobertos | 38 |
+| Provedores ao encerrar | OpenAI ativo; OpenCode suspenso por quota |
+| Estado final | sem leases, sem candidatos `pending` elegíveis, sem boundary pendente |
+
+O retorno do runner registrou 82 outcomes: 1 `MATCHED`, 35 tentativas que preservaram/refinaram hipóteses (`pending` no ledger), 31 bloqueios locais, 5 falhas de provedor/execução e 10 candidatos `stalled`. No SQLite final, os estados são 2 `matched` (inclui o baseline `0x2C28C`), 46 `blocked` e 10 `stalled`. Os 14 boundaries bloqueados mantêm tamanho zero e não consumiram inferência. Houve 2 eventos de quota DeepSeek e 3 timeouts; OpenAI continuou recebendo trabalho. A janela terminou por esgotamento de trabalho elegível/quota, não por stop nem pelo limite de tempo/tentativas.
+
+`0x4217C` permaneceu com as mesmas 2 tentativas históricas e diagnóstico `checkpoint_invalid`; a campanha 045 não a retryou. O banco terminou com `PRAGMA integrity_check = ok`.
+
+### Boundaries
+
+- Dos 50 candidatos inicialmente sem boundary (12 do inventário original + 38 descobertos), Ghidra confirmou 36 boundaries completos. Oito candidates já tinham boundary `EXACT` no inventário inicial; ao final, 44/58 estavam `EXACT` e 14 continuaram `UNVERIFIED`/bloqueados, todos com `size_bytes = 0`.
+- Endereços confirmados: `0x31650`, `0x42838`, `0x44f20`, `0x428f0`, `0x35f50`, `0x35e44`, `0x55824`, `0x55644`, `0x44d70`, `0x44c68`, `0x15b58`, `0x9c98`, `0x6694`, `0x10bc`, `0x2ad74`, `0x2b0f4`, `0x2c35c`, `0x2f648`, `0x2f888`, `0x33ae0`, `0x33b28`, `0x35558`, `0x38040`, `0x3857c`, `0x38b10`, `0x38b58`, `0x38bb8`, `0x38bc8`, `0x3d7d0`, `0x3d868`, `0x42978`, `0x4416c`, `0x44c98`, `0x53bd4`, `0x5598c`, `0x61b50`.
+- Boundaries não confirmados, mantidos com tamanho zero: `0x36430`, `0x44f38`, `0x2f420`, `0x3a13c`, `0x3d8c8`, `0x428d8`, `0x44d04`, `0x4b29c`, `0x55518`, `0x615fc`, `0x61634`, `0x6164c`, `0x61664`, `0x616fc`.
+- Houve 58 execuções Ghidra ao todo: as 50 leases de discovery mais análises adicionais para revalidar candidatos `EXACT` antes de inferência. O evento histórico `boundary_validated` foi duplicado por uma chamada em `update_boundary()` e outra em `finish_boundary()`; por isso, a contagem autoritativa é o retorno `36 validated / 14 blocked`, não a contagem bruta desse evento antigo.
+- Foi observado um artefato local de JVM sem memória (`hs_err_pid152272.log`, tentativa de mapear 512 MiB); não há evidência suficiente para atribuí-lo a um endereço específico. O artefato é preservado localmente e excluído do Git.
+
+### Fontes, compilação e equivalência
+
+| Endereço | Boundary | Resultado final | Modelo / sessão | Certificação |
+|---|---:|---|---|---|
+| `0x31650` | 12 bytes / 3 instruções | **MATCHED 3/3**, promovido | `opencode/deepseek-v4.1-flash-free` / `ses_e8a14f981ffenhr9v6o6Y1SFfq` | Fonte SHA-256 `2cf528a4ffe13596853f04ff551d15229e234372d5600c65ed0806c46db0579f`; dois objetos determinísticos SHA-256 `2fc3c31734199ba4f4b038009886542c26521c8049d66f74cd2f6f16ffeb8fe5`; dois builds adicionais idênticos na promoção |
+
+MWCC produziu pelo menos um objeto não vazio para **31 funções candidatas**. Em 11 houve duas comparações completas reportadas: `0x31650` MATCHED e 10 hipóteses preservadas como NÃO MATCHED/INCONCLUSIVE, sem promoção (`0x8040`, `0x9c98`, `0x15b58`, `0x38b58`, `0x38bb8`, `0x38bc8`, `0x42978`, `0x35f50`, `0x55644`, `0x44c68`). Os outros 20 endereços com objeto não têm duas comparações JSON completas; incluem saídas do matcher sem relatório válido e não são equivalência certificada. Não foram promovidas fontes por score parcial.
+
+A execução ativa tinha carregado o wrapper anterior às correções diagnósticas finais. Em 23 tentativas o matcher terminou como `internal_error`; diagnósticos locais reproduzíveis incluem símbolo esperado ausente (`0x302c4`, `0x42838`) e objeto incompleto (`0x37f38`). A branch agora preserva um `INCONCLUSIVE` explícito apenas quando há objeto e proveniência, separa falhas de compilação de comparações incompletas e instrui o símbolo exato `func_<ADDRESS>`. Essa correção não reescreveu nem reclassificou o histórico SQLite da campanha.
+
+### Baselines e validação local
+
+| Baseline | Antes | Depois |
+|---|---:|---:|
+| EBOOT MATCHED | 9 funções / 234 instruções | **10 funções / 237 instruções** |
+| PRXs MATCHED | 16 funções / 912 instruções | 16 funções / 912 instruções |
+
+| Gate final | Resultado |
+|---|---|
+| `tests/test_decomp_campaign.py` | **175 passed** |
+| Suíte completa, Windows / Python 3.12 | **1010 passed, 44 skipped** |
+| `compileall -q src scripts tests` | clean |
+| `git diff --check` | clean |
+| CI GitHub Actions | **passou** nos dois eventos (push e pull request), Ubuntu/Windows × Python 3.11/3.12; 8 jobs concluídos |
+
+Token/custo não são reportados pela integração OpenCode atual. O throughput de inferência foi 82 tentativas em 5.357,39 s (**55,1 tentativas/h**); os eventos mediram 60 execuções OpenAI (média 38,8 s) e 22 OpenCode/DeepSeek (média 411,3 s, incluindo timeouts).

@@ -2,8 +2,62 @@
   "schema_version": 1,
   "source_commit": "5a17ff3c5498666604c1fcc124f4c408de18ed9b",
   "baseline": {
-    "eboot_matched_functions": 8,
-    "eboot_matched_instructions": 206,
+    "eboot_matched_functions": 10,
+    "eboot_matched_instructions": 237,
+    "eboot_matched_addresses": [
+      "0x2c28c",
+      "0x31650",
+      "0x33d10",
+      "0x3643c",
+      "0x36ccc",
+      "0x36d1c",
+      "0x37bc8",
+      "0x388b4",
+      "0x38db4",
+      "0x3d8f0"
+    ],
+    "eboot_matched_ranges": [
+      {
+        "address": "0x2c28c",
+        "size_bytes": 112
+      },
+      {
+        "address": "0x31650",
+        "size_bytes": 12
+      },
+      {
+        "address": "0x33d10",
+        "size_bytes": 60
+      },
+      {
+        "address": "0x3643c",
+        "size_bytes": 168
+      },
+      {
+        "address": "0x36ccc",
+        "size_bytes": 80
+      },
+      {
+        "address": "0x36d1c",
+        "size_bytes": 112
+      },
+      {
+        "address": "0x37bc8",
+        "size_bytes": 72
+      },
+      {
+        "address": "0x388b4",
+        "size_bytes": 72
+      },
+      {
+        "address": "0x38db4",
+        "size_bytes": 252
+      },
+      {
+        "address": "0x3d8f0",
+        "size_bytes": 8
+      }
+    ],
     "prx_matched_functions": 16,
     "prx_matched_instructions": 912
   },
@@ -120,7 +174,7 @@
     },
     {
       "address": "0x31650",
-      "size_bytes": 12,
+      "size_bytes": 0,
       "nid": "0x9EA6989A",
       "priority": 48,
       "boundary_status": "UNVERIFIED",
@@ -128,14 +182,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 3 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 9,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x42838",
-      "size_bytes": 36,
+      "size_bytes": 0,
       "nid": "0x60B55A50",
       "priority": 44,
       "boundary_status": "UNVERIFIED",
@@ -143,14 +197,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 9 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 5,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x36430",
-      "size_bytes": 12,
+      "size_bytes": 0,
       "nid": "0xF462EE6E",
       "priority": 42,
       "boundary_status": "UNVERIFIED",
@@ -158,14 +212,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 3 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 4,
         "note": "Adjacent to the certified 0x3643c function; verify non-overlap and exact entry first."
       }
     },
     {
       "address": "0x44f38",
-      "size_bytes": 24,
+      "size_bytes": 0,
       "nid": "0xA4AFF8E6",
       "priority": 38,
       "boundary_status": "UNVERIFIED",
@@ -173,14 +227,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 6 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 3,
         "note": "A neighboring export at 0x44f20 is inventoried separately; confirm no overlapping body."
       }
     },
     {
       "address": "0x44f20",
-      "size_bytes": 24,
+      "size_bytes": 0,
       "nid": "0xB8AD96EA",
       "priority": 37,
       "boundary_status": "UNVERIFIED",
@@ -188,14 +242,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 6 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 3,
         "note": "A neighboring export at 0x44f38 is inventoried separately; confirm no overlapping body."
       }
     },
     {
       "address": "0x428f0",
-      "size_bytes": 136,
+      "size_bytes": 0,
       "nid": "0xB89D38DC",
       "priority": 36,
       "boundary_status": "UNVERIFIED",
@@ -203,14 +257,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 34 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 3,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x35f50",
-      "size_bytes": 12,
+      "size_bytes": 0,
       "nid": "0x1EC5342B",
       "priority": 34,
       "boundary_status": "UNVERIFIED",
@@ -218,14 +272,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 3 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 3,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x35e44",
-      "size_bytes": 268,
+      "size_bytes": 0,
       "nid": "0xDFCA450B",
       "priority": 33,
       "boundary_status": "UNVERIFIED",
@@ -233,14 +287,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 67 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 3,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x55824",
-      "size_bytes": 180,
+      "size_bytes": 0,
       "nid": "0x450CD6C5",
       "priority": 28,
       "boundary_status": "UNVERIFIED",
@@ -248,14 +302,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 45 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 2,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x55644",
-      "size_bytes": 284,
+      "size_bytes": 0,
       "nid": "0x5998BFD7",
       "priority": 27,
       "boundary_status": "UNVERIFIED",
@@ -263,14 +317,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 71 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 2,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x44d70",
-      "size_bytes": 76,
+      "size_bytes": 0,
       "nid": "0xD853F15C",
       "priority": 26,
       "boundary_status": "UNVERIFIED",
@@ -278,14 +332,14 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 19 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 2,
         "note": "Do not compile until an exact Ghidra body is recorded."
       }
     },
     {
       "address": "0x44c68",
-      "size_bytes": 24,
+      "size_bytes": 0,
       "nid": "0x33ED567B",
       "priority": 25,
       "boundary_status": "UNVERIFIED",
@@ -293,9 +347,1163 @@
       "evidence": {
         "source": "build/seto035/export-triage.json real export/import triage",
         "historical_status": "NOT_ANALYZED_BY_GHIDRA",
-        "size_basis": "MIPS function detector candidate only; provisional 6 instructions",
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved",
         "prx_call_sites": 2,
         "note": "Do not compile until an exact Ghidra body is recorded."
+      }
+    },
+    {
+      "address": "0x15b58",
+      "size_bytes": 0,
+      "nid": "0X7661E728",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 4,
+        "pointer_site": "0x6ce04",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00015b58",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1dc4"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x9c98",
+      "size_bytes": 0,
+      "nid": "0X1B00FB95",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 17,
+        "pointer_site": "0x6ce38",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00009c98",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1b5c"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x6694",
+      "size_bytes": 0,
+      "nid": "0XEC6F1CF2",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 20,
+        "pointer_site": "0x6ce44",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00006694",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x4cc"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x10bc",
+      "size_bytes": 0,
+      "nid": "0XE8D57DC6",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 101,
+        "pointer_site": "0x6cf88",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x000010bc",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x64c"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x2ad74",
+      "size_bytes": 0,
+      "nid": "0X8288EEBC",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 535,
+        "pointer_site": "0x6d650",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0002ad74",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1cec"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x2b0f4",
+      "size_bytes": 0,
+      "nid": "0XD2A768F4",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 542,
+        "pointer_site": "0x6d66c",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0002b0f4",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1cac"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x2c35c",
+      "size_bytes": 0,
+      "nid": "0X85F89FE8",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 567,
+        "pointer_site": "0x6d6d0",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0002c35c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x734"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x2f420",
+      "size_bytes": 0,
+      "nid": "0X89812D8A",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 568,
+        "pointer_site": "0x6d6d4",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0002f420",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x750"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x2f648",
+      "size_bytes": 0,
+      "nid": "0X4B0DABFA",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 570,
+        "pointer_site": "0x6d6dc",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0002f648",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1e18"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x2f888",
+      "size_bytes": 0,
+      "nid": "0XC6C15111",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 572,
+        "pointer_site": "0x6d6e4",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0002f888",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1dd4"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x33ae0",
+      "size_bytes": 0,
+      "nid": "0X1856E536",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 648,
+        "pointer_site": "0x6d814",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00033ae0",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x80"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x33b28",
+      "size_bytes": 0,
+      "nid": "0X41AABF28",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 650,
+        "pointer_site": "0x6d81c",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00033b28",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1cc0"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x35558",
+      "size_bytes": 0,
+      "nid": "0XF5E3080C",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 657,
+        "pointer_site": "0x6d838",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00035558",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x2204"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x38040",
+      "size_bytes": 0,
+      "nid": "0X09794DF0",
+      "priority": 22,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 707,
+        "pointer_site": "0x6d900",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00038040",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x3b8",
+              "0x76c"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x3857c",
+      "size_bytes": 0,
+      "nid": "0X20560342",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 721,
+        "pointer_site": "0x6d938",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0003857c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0xd0c"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x38b10",
+      "size_bytes": 0,
+      "nid": "0X1D98951B",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 732,
+        "pointer_site": "0x6d964",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00038b10",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x324"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x38b58",
+      "size_bytes": 0,
+      "nid": "0X399AC68A",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 733,
+        "pointer_site": "0x6d968",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00038b58",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x344"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x38bb8",
+      "size_bytes": 0,
+      "nid": "0X42110BF9",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 734,
+        "pointer_site": "0x6d96c",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00038bb8",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x334"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x38bc8",
+      "size_bytes": 0,
+      "nid": "0XC62F9EAC",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 735,
+        "pointer_site": "0x6d970",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00038bc8",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x354"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x3a13c",
+      "size_bytes": 0,
+      "nid": "0X13A4081A",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 764,
+        "pointer_site": "0x6d9e4",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0003a13c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1d4"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x3d7d0",
+      "size_bytes": 0,
+      "nid": "0X8B6EA5EC",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 873,
+        "pointer_site": "0x6db98",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0003d7d0",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1f58"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x3d868",
+      "size_bytes": 0,
+      "nid": "0X1F190478",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 876,
+        "pointer_site": "0x6dba4",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0003d868",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x420"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x3d8c8",
+      "size_bytes": 0,
+      "nid": "0X8171F765",
+      "priority": 23,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 877,
+        "pointer_site": "0x6dba8",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0003d8c8",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x2214",
+              "0x2280"
+            ]
+          },
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x544"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x428d8",
+      "size_bytes": 0,
+      "nid": "0X2FD4863E",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 925,
+        "pointer_site": "0x6dc68",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x000428d8",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1f40"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x42978",
+      "size_bytes": 0,
+      "nid": "0X3BB2BAC6",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 927,
+        "pointer_site": "0x6dc70",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00042978",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0xfb8"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x4416c",
+      "size_bytes": 0,
+      "nid": "0X63E8C033",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 931,
+        "pointer_site": "0x6dc80",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0004416c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x2028"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x44c98",
+      "size_bytes": 0,
+      "nid": "0X4AA58320",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 936,
+        "pointer_site": "0x6dc94",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00044c98",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0xf8"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x44d04",
+      "size_bytes": 0,
+      "nid": "0XC9D9E989",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 938,
+        "pointer_site": "0x6dc9c",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00044d04",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0xf0"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x4b29c",
+      "size_bytes": 0,
+      "nid": "0X08813E19",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1069,
+        "pointer_site": "0x6dea8",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0004b29c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x70"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x53bd4",
+      "size_bytes": 0,
+      "nid": "0XF1BC43DB",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1117,
+        "pointer_site": "0x6df68",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00053bd4",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x60"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x55518",
+      "size_bytes": 0,
+      "nid": "0XD470D0B2",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1127,
+        "pointer_site": "0x6df90",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00055518",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1cc"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x5598c",
+      "size_bytes": 0,
+      "nid": "0X878EE1D3",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1131,
+        "pointer_site": "0x6dfa0",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0005598c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x6b8"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x615fc",
+      "size_bytes": 0,
+      "nid": "0XC859D5FE",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1148,
+        "pointer_site": "0x6dfe4",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x000615fc",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0xe4"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x61634",
+      "size_bytes": 0,
+      "nid": "0X74CA1190",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1150,
+        "pointer_site": "0x6dfec",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00061634",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0xdc"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x6164c",
+      "size_bytes": 0,
+      "nid": "0XBE3756D0",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1152,
+        "pointer_site": "0x6dff4",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x0006164c",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x1dc"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x61664",
+      "size_bytes": 0,
+      "nid": "0X2AE3C0AD",
+      "priority": 26,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1154,
+        "pointer_site": "0x6dffc",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00061664",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x2270",
+              "0x238c",
+              "0x23cc",
+              "0x2418",
+              "0x2444",
+              "0x2594"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x616fc",
+      "size_bytes": 0,
+      "nid": "0X6367AE39",
+      "priority": 22,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1162,
+        "pointer_site": "0x6e01c",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x000616fc",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libtutoriallist.prx",
+            "sites": [
+              "0x225c",
+              "0x2378"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
+      }
+    },
+    {
+      "address": "0x61b50",
+      "size_bytes": 0,
+      "nid": "0X57018B7C",
+      "priority": 21,
+      "boundary_status": "UNVERIFIED",
+      "initial_state": "needs_boundary",
+      "evidence": {
+        "source": "build/seto035/export-triage.json verified incremental discovery",
+        "triage_sha256": "2891f8931c2b703a87269f9fae3303aa58d15f9514162cd94c1b1136d983d65c",
+        "library": "libehsys",
+        "export_entry": 1,
+        "export_slot": 1187,
+        "pointer_site": "0x6e080",
+        "pointer_relocation": {
+          "type": "R_MIPS_32",
+          "addend": "0x00061b50",
+          "application_valid": true
+        },
+        "prx_call_sites": [
+          {
+            "module": "libhtml_view.prx",
+            "sites": [
+              "0x4e4"
+            ]
+          }
+        ],
+        "size_basis": "UNVERIFIED; no size assigned until a complete Ghidra boundary is proved"
       }
     }
   ]
