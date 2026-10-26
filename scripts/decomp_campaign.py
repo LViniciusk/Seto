@@ -3085,6 +3085,7 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
             "last_diagnostic_detail",
             "local_experiments",
             "local_recoveries",
+            "recovery_reason",
             "ghidra_log_path",
             "historical_hypothesis",
         )

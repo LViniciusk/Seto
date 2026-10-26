@@ -2447,6 +2447,7 @@ def test_successive_matcher_improvements_refine_same_function_and_session(
     assert len(session_state["runs"]) == 3
     assert all(recovery["report_path"] in prompt for prompt in session_state["prompts"])
     assert all(recovery["source_path"] in prompt for prompt in session_state["prompts"])
+    assert all(recovery_reason in prompt for prompt in session_state["prompts"])
     assert task["status"] == "pending"
     assert task["checkpoint"]["local_recoveries"] == [recovery]
     assert task["checkpoint"]["recovery_reason"] == recovery_reason
