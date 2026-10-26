@@ -33,6 +33,14 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from decomp_ssh import (
+    MAX_PROMPT_BYTES,
+    MAX_RESPONSE_BYTES,
+    RemoteTarget,
+    SSHExecutionError,
+    SSHExecutor,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO_ROOT / "config" / "decomp_campaign.toml"
@@ -47,6 +55,9 @@ CHATGPT_OAUTH_METHODS = frozenset(
 )
 OPENAI_PROVIDER_PACKAGE = "@opencode/ai/providers/openai"
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+REMOTE_PROJECT_OPENCODE_CONFIG = (
+    b'{"$schema":"https://opencode.ai/config.json","snapshots":false}\n'
+)
 AI_MEMORY_SERVER = "ai-memory"
 AI_MEMORY_READ_TOOLS = frozenset({"memory_query", "memory_read_page"})
 AI_MEMORY_READ_ACTIONS = frozenset(
@@ -151,6 +162,20 @@ class Worker:
     provider: str
     model: str
     agent: str = "seto-decomp-worker"
+    transport: str = "local"
+    host: str | None = None
+    remote_dir: str | None = None
+    quota_scope: str | None = None
+    remote_python: str = "python3"
+    remote_opencode: str = "opencode"
+
+    @property
+    def execution_scope(self) -> str:
+        if self.quota_scope:
+            return self.quota_scope
+        if self.transport == "ssh" and self.host:
+            return f"{self.provider}:{self.host.casefold()}"
+        return self.provider
 
 
 @dataclass(frozen=True)
@@ -167,6 +192,7 @@ class Claim:
     lease_until: float
     checkpoint: dict[str, Any]
     evidence: dict[str, Any]
+    model_provider: str | None = None
 
     @property
     def numeric_address(self) -> int:
@@ -951,6 +977,7 @@ class CampaignStore:
         worker_id: str,
         provider: str,
         *,
+        model_provider: str | None = None,
         lease_seconds: float = 1800,
         max_attempts_per_candidate: int = 8,
         max_total_attempts: int | None = None,
@@ -1003,7 +1030,11 @@ class CampaignStore:
                 (now, max_attempts_per_candidate, *normalized_excluded),
             )
             address_clause = ""
-            parameters: list[Any] = [now, max_attempts_per_candidate, provider]
+            parameters: list[Any] = [
+                now,
+                max_attempts_per_candidate,
+                model_provider or provider,
+            ]
             if eligible_addresses is not None:
                 normalized_addresses = sorted({item.lower() for item in eligible_addresses})
                 if not normalized_addresses:
@@ -1026,11 +1057,7 @@ class CampaignStore:
             if row is None:
                 db.commit()
                 return None
-            session_id = (
-                row["session_id"]
-                if reserve_only or row["last_provider"] == provider
-                else None
-            )
+            session_id = row["session_id"] if row["last_provider"] == provider else None
             attempt_number = int(row["attempt_count"]) + (0 if reserve_only else 1)
             lease_until = now + max(1.0, lease_seconds)
             db.execute(
@@ -1097,6 +1124,7 @@ class CampaignStore:
                 lease_until=lease_until,
                 checkpoint=checkpoint,
                 evidence=json.loads(row["evidence_json"]),
+                model_provider=model_provider or provider,
             )
             db.commit()
             return claim
@@ -1254,6 +1282,7 @@ class CampaignStore:
                     FailureKind.RATE_LIMIT,
                     FailureKind.NETWORK,
                     FailureKind.TIMEOUT,
+                    FailureKind.AUTH,
                     FailureKind.INTERRUPTED,
                 }:
                     raise ValueError("unsupported provider failure during preparation")
@@ -1264,7 +1293,7 @@ class CampaignStore:
                     delay = min(max_retry_after, max(delay or 2.0, 1.0))
                 provider_status = "active"
                 resume_at = None
-                preferred_provider = claim.provider
+                preferred_provider = claim.model_provider or claim.provider
                 if failure.kind is FailureKind.QUOTA_EXHAUSTED:
                     provider_status = "suspended_quota"
                     preferred_provider = None
@@ -1276,6 +1305,8 @@ class CampaignStore:
                     provider_status = "network_backoff"
                     available_at = now + float(delay or 0.0)
                     resume_at = available_at
+                elif failure.kind is FailureKind.AUTH:
+                    provider_status = "blocked_auth"
                 elif failure.kind is FailureKind.INTERRUPTED:
                     event_kind = "preparation_interrupted"
                 else:
@@ -1594,7 +1625,13 @@ class CampaignStore:
             attempt_result["campaign_origin"] = {
                 "attempt_number": claim.attempt_number,
                 "worker_id": claim.worker_id,
-                "provider": claim.provider,
+                "provider": claim.model_provider or claim.provider,
+                **(
+                    {"quota_scope": claim.provider}
+                    if claim.model_provider is not None
+                    and claim.model_provider != claim.provider
+                    else {}
+                ),
                 "session_id": claim.session_id,
             }
             best = attempt_result if improved or not previous else previous
@@ -2023,7 +2060,7 @@ class CampaignStore:
             checkpoint_json = _json_dump(checkpoint)
             provider_status = "blocked"
             task_status = "blocked"
-            preferred_provider: str | None = claim.provider
+            preferred_provider: str | None = claim.model_provider or claim.provider
             available_at = now
             if failure.kind is FailureKind.QUOTA_EXHAUSTED:
                 provider_status = "suspended_quota"
@@ -2037,6 +2074,10 @@ class CampaignStore:
                 provider_status = "network_backoff"
                 task_status = "pending"
                 available_at = now + float(delay or 0)
+            elif failure.kind is FailureKind.AUTH:
+                provider_status = "blocked_auth"
+                task_status = "pending"
+                preferred_provider = claim.model_provider or claim.provider
             elif failure.kind is FailureKind.AGENT_ERROR:
                 # Unknown errors pause this task, but are not mislabeled as quota and
                 # do not authorize moving it to the other provider.
@@ -2879,6 +2920,7 @@ class CampaignStore:
         self,
         provider: str,
         *,
+        model_provider: str | None = None,
         max_attempts_per_candidate: int,
         eligible_addresses: Sequence[str] | None = None,
         excluded_addresses: Collection[str] = (),
@@ -2898,7 +2940,10 @@ class CampaignStore:
             if provider_status in {"suspended_quota", "blocked_auth", "blocked"}:
                 return None
             address_clause = ""
-            parameters: list[Any] = [max_attempts_per_candidate, provider]
+            parameters: list[Any] = [
+                max_attempts_per_candidate,
+                model_provider or provider,
+            ]
             if eligible_addresses is not None:
                 normalized = sorted({str(item).lower() for item in eligible_addresses})
                 if not normalized:
@@ -2980,6 +3025,7 @@ def _run_process(
     output_limit: int,
     stop_requested: Callable[[], bool],
     deadline: float | None = None,
+    input_text: str | None = None,
 ) -> WorkResult:
     if not argv or not cwd.is_dir():
         raise ValueError("process command and worktree directory are required")
@@ -2987,7 +3033,7 @@ def _run_process(
         list(argv),
         cwd=cwd,
         env=_safe_child_environment(),
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=False,
@@ -3001,6 +3047,24 @@ def _run_process(
     ]
     for thread in readers:
         thread.start()
+    writer: threading.Thread | None = None
+    if input_text is not None:
+        assert process.stdin is not None
+
+        def write_input() -> None:
+            try:
+                process.stdin.write(input_text.encode("utf-8"))
+                process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+            finally:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+
+        writer = threading.Thread(target=write_input, daemon=True)
+        writer.start()
     started = time.monotonic()
     timed_out = interrupted = False
     while process.poll() is None:
@@ -3019,6 +3083,8 @@ def _run_process(
         _terminate_process(process)
     for thread in readers:
         thread.join(timeout=4)
+    if writer is not None:
+        writer.join(timeout=4)
     return WorkResult(
         returncode=process.returncode if process.returncode is not None else -1,
         stdout=stdout_buffer.decode("utf-8", errors="replace"),
@@ -3071,7 +3137,13 @@ def _extract_checkpoint(output: str) -> dict[str, Any]:
     raise ValueError("OpenCode did not return the required JSON checkpoint")
 
 
-def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
+def _prompt(
+    claim: Claim,
+    checkpoint: dict[str, Any],
+    worktree: Path,
+    *,
+    display_worktree: str | None = None,
+) -> str:
     compact_checkpoint = {
         key: checkpoint[key]
         for key in (
@@ -3202,7 +3274,7 @@ def _prompt(claim: Claim, checkpoint: dict[str, Any], worktree: Path) -> str:
         "stdout dumps, private input contents, or media contents.\n\n"
         f"Address: {claim.address}; size currently listed: {claim.size_bytes} bytes; "
         f"NID: {claim.nid}; boundary: {claim.boundary_status}; priority: {claim.priority}.\n"
-        f"Worktree: {worktree}\n"
+         f"Worktree: {display_worktree or worktree}\n"
         f"Task evidence/build root: build/decomp-campaign/{claim.worker_id}/"
         f"{claim.address.removeprefix('0x')} (paths in JSON must be repo-relative).\n"
         f"Candidate source path: decomp/src/eboot/func_{claim.numeric_address:08X}.c.\n"
@@ -3243,9 +3315,30 @@ class CampaignRunner:
         matcher_parallelism: int = 1,
         promotion_callback: Callable[[str, float | None], dict[str, Any]] | None = None,
         known_exact_ranges: Sequence[dict[str, Any]] = (),
+        ssh_executor: SSHExecutor | None = None,
+        remote_targets: Mapping[str, RemoteTarget] | None = None,
+        remote_policy_path: Path | None = None,
+        remote_triage_path: Path | None = None,
+        context_worktrees: Mapping[str, Path] | None = None,
+        allowed_models: Iterable[str] = (
+            "openai/gpt-6-luna",
+            "opencode/deepseek-v4.1-flash-free",
+        ),
     ):
         self.store = store
         self.command = list(opencode_command)
+        self.ssh_executor = ssh_executor or SSHExecutor(process_runner=self._run_ssh_process)
+        self.remote_targets = dict(remote_targets or {})
+        self.remote_policy_path = (
+            Path(remote_policy_path) if remote_policy_path is not None else None
+        )
+        self.remote_triage_path = (
+            Path(remote_triage_path) if remote_triage_path is not None else None
+        )
+        self.context_worktrees = {
+            key: Path(path) for key, path in (context_worktrees or {}).items()
+        }
+        self.allowed_models = frozenset(allowed_models)
         self.worktrees = {key: Path(value) for key, value in worktrees.items()}
         self.verifier = verifier or self._verify_with_matcher_twice
         self.auto_preflight = verifier is None
@@ -3323,9 +3416,275 @@ class CampaignRunner:
                 return [powershell, "-NoProfile", "-File", command[0], *command[1:]]
         return command
 
+    def _run_ssh_process(self, argv: Sequence[str], **kwargs: Any) -> WorkResult:
+        return _run_process(
+            argv,
+            cwd=Path(kwargs["cwd"]),
+            timeout=float(kwargs["timeout"]),
+            output_limit=max(self.output_limit, MAX_RESPONSE_BYTES),
+            stop_requested=self.store.stop_requested,
+            deadline=kwargs.get("deadline"),
+            input_text=kwargs.get("input"),
+        )
+
+    def _remote_target(
+        self, worker: Worker, claim: Claim | None = None
+    ) -> RemoteTarget:
+        target = self.remote_targets.get(worker.worker_id)
+        if target is None and worker.host and worker.remote_dir:
+            target = RemoteTarget(
+                worker.host,
+                worker.remote_dir,
+                worker.remote_python,
+                worker.remote_opencode,
+            )
+        if target is None:
+            raise ValueError(f"SSH worker {worker.worker_id} has no configured remote target")
+        return target.for_candidate(claim.address) if claim is not None else target
+
+    @staticmethod
+    def _checkpoint_context_paths(checkpoint: Mapping[str, Any]) -> set[str]:
+        paths: set[str] = set()
+
+        def add(value: Any) -> None:
+            if not isinstance(value, str):
+                return
+            normalized = value.replace("\\", "/")
+            if normalized.startswith("build/decomp-campaign/"):
+                paths.add(normalized)
+            elif normalized.startswith("decomp-campaign/"):
+                paths.add("build/" + normalized)
+
+        for key in ("ghidra_log_path", "latest_source_snapshot", "best_source_snapshot"):
+            add(checkpoint.get(key))
+        for key in ("best_match", "last_attempt", "local_recoveries", "local_experiments"):
+            value = checkpoint.get(key)
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                for path_key in (
+                    "source_path",
+                    "report_path",
+                    "snapshot_path",
+                    "source_snapshot_path",
+                    "latest_source_snapshot",
+                    "best_source_snapshot",
+                ):
+                    add(item.get(path_key))
+                report_paths = item.get("report_paths")
+                if isinstance(report_paths, list):
+                    for path in report_paths:
+                        add(path)
+        historical = checkpoint.get("historical_hypothesis")
+        if isinstance(historical, dict):
+            source_path = historical.get("source_path")
+            if isinstance(source_path, str) and source_path.startswith("seto038/"):
+                paths.add(source_path)
+        return paths
+
+    def _find_remote_context_source(self, worktree: Path, relative: str) -> Path | None:
+        if relative.startswith("seto038/"):
+            roots = [
+                worktree,
+                *(self.worktrees.values()),
+                *(self.context_worktrees.values()),
+            ]
+            if self.checkpoint_repo_root is not None:
+                roots.append(self.checkpoint_repo_root)
+            for root in roots:
+                candidate = root / relative
+                if candidate.is_file() and not candidate.is_symlink():
+                    return candidate
+            return None
+        if not relative.startswith("build/decomp-campaign/"):
+            return None
+        build_relative = relative.removeprefix("build/")
+        roots = [worktree, *self.worktrees.values(), *self.context_worktrees.values()]
+        # Best-result report paths name the producer's build subtree. In a
+        # remote-only run its preserved local worktree may not be selected as a
+        # model worker, but it remains a valid read-only evidence source.
+        for root in tuple(roots):
+            for sibling in root.parent.iterdir() if root.parent.is_dir() else ():
+                if sibling.is_dir() and not sibling.is_symlink():
+                    roots.append(sibling)
+        seen: set[Path] = set()
+        for root in roots:
+            normalized = root.resolve(strict=False)
+            if normalized in seen or root.is_symlink() or not root.is_dir():
+                continue
+            seen.add(normalized)
+            try:
+                candidate = campaign_build_path(root, build_relative)
+            except (OSError, ValueError):
+                continue
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+        if self.checkpoint_repo_root is not None:
+            try:
+                candidate = campaign_build_path(self.checkpoint_repo_root, build_relative)
+            except (OSError, ValueError):
+                candidate = None
+            if candidate is not None and candidate.is_file() and not candidate.is_symlink():
+                return candidate
+        return None
+
+    def _prepare_remote_claim(
+        self,
+        worker: Worker,
+        claim: Claim,
+        worktree: Path,
+        deadline: float | None,
+    ) -> RemoteTarget:
+        if worker.agent != "seto-decomp-worker":
+            raise ValueError("SSH transport only permits the reviewed seto-decomp-worker agent")
+        if self.remote_policy_path is None:
+            raise ValueError("restricted remote worker policy was not configured")
+        base_target = self._remote_target(worker)
+        target = self._remote_target(worker, claim)
+        common = {
+            "cwd": worktree,
+            "stop_requested": self.store.stop_requested,
+            "deadline": deadline,
+        }
+        ping = self.ssh_executor.request(
+            base_target,
+            {"op": "ping", "create_workspace": True},
+            timeout=30,
+            **common,
+        )
+        if ping.get("ok") is not True or ping.get("workspace_writable") is not True:
+            raise SSHExecutionError("remote worker workspace is not writable")
+        self.ssh_executor.request(
+            target,
+            {"op": "ping", "create_workspace": True},
+            timeout=30,
+            **common,
+        )
+        self.ssh_executor.put_file(
+            base_target,
+            ".opencode/agents/seto-decomp-worker.md",
+            self.remote_policy_path,
+            timeout=60,
+            **common,
+        )
+        self.ssh_executor.put_bytes(
+            base_target,
+            ".opencode/opencode.json",
+            REMOTE_PROJECT_OPENCODE_CONFIG,
+            timeout=60,
+            **common,
+        )
+        triage = self.remote_triage_path or (worktree / "build" / "seto035" / "export-triage.json")
+        files: dict[str, tuple[Path, bool]] = {}
+        if triage.is_file() and not triage.is_symlink():
+            files["build/seto035/export-triage.json"] = (triage, False)
+        elif claim.evidence:
+            raise ValueError("the referenced export/NID triage file is missing from the worker context")
+        address_hex = f"{claim.numeric_address:08X}"
+        source_relative = f"decomp/src/eboot/func_{address_hex}.c"
+        source = _safe_worktree_path(worktree, Path(source_relative))
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("assigned candidate C source is missing or unsafe before SSH inference")
+        files[source_relative] = (source, True)
+        for relative in self._checkpoint_context_paths(claim.checkpoint):
+            if relative.startswith("seto038/"):
+                path = self._find_remote_context_source(worktree, relative)
+                if path is not None:
+                    files[relative] = (path, False)
+                continue
+            build_relative = relative.removeprefix("build/")
+            path = self._find_remote_context_source(worktree, relative)
+            if path is None:
+                # Missing old reports are not authority to widen the transfer;
+                # the active Ghidra log is mandatory and checked below.
+                continue
+            files["build/" + build_relative] = (path, False)
+        ghidra_path = claim.checkpoint.get("ghidra_log_path")
+        if isinstance(ghidra_path, str):
+            ghidra_remote = (
+                ghidra_path
+                if ghidra_path.startswith("build/")
+                else "build/" + ghidra_path
+            )
+            if ghidra_remote not in files:
+                raise ValueError("validated Ghidra disassembly was not staged for the remote task")
+            if self.auto_preflight:
+                validated_cached_ghidra_boundary(worktree, claim)
+        elif self.auto_preflight:
+            raise ValueError("remote task is missing its validated Ghidra log path")
+        for relative, (path, writable) in sorted(files.items()):
+            self.ssh_executor.put_file(
+                target,
+                relative,
+                path,
+                writable=writable,
+                timeout=120,
+                **common,
+            )
+        return target
+
+    def _collect_remote_source(
+        self,
+        worker: Worker,
+        claim: Claim,
+        worktree: Path,
+        remote_result: Mapping[str, Any],
+        deadline: float | None,
+    ) -> None:
+        source = _safe_worktree_path(
+            worktree,
+            Path("decomp/src/eboot") / f"func_{claim.numeric_address:08X}.c",
+        )
+        expected = remote_result.get("source_sha256")
+        if expected is not None and (
+            not isinstance(expected, str) or not HEX_SHA256.fullmatch(expected)
+        ):
+            raise SSHExecutionError("remote source hash metadata is invalid")
+        try:
+            self.ssh_executor.collect_file(
+                self._remote_target(worker, claim),
+                f"decomp/src/eboot/func_{claim.numeric_address:08X}.c",
+                source,
+                cwd=worktree,
+                expected_sha256=expected,
+                timeout=60,
+                stop_requested=self.store.stop_requested,
+                deadline=deadline,
+            )
+        except SSHExecutionError as exc:
+            raise SSHExecutionError(
+                "remote inference completed but source recovery is incomplete",
+                result_unknown=True,
+            ) from exc
+
     def _api_request(
-        self, worktree: Path, args: Sequence[str], deadline: float | None
+        self,
+        worktree: Path,
+        args: Sequence[str],
+        deadline: float | None,
+        *,
+        worker: Worker | None = None,
+        claim: Claim | None = None,
     ) -> WorkResult:
+        if worker is not None and worker.transport == "ssh":
+            target = self._remote_target(worker, claim)
+            response = self.ssh_executor.command(
+                target,
+                [target.opencode, "api", *args],
+                cwd=worktree,
+                timeout=min(30.0, self.timeout_seconds),
+                stop_requested=self.store.stop_requested,
+                deadline=deadline,
+            )
+            if not isinstance(response.get("returncode"), int):
+                raise SSHExecutionError("remote OpenCode API response is malformed")
+            return WorkResult(
+                returncode=int(response["returncode"]),
+                stdout=str(response.get("stdout", "")),
+                stderr=str(response.get("stderr", "")),
+                timed_out=bool(response.get("timed_out", False)),
+            )
         result = _run_process(
             [*self._command(), "api", *args],
             cwd=worktree,
@@ -3358,14 +3717,25 @@ class CampaignRunner:
         return value
 
     @staticmethod
-    def _same_location(data: dict[str, Any], worktree: Path) -> bool:
+    def _same_location(
+        data: dict[str, Any], worktree: Path, expected_location: str | None = None
+    ) -> bool:
         location = data.get("location")
         directory = location.get("directory") if isinstance(location, dict) else None
         if not isinstance(directory, str):
             return False
+        if expected_location is not None and expected_location.startswith("/"):
+            try:
+                from pathlib import PurePosixPath
+
+                return PurePosixPath(directory).as_posix() == PurePosixPath(
+                    expected_location
+                ).as_posix()
+            except (TypeError, ValueError):
+                return False
         try:
             return os.path.normcase(str(Path(directory).resolve())) == os.path.normcase(
-                str(worktree.resolve())
+                str(Path(expected_location).resolve() if expected_location else worktree.resolve())
             )
         except OSError:
             return False
@@ -3392,10 +3762,16 @@ class CampaignRunner:
         *,
         agent: str = "seto-decomp-worker",
         model: str | None = None,
+        worker: Worker | None = None,
     ) -> str:
+        expected_location = (
+            str(self._remote_target(worker, claim).directory)
+            if worker is not None and worker.transport == "ssh"
+            else str(worktree.resolve())
+        )
         payload: dict[str, Any] = {
             "title": f"Seto EBOOT {claim.address} {claim.worker_id}",
-            "location": {"directory": str(worktree.resolve())},
+            "location": {"directory": expected_location},
             "agent": agent,
         }
         if model is not None:
@@ -3412,12 +3788,14 @@ class CampaignRunner:
                 json.dumps(payload, separators=(",", ":")),
             ],
             deadline,
+            worker=worker,
+            claim=claim,
         )
         if result.returncode != 0:
             raise ValueError("OpenCode could not create a session")
         data = self._session_data(result)
         session_id = self._session_id(data.get("id"))
-        if not self._same_location(data, worktree):
+        if not self._same_location(data, worktree, expected_location):
             raise ValueError("OpenCode created a session outside the worker worktree")
         return session_id
 
@@ -3429,18 +3807,31 @@ class CampaignRunner:
         *,
         agent: str = "seto-decomp-worker",
         model: str | None = None,
+        worker: Worker | None = None,
     ) -> Claim:
         """Reuse an existing provider session, or create/bind one via the V2 API."""
         session_id = claim.session_id
         if session_id and re.fullmatch(r"ses_[A-Za-z0-9_-]+", session_id):
             result = self._api_request(
-                worktree, ["get", f"/api/session/{session_id}"], deadline
+                worktree,
+                ["get", f"/api/session/{session_id}"],
+                deadline,
+                worker=worker,
+                claim=claim,
             )
             if result.returncode == 0:
                 data = self._session_data(result)
                 if (
                     self._session_id(data.get("id")) == session_id
-                    and self._same_location(data, worktree)
+                    and self._same_location(
+                        data,
+                        worktree,
+                        (
+                            str(self._remote_target(worker, claim).directory)
+                            if worker is not None and worker.transport == "ssh"
+                            else None
+                        ),
+                    )
                     and data.get("agent") == agent
                     and (model is None or self._session_model_matches(data, model))
                 ):
@@ -3452,7 +3843,12 @@ class CampaignRunner:
                 raise ValueError("OpenCode could not validate the saved session")
 
         session_id = self._create_session(
-            claim, worktree, deadline, agent=agent, model=model
+            claim,
+            worktree,
+            deadline,
+            agent=agent,
+            model=model,
+            worker=worker,
         )
         return self.store.bind_session(claim, session_id)
 
@@ -4204,35 +4600,54 @@ class CampaignRunner:
         attempt_started = False
         provider_slot: threading.BoundedSemaphore | None = None
         provider_slot_acquired = False
+        remote_result: dict[str, Any] | None = None
         try:
             if self.auto_preflight and not continuation:
                 claim = self._prepare_claim(worktree, claim, deadline)
 
-            provider_slot = self.provider_slots.get(worker.provider)
+            provider_slot = self.provider_slots.get(worker.execution_scope)
             if provider_slot is not None:
                 if not self._acquire_resource_slot(provider_slot, deadline):
                     provider_slot = None
                     self.store.release_preparation(claim)
                     return "interrupted"
                 provider_slot_acquired = True
-                if self.store.provider_status(worker.provider) != "active":
+                if self.store.provider_status(worker.execution_scope) != "active":
                     self.store.release_preparation(claim)
                     return "provider_paused"
 
             phase = "context"
-            claim = self._ensure_session(
-                claim, worktree, deadline, agent=worker.agent, model=worker.model
-            )
             phase = "checkpoint"
             self._restore_best_source(worktree, claim)
+            phase = "context"
+            remote_target = None
+            if worker.transport == "ssh":
+                remote_target = self._prepare_remote_claim(worker, claim, worktree, deadline)
+            claim = self._ensure_session(
+                claim,
+                worktree,
+                deadline,
+                agent=worker.agent,
+                model=worker.model,
+                worker=worker,
+            )
             phase = "integrity"
             protected_before = _file_manifest(worktree) if self.auto_preflight else {}
             changes_before = _worktree_status_snapshot(worktree) if self.auto_preflight else {}
             git_head_before = _git_output(worktree, "rev-parse", "HEAD") if self.auto_preflight else ""
             git_branch_before = _git_output(worktree, "branch", "--show-current") if self.auto_preflight else ""
-            validate_model_id(worker.model, {"openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"})
-            prompt = _prompt(claim, claim.checkpoint, worktree)
-            argv = self._argv(worker, claim, prompt)
+            validate_model_id(worker.model, self.allowed_models)
+            prompt = _prompt(
+                claim,
+                claim.checkpoint,
+                worktree,
+                display_worktree=(
+                    remote_target.directory if remote_target is not None else None
+                ),
+            )
+            if worker.transport == "ssh" and len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+                raise ValueError("remote reconstruction prompt exceeds its bounded context size")
+            argv = self._argv(worker, claim, prompt) if worker.transport == "local" else []
             if self.store.stop_requested() or (
                 deadline is not None and time.monotonic() >= deadline
             ):
@@ -4264,24 +4679,49 @@ class CampaignRunner:
                 "inference_started",
                 address=claim.address,
                 worker_id=worker.worker_id,
-                provider=worker.provider,
+                provider=claim.provider,
                 session_id=claim.session_id,
             )
             try:
-                process = _run_process(
-                    argv,
-                    cwd=worktree,
-                    timeout=self.timeout_seconds,
-                    output_limit=self.output_limit,
-                    stop_requested=self.store.stop_requested,
-                    deadline=deadline,
-                )
+                if worker.transport == "ssh":
+                    assert remote_target is not None and claim.session_id is not None
+                    remote_result = self.ssh_executor.run(
+                        remote_target,
+                        address=claim.address,
+                        attempt_number=claim.attempt_number,
+                        model=worker.model,
+                        agent=worker.agent,
+                        session_id=claim.session_id,
+                        prompt=prompt,
+                        timeout=self.timeout_seconds,
+                        cwd=worktree,
+                        stop_requested=self.store.stop_requested,
+                        deadline=deadline,
+                    )
+                    self._collect_remote_source(
+                        worker, claim, worktree, remote_result, deadline
+                    )
+                    process = WorkResult(
+                        returncode=int(remote_result["returncode"]),
+                        stdout=str(remote_result["stdout"]),
+                        stderr=str(remote_result["stderr"]),
+                        timed_out=bool(remote_result.get("timed_out", False)),
+                    )
+                else:
+                    process = _run_process(
+                        argv,
+                        cwd=worktree,
+                        timeout=self.timeout_seconds,
+                        output_limit=self.output_limit,
+                        stop_requested=self.store.stop_requested,
+                        deadline=deadline,
+                    )
             finally:
                 self.store.record_event(
                     "inference_finished",
                     address=claim.address,
                     worker_id=worker.worker_id,
-                    provider=worker.provider,
+                    provider=claim.provider,
                     session_id=claim.session_id,
                 )
         except CampaignInterrupted:
@@ -4291,6 +4731,32 @@ class CampaignRunner:
                 self.store.release_preparation(claim)
             return "interrupted"
         except Exception as exc:
+            if isinstance(exc, SSHExecutionError):
+                try:
+                    if attempt_started:
+                        if exc.result_unknown:
+                            self._fail(
+                                claim,
+                                Failure(
+                                    FailureKind.AGENT_ERROR,
+                                    diagnostic_stage="context",
+                                    diagnostic_code="context_unavailable",
+                                ),
+                            )
+                            return "blocked"
+                        self._fail(
+                            claim,
+                            Failure(FailureKind.NETWORK),
+                        )
+                    else:
+                        self.store.release_preparation(
+                            claim,
+                            failure=Failure(FailureKind.NETWORK),
+                            max_retry_after=self.max_retry_after_seconds,
+                        )
+                except RuntimeError:
+                    pass
+                return "failed"
             if phase == "context":
                 provider_failure = classify_failure(1, "", str(exc))
                 if provider_failure.kind is not FailureKind.AGENT_ERROR:
@@ -4661,10 +5127,14 @@ class CampaignRunner:
             raise ValueError("at least one READY model worker is required")
         workers_by_provider: dict[str, int] = {}
         for worker in workers:
-            validate_model_id(worker.model, {"openai/gpt-6-luna", "opencode/deepseek-v4.1-flash-free"})
+            validate_model_id(worker.model, self.allowed_models)
             if worker.worker_id not in self.worktrees:
                 raise ValueError(f"missing isolated worktree for {worker.worker_id}")
-            workers_by_provider[worker.provider] = workers_by_provider.get(worker.provider, 0) + 1
+            if worker.transport not in {"local", "ssh"}:
+                raise ValueError(f"worker {worker.worker_id} has an unsupported transport")
+            workers_by_provider[worker.execution_scope] = (
+                workers_by_provider.get(worker.execution_scope, 0) + 1
+            )
         self.provider_slots = {
             provider: threading.BoundedSemaphore(
                 max(1, int(self.provider_parallelism.get(provider, count)))
@@ -4799,7 +5269,8 @@ class CampaignRunner:
                 try:
                     claim = self.store.claim_next(
                         worker.worker_id,
-                        worker.provider,
+                        worker.execution_scope,
+                        model_provider=worker.provider,
                         lease_seconds=self.lease_seconds,
                         max_attempts_per_candidate=self.max_attempts_per_candidate,
                         max_total_attempts=max_tasks,
@@ -4825,7 +5296,8 @@ class CampaignRunner:
 
                 if claim is None:
                     next_eligible = self.store.next_eligible_time(
-                        worker.provider,
+                        worker.execution_scope,
+                        model_provider=worker.provider,
                         max_attempts_per_candidate=self.max_attempts_per_candidate,
                         eligible_addresses=(
                             None
@@ -6599,6 +7071,29 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
             "free",
         }:
             raise ValueError(f"worker {worker_id} has an unsupported usage_mode")
+        transport = worker.get("transport", "local")
+        if transport not in {"local", "ssh"}:
+            raise ValueError(f"worker {worker_id} transport must be local or ssh")
+        if transport == "ssh":
+            host = worker.get("host")
+            if not isinstance(host, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", host
+            ):
+                raise ValueError(f"SSH worker {worker_id} must name a configured SSH host alias")
+            remote_dir = worker.get("remote_dir")
+            if remote_dir is not None and (
+                not isinstance(remote_dir, str)
+                or not remote_dir.startswith("/")
+                or ".." in Path(remote_dir).parts
+                or "\x00" in remote_dir
+            ):
+                raise ValueError(f"SSH worker {worker_id} remote_dir must be absolute and safe")
+            quota_scope = worker.get("quota_scope")
+            if quota_scope is not None and (
+                not isinstance(quota_scope, str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9:_-]{0,127}", quota_scope)
+            ):
+                raise ValueError(f"SSH worker {worker_id} quota_scope is invalid")
     return value
 
 
@@ -6718,7 +7213,6 @@ def worker_readiness(
         blockers.append("model_not_in_catalog")
     public_free_auth = (
         provider == "opencode"
-        and model == "opencode/deepseek-v4.1-flash-free"
         and observed.get("auth") == "public"
         and observed.get("public_model_metadata") is True
     )
@@ -6743,13 +7237,12 @@ def worker_readiness(
     elif provider == "opencode":
         if (
             usage_mode != "free"
-            or model != "opencode/deepseek-v4.1-flash-free"
+            or not isinstance(model, str)
+            or not model.startswith("opencode/")
             or worker.get("free_model_only") is not True
         ):
             blockers.append("exact_free_usage_not_verified")
-        if model == "opencode/deepseek-v4.1-flash-free" and observed.get(
-            "public_model_metadata"
-        ) is not True:
+        if observed.get("public_model_metadata") is not True:
             blockers.append("public_auth_metadata_unverified")
         if observed.get("model_status") != "active":
             blockers.append("model_not_active")
@@ -6778,6 +7271,35 @@ def select_ready_workers(
         for worker_id in workers
         if states.get(worker_id, {}).get("ready") is True
     ][:max_workers]
+
+
+def select_execution_workers(
+    workers: Mapping[str, Mapping[str, Any]], execution_target: str = "local"
+) -> list[str]:
+    """Filter configured workers before any availability or worktree checks."""
+    if execution_target not in {"local", "remote", "all"}:
+        raise ValueError("execution target must be local, remote, or all")
+    selected: list[str] = []
+    for worker_id, worker in workers.items():
+        transport = worker.get("transport", "local")
+        if transport not in {"local", "ssh"}:
+            raise ValueError(f"worker {worker_id} has an unsupported transport")
+        if execution_target == "all" or (
+            execution_target == "local" and transport == "local"
+        ) or (execution_target == "remote" and transport == "ssh"):
+            selected.append(worker_id)
+    return selected
+
+
+def configured_quota_scope(worker: Mapping[str, Any]) -> str:
+    explicit = worker.get("quota_scope")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    provider = str(worker.get("provider", ""))
+    if worker.get("transport", "local") == "ssh":
+        host = str(worker.get("host", "")).casefold()
+        return f"{provider}:{host}"
+    return provider
 
 
 def _normalize_candidate_addresses(
@@ -7638,7 +8160,7 @@ def _sanitize_opencode_prefix(command: list[str]) -> list[str]:
     return command
 
 
-def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
+def _local_opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     command = _sanitize_opencode_prefix(list(config["opencode"].get("command", ["opencode"])))
     catalog = subprocess.run(
         [*command, "models"], cwd=cwd, capture_output=True, text=True, timeout=120, check=False
@@ -7812,6 +8334,302 @@ def _opencode_preflight(config: dict[str, Any], cwd: Path) -> dict[str, Any]:
     }
 
 
+def _remote_opencode_preflight(
+    worker_id: str,
+    worker: dict[str, Any],
+    cwd: Path,
+    allowed_models: Iterable[str],
+    executor: SSHExecutor,
+    *,
+    provision_agent: bool,
+) -> dict[str, Any]:
+    model = worker.get("model")
+    state: dict[str, Any] = {
+        "transport": "ssh",
+        "host": worker.get("host"),
+        "model": model,
+        "quota_scope": worker.get("quota_scope")
+        or (
+            f"{worker.get('provider')}:{str(worker.get('host', '')).casefold()}"
+        ),
+        "execution": "unverified",
+    }
+    remote_dir = worker.get("remote_dir")
+    if not isinstance(remote_dir, str) or not remote_dir:
+        return {
+            **state,
+            "ready": False,
+            "blockers": ["remote_directory_unconfigured"],
+        }
+    try:
+        target = RemoteTarget(
+            str(worker["host"]),
+            remote_dir,
+            str(worker.get("remote_python", "python3")),
+            str(worker.get("remote_opencode", "opencode")),
+        )
+    except (KeyError, TypeError, ValueError):
+        return {**state, "ready": False, "blockers": ["remote_target_invalid"]}
+
+    try:
+        ping = executor.request(
+            target,
+            {"op": "ping", "create_workspace": provision_agent},
+            cwd=cwd,
+            timeout=30,
+        )
+    except SSHExecutionError:
+        return {**state, "ready": False, "blockers": ["ssh_unavailable_or_workspace_missing"]}
+    state.update(
+        {
+            "ssh": "available",
+            "python_version": ping.get("python"),
+            "architecture": ping.get("architecture"),
+            "workspace_writable": ping.get("workspace_writable") is True,
+        }
+    )
+    if ping.get("ok") is not True or ping.get("workspace_writable") is not True:
+        return {**state, "ready": False, "blockers": ["remote_workspace_not_writable"]}
+
+    agent_id = str(worker.get("agent", ""))
+    if provision_agent:
+        if agent_id != "seto-decomp-worker":
+            return {**state, "ready": False, "blockers": ["worker_agent_policy_not_allowlisted"]}
+        policy = cwd / ".opencode" / "agents" / f"{agent_id}.md"
+        try:
+            executor.put_bytes(
+                target,
+                ".opencode/opencode.json",
+                REMOTE_PROJECT_OPENCODE_CONFIG,
+                cwd=cwd,
+                timeout=60,
+            )
+            executor.put_file(
+                target,
+                f".opencode/agents/{agent_id}.md",
+                policy,
+                cwd=cwd,
+                timeout=60,
+            )
+        except (OSError, ValueError, SSHExecutionError):
+            return {**state, "ready": False, "blockers": ["restricted_worker_policy_provision_failed"]}
+
+    opencode = target.opencode
+
+    def command(args: Sequence[str], timeout: float = 60) -> dict[str, Any]:
+        return executor.command(
+            target,
+            [opencode, *args],
+            cwd=cwd,
+            timeout=timeout,
+        )
+
+    blockers: list[str] = []
+    try:
+        version = command(["--version"], 30)
+        catalog = command(["models"], 120)
+        auth = command(["auth", "list", "--format", "json"], 60)
+        model_response = command(["api", "get", "/api/model"], 60)
+        provider_response = command(["api", "get", "/api/provider/opencode"], 60)
+        agent_response = command(["debug", "agents"], 60)
+        cli_help = command(["run", "--help"], 60)
+    except SSHExecutionError:
+        return {
+            **state,
+            "ready": False,
+            "blockers": ["remote_opencode_probe_failed"],
+        }
+
+    outputs = (version, catalog, auth, model_response, provider_response, agent_response, cli_help)
+    if any(item.get("returncode") != 0 for item in outputs):
+        blockers.append("remote_opencode_command_failed")
+    supported_options = ("--model", "--agent", "--format", "--session", "--title")
+    help_text = str(cli_help.get("stdout", ""))
+    if not all(option in help_text for option in supported_options):
+        blockers.append("remote_run_cli_options_unverified")
+    try:
+        model_payload = json.loads(str(model_response.get("stdout", "")))
+        model_data = _unwrap_api_data(model_payload)
+        records = [
+            item
+            for item in model_data
+            if isinstance(item, dict)
+            and item.get("providerID") == "opencode"
+            and item.get("id") == str(model).partition("/")[2]
+        ] if isinstance(model_data, list) else []
+    except (json.JSONDecodeError, TypeError):
+        records = []
+    metadata = records[0] if len(records) == 1 else {}
+    try:
+        provider_payload = _unwrap_api_data(
+            json.loads(str(provider_response.get("stdout", "")))
+        )
+    except (json.JSONDecodeError, TypeError):
+        provider_payload = None
+    provider_settings = (
+        provider_payload.get("settings")
+        if isinstance(provider_payload, dict)
+        and isinstance(provider_payload.get("settings"), dict)
+        else {}
+    )
+    provider_route_verified = bool(
+        isinstance(provider_payload, dict)
+        and provider_payload.get("id") == "opencode"
+        and provider_settings.get("apiKey") == "public"
+        and provider_settings.get("baseURL") == "https://opencode.ai/inference/openai/v1"
+        and not provider_payload.get("headers")
+        and not provider_payload.get("body")
+    )
+    if not provider_route_verified:
+        blockers.append("remote_provider_route_unverified")
+    try:
+        auth_payload = json.loads(str(auth.get("stdout", "")))
+    except (json.JSONDecodeError, TypeError):
+        auth_payload = None
+    auth_metadata = _provider_auth_metadata(auth_payload, "opencode")
+    settings = metadata.get("settings") if isinstance(metadata.get("settings"), dict) else {}
+    public_metadata = len(records) == 1 and settings.get("apiKey") == "public"
+    auth_state = (
+        "public"
+        if public_metadata and provider_route_verified
+        else auth_metadata.get("auth", "not-listed")
+    )
+    try:
+        agents = json.loads(str(agent_response.get("stdout", "")))
+    except (json.JSONDecodeError, TypeError):
+        agents = []
+    agent_policy = (
+        isinstance(agents, list)
+        and worker_agent_policy_is_restricted(agents, agent_id)
+    )
+    if not isinstance(ping.get("python"), list) or ping.get("python", [0])[0] < 3:
+        blockers.append("python3_unavailable")
+    observation = {
+        "catalog": (
+            "available"
+            if catalog.get("returncode") == 0
+            and str(model) in str(catalog.get("stdout", "")).splitlines()
+            else "missing"
+        ),
+        "auth": auth_state,
+        "public_model_metadata": public_metadata and provider_route_verified,
+        "model_status": metadata.get("status"),
+        "model_enabled": metadata.get("enabled"),
+        "model_cost_zero": _model_cost_is_zero(metadata.get("cost")),
+        "agent_policy": agent_policy,
+        "access_verified": worker.get("access_verified") is True,
+        "usage_mode": worker.get("usage_mode", "unknown"),
+    }
+    readiness = worker_readiness(worker, observation, allowed_models)
+    blockers.extend(readiness["blockers"])
+    return {
+        **state,
+        **observation,
+        "opencode_version": str(version.get("stdout", "")).strip()[:80],
+        "agent_policy_loaded": agent_policy,
+        "ready": not blockers,
+        "blockers": sorted(set(blockers)),
+    }
+
+
+def _model_cost_is_zero(cost: Any) -> bool:
+    if not isinstance(cost, list) or not cost:
+        return False
+    for tier in cost:
+        if not isinstance(tier, dict) or set(tier) != {"input", "output", "cache"}:
+            return False
+        cache = tier.get("cache")
+        if not isinstance(cache, dict) or set(cache) != {"read", "write"}:
+            return False
+        values = [tier["input"], tier["output"], cache["read"], cache["write"]]
+        if any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or item != 0
+            for item in values
+        ):
+            return False
+    return True
+
+
+def _opencode_preflight(
+    config: dict[str, Any],
+    cwd: Path,
+    *,
+    execution_target: str = "all",
+    ssh_executor: SSHExecutor | None = None,
+    provision_remote_agent: bool = False,
+) -> dict[str, Any]:
+    selected = select_execution_workers(config.get("workers", {}), execution_target)
+    selected_workers = {name: config["workers"][name] for name in selected}
+    local_workers = {
+        name: worker
+        for name, worker in selected_workers.items()
+        if worker.get("transport", "local") == "local"
+    }
+    remote_workers = {
+        name: worker
+        for name, worker in selected_workers.items()
+        if worker.get("transport", "local") == "ssh"
+    }
+    result: dict[str, Any] = {"workers": {}}
+    if local_workers:
+        local_config = dict(config)
+        local_config["workers"] = local_workers
+        try:
+            local = _local_opencode_preflight(local_config, cwd)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            local = {
+                "workers": {
+                    name: {
+                        "model": worker.get("model"),
+                        "transport": "local",
+                        "ready": False,
+                        "blockers": ["local_preflight_failed"],
+                    }
+                    for name, worker in local_workers.items()
+                }
+            }
+        result.update({key: value for key, value in local.items() if key != "workers"})
+        result["workers"].update(local.get("workers", {}))
+    if remote_workers:
+        executor = ssh_executor or SSHExecutor()
+        for worker_id, worker in remote_workers.items():
+            try:
+                result["workers"][worker_id] = _remote_opencode_preflight(
+                    worker_id,
+                    worker,
+                    cwd,
+                    config.get("models", {}).get("allowlist", []),
+                    executor,
+                    provision_agent=provision_remote_agent,
+                )
+            except (OSError, ValueError, TypeError):
+                result["workers"][worker_id] = {
+                    "transport": "ssh",
+                    "host": worker.get("host"),
+                    "model": worker.get("model"),
+                    "quota_scope": worker.get("quota_scope"),
+                    "ready": False,
+                    "blockers": ["remote_preflight_failed"],
+                }
+    result.setdefault("workers", {})
+    for worker_id, state in result["workers"].items():
+        worker = config["workers"][worker_id]
+        state.setdefault("transport", worker.get("transport", "local"))
+        state.setdefault("host", worker.get("host"))
+        state.setdefault("model", worker.get("model"))
+        state.setdefault("quota_scope", configured_quota_scope(worker))
+        state["readiness"] = (
+            "READY"
+            if state.get("ready") is True
+            else "BLOCKED"
+            if state.get("ready") is False
+            else "UNVERIFIED"
+        )
+    return result
+
+
 def _ai_memory_exposure_report(
     mcp_output: str,
     *,
@@ -7889,26 +8707,52 @@ def verify_campaign_inputs(
     return result
 
 
-def _doctor(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
-    command = _sanitize_opencode_prefix(list(config["opencode"].get("command", ["opencode"])))
+def _doctor(
+    config: dict[str, Any],
+    config_path: Path,
+    *,
+    execution_target: str = "all",
+    provision_remote_agent: bool = False,
+    ssh_executor: SSHExecutor | None = None,
+) -> dict[str, Any]:
     repo_root = config_path.resolve().parent.parent
-    version = subprocess.run(
-        [*command, "--version"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+    selected_names = select_execution_workers(config["workers"], execution_target)
+    local_selected = any(
+        config["workers"][name].get("transport", "local") == "local"
+        for name in selected_names
     )
-    model_check = _opencode_preflight(config, repo_root)
-    mcp = subprocess.run(
-        [*command, "mcp", "list"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+    command = _sanitize_opencode_prefix(
+        list(config["opencode"].get("command", ["opencode"]))
     )
+    if local_selected:
+        version = subprocess.run(
+            [*command, "--version"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    else:
+        version = subprocess.CompletedProcess(command, 1, "", "local workers not selected")
+    model_check = _opencode_preflight(
+        config,
+        repo_root,
+        execution_target=execution_target,
+        ssh_executor=ssh_executor,
+        provision_remote_agent=provision_remote_agent,
+    )
+    if local_selected:
+        mcp = subprocess.run(
+            [*command, "mcp", "list"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    else:
+        mcp = subprocess.CompletedProcess(command, 1, "", "local workers not selected")
     ai_memory = shutil.which("ai-memory")
     memory_version = None
     if ai_memory:
@@ -8014,6 +8858,7 @@ def _status_report(
     store: CampaignStore,
     config: dict[str, Any],
     repo_root: Path,
+    readiness: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     tasks = store.list_tasks()
     counts: dict[str, int] = {}
@@ -8122,7 +8967,22 @@ def _status_report(
         "workers": {
             worker_id: {
                 "provider": worker.get("provider"),
+                "transport": worker.get("transport", "local"),
+                "host": worker.get("host"),
                 "model": worker.get("model"),
+                "quota_scope": configured_quota_scope(worker),
+                "readiness": (
+                    "READY"
+                    if readiness and readiness.get(worker_id, {}).get("ready") is True
+                    else "BLOCKED"
+                    if readiness and readiness.get(worker_id, {}).get("ready") is False
+                    else "UNVERIFIED"
+                ),
+                "readiness_blockers": list(
+                    readiness.get(worker_id, {}).get("blockers", [])
+                    if readiness
+                    else []
+                ),
                 "max_parallel": worker.get("max_parallel", 1),
                 "state": "active" if assignments[worker_id] else "idle",
                 "assignments": assignments[worker_id],
@@ -8170,9 +9030,9 @@ def _status_report(
         "reconstructed_c_addresses": reconstructed,
         "blockers": blockers,
         "providers": {
-            provider: store.provider_status(provider)
-            for provider in sorted(
-                {worker["provider"] for worker in config.get("workers", {}).values()}
+            scope: store.provider_status(scope)
+            for scope in sorted(
+                {configured_quota_scope(worker) for worker in config.get("workers", {}).values()}
             )
         },
         "observed_consumption": {
@@ -8225,6 +9085,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--allow-openai-usage", action="store_true", help="confirm use of the configured OpenAI account")
     run.add_argument("--allow-free-model-usage", action="store_true", help="confirm requests to the exact allowlisted free model")
     run.add_argument(
+        "--execution-target",
+        choices=("local", "remote", "all"),
+        default="local",
+        help="select configured local, SSH, or both worker transports (default: local)",
+    )
+    run.add_argument(
         "--all-eligible",
         action="store_true",
         help="explicitly select every non-MATCHED, non-blocked candidate with an exact boundary",
@@ -8265,6 +9131,7 @@ def main(argv: list[str] | None = None) -> int:
                 for candidate in candidates
                 if f"0x{candidate.numeric_address:x}" in certified_addresses
             }
+            readiness = _opencode_preflight(config, REPO_ROOT).get("workers", {})
             _print_json(
                 {
                     "campaign_enabled": bool(config.get("execution", {}).get("enabled", False)),
@@ -8275,6 +9142,23 @@ def main(argv: list[str] | None = None) -> int:
                         config.get("execution", {}).get("worker_permissions_reviewed", False)
                     ),
                     "models": {name: value["model"] for name, value in config["workers"].items()},
+                    "workers": {
+                        name: {
+                            "transport": worker.get("transport", "local"),
+                            "host": worker.get("host"),
+                            "model": worker.get("model"),
+                            "quota_scope": configured_quota_scope(worker),
+                            "readiness": (
+                                "READY"
+                                if readiness.get(name, {}).get("ready") is True
+                                else "BLOCKED"
+                                if readiness.get(name, {}).get("ready") is False
+                                else "UNVERIFIED"
+                            ),
+                            "blockers": readiness.get(name, {}).get("blockers", []),
+                        }
+                        for name, worker in config["workers"].items()
+                    },
                     "inventory_candidates": len(candidates),
                     "pending_with_exact_boundary": sum(
                         c.boundary_status == "EXACT"
@@ -8293,12 +9177,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "status":
-            _print_json(_status_report(store, config, REPO_ROOT))
+            readiness = _doctor(config, config_path).get("opencode", {}).get("workers", {})
+            _print_json(_status_report(store, config, REPO_ROOT, readiness))
             return 0
         if args.command == "recover-local":
             if store.integrity_check() != "ok":
                 raise ValueError("campaign SQLite integrity check failed before local recovery")
-            preflight = _doctor(config, config_path)
+            preflight = _doctor(config, config_path, execution_target="local")
             if preflight.get("wsl_python") is None or any(
                 value != "READY" for value in preflight.get("toolchain", {}).values()
             ):
@@ -8491,7 +9376,19 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(
                     "worker tool permissions have not been reviewed for unattended execution"
                 )
-            preflight = _doctor(config, config_path)
+            selected_worker_names = select_execution_workers(
+                config["workers"], args.execution_target
+            )
+            if not selected_worker_names:
+                raise ValueError(
+                    f"no workers are configured for execution target {args.execution_target}"
+                )
+            preflight = _doctor(
+                config,
+                config_path,
+                execution_target=args.execution_target,
+                provision_remote_agent=args.execution_target in {"remote", "all"},
+            )
             ready_names = select_ready_workers(
                 config["workers"],
                 preflight["opencode"]["workers"],
@@ -8585,6 +9482,7 @@ def main(argv: list[str] | None = None) -> int:
             policy_blocked = [
                 worker_id
                 for worker_id, worker_config in active_config["workers"].items()
+                if worker_config.get("transport", "local") == "local"
                 if not _effective_worker_policy_ready(
                     command, worktrees[worker_id], worker_config["agent"]
                 )
@@ -8600,6 +9498,12 @@ def main(argv: list[str] | None = None) -> int:
                     value["provider"],
                     validate_model_id(value["model"], config["models"]["allowlist"]),
                     value["agent"],
+                    str(value.get("transport", "local")),
+                    value.get("host"),
+                    value.get("remote_dir"),
+                    value.get("quota_scope"),
+                    str(value.get("remote_python", "python3")),
+                    str(value.get("remote_opencode", "opencode")),
                 )
                 for worker_id, value in active_config["workers"].items()
             ]
@@ -8622,7 +9526,14 @@ def main(argv: list[str] | None = None) -> int:
             provider_parallelism: dict[str, int] = {}
             for worker_id in ready_names:
                 worker_config = config["workers"][worker_id]
-                provider = str(worker_config["provider"])
+                provider = str(
+                    worker_config.get("quota_scope")
+                    or (
+                        f"{worker_config['provider']}:{str(worker_config['host']).casefold()}"
+                        if worker_config.get("transport") == "ssh"
+                        else worker_config["provider"]
+                    )
+                )
                 capacity = int(worker_config.get("max_parallel", 1))
                 provider_parallelism[provider] = min(
                     provider_parallelism.get(provider, capacity), capacity
@@ -8723,6 +9634,26 @@ def main(argv: list[str] | None = None) -> int:
                 known_exact_ranges=inventory.get("baseline", {}).get(
                     "eboot_matched_ranges", []
                 ),
+                remote_targets={
+                    worker.worker_id: RemoteTarget(
+                        worker.host,
+                        worker.remote_dir,
+                        worker.remote_python,
+                        worker.remote_opencode,
+                    )
+                    for worker in workers
+                    if worker.transport == "ssh"
+                    and worker.host
+                    and worker.remote_dir
+                },
+                remote_policy_path=REPO_ROOT / ".opencode" / "agents" / "seto-decomp-worker.md",
+                remote_triage_path=(
+                    REPO_ROOT / str(config["inputs"]["triage_report"])
+                    if isinstance(config.get("inputs", {}).get("triage_report"), str)
+                    else None
+                ),
+                context_worktrees=recovery_source_worktrees,
+                allowed_models=config["models"]["allowlist"],
             )
             if args.max_tasks is None:
                 max_tasks = phase_max_tasks

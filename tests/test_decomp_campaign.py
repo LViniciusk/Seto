@@ -41,6 +41,7 @@ from decomp_campaign import (  # noqa: E402
     validate_ghidra_log,
     validate_model_id,
     select_ready_workers,
+    select_execution_workers,
     validated_cached_ghidra_boundary,
     worker_agent_policy_is_restricted,
     worker_readiness,
@@ -468,6 +469,547 @@ def test_models_are_exact_allowlist_only() -> None:
         validate_model_id("openai/gpt-6-luna-fast", allowed)
     with pytest.raises(ValueError, match="not explicitly allowlisted"):
         validate_model_id("openai/gpt-7-paid", allowed)
+
+
+def test_execution_target_filters_workers_before_readiness() -> None:
+    workers = {
+        "luna-01": {"transport": "local"},
+        "remote-alluka": {"transport": "ssh"},
+        "legacy": {},
+    }
+
+    assert select_execution_workers(workers, "local") == ["luna-01", "legacy"]
+    assert select_execution_workers(workers, "remote") == ["remote-alluka"]
+    assert select_execution_workers(workers, "all") == list(workers)
+    with pytest.raises(ValueError, match="execution target"):
+        select_execution_workers(workers, "other")
+
+
+def test_run_execution_target_defaults_to_local_and_accepts_all_modes() -> None:
+    local = decomp_campaign_module.build_parser().parse_args(["run", "--confirm"])
+    remote = decomp_campaign_module.build_parser().parse_args(
+        ["run", "--confirm", "--execution-target", "remote"]
+    )
+    all_workers = decomp_campaign_module.build_parser().parse_args(
+        ["run", "--confirm", "--execution-target", "all"]
+    )
+
+    assert local.execution_target == "local"
+    assert remote.execution_target == "remote"
+    assert all_workers.execution_target == "all"
+
+
+def test_configured_public_zero_cost_opencode_model_can_be_verified_exactly() -> None:
+    model = "opencode/beam-free"
+    readiness = worker_readiness(
+        {
+            "provider": "opencode",
+            "model": model,
+            "usage_mode": "free",
+            "free_model_only": True,
+            "access_verified": True,
+        },
+        {
+            "catalog": "available",
+            "auth": "public",
+            "public_model_metadata": True,
+            "model_status": "active",
+            "model_enabled": True,
+            "model_cost_zero": True,
+            "agent_policy": True,
+        },
+        {model},
+    )
+
+    assert readiness == {"ready": True, "blockers": []}
+
+
+def test_unconfigured_or_nonzero_cost_opencode_model_stays_blocked() -> None:
+    worker = {
+        "provider": "opencode",
+        "model": "opencode/beam-free",
+        "usage_mode": "free",
+        "free_model_only": True,
+        "access_verified": True,
+    }
+    observed = {
+        "catalog": "available",
+        "auth": "public",
+        "public_model_metadata": True,
+        "model_status": "active",
+        "model_enabled": True,
+        "model_cost_zero": False,
+        "agent_policy": True,
+    }
+
+    assert worker_readiness(worker, observed, set())["ready"] is False
+    assert "model_cost_not_zero_or_unverified" in worker_readiness(
+        worker, observed, {"opencode/beam-free"}
+    )["blockers"]
+
+
+def test_remote_run_returns_c_to_the_local_matcher_without_certifying_it(
+    tmp_path: Path,
+) -> None:
+    address = "0x1000"
+    source_relative = Path("decomp/src/eboot/func_00001000.c")
+    remote_source = b"int func_00001000(void) { return 7; }\n"
+    worktree = tmp_path / "remote-worker-local-staging"
+    worktree.mkdir()
+    source = worktree / source_relative
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"int func_00001000(void) { return 0; }\n")
+    policy = tmp_path / "seto-decomp-worker.md"
+    policy.write_text("restricted policy", encoding="utf-8")
+
+    class FakeSSHExecutor:
+        def __init__(self) -> None:
+            self.files: dict[tuple[str, str], bytes] = {}
+            self.inference_calls = 0
+            self.remote_directory = ""
+
+        def request(self, target, payload, **_kwargs):
+            if payload["op"] == "ping":
+                return {"ok": True, "workspace_writable": True}
+            raise AssertionError(payload)
+
+        def put_file(self, target, relative_path, path, **_kwargs):
+            self.remote_directory = target.directory
+            self.files[(target.directory, relative_path)] = Path(path).read_bytes()
+            return {"sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+        def put_bytes(self, target, relative_path, content, **_kwargs):
+            self.files[(target.directory, relative_path)] = content
+            return {"sha256": hashlib.sha256(content).hexdigest()}
+
+        def command(self, target, argv, **_kwargs):
+            payload = json.loads(argv[argv.index("--data") + 1])
+            data = {
+                "id": "ses_remote123",
+                "location": {"directory": target.directory},
+                "agent": payload["agent"],
+                "model": {**payload["model"], "variant": "default"},
+            }
+            return {"returncode": 0, "stdout": json.dumps({"data": data}), "stderr": ""}
+
+        def run(self, target, **_kwargs):
+            self.inference_calls += 1
+            assert self.files[(target.directory, source_relative.as_posix())]
+            self.files[(target.directory, source_relative.as_posix())] = remote_source
+            return {
+                "completed": True,
+                "address": address,
+                "attempt_number": 1,
+                "session_id": "ses_remote123",
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {"type": "text", "text": json.dumps({"checkpoint": {"next_experiment": "inspect locally"}})}
+                ),
+                "stderr": "",
+                "source_sha256": hashlib.sha256(remote_source).hexdigest(),
+            }
+
+        def collect_file(self, target, relative_path, destination, **kwargs):
+            content = self.files[(target.directory, relative_path)]
+            digest = hashlib.sha256(content).hexdigest()
+            assert kwargs["expected_sha256"] == digest
+            Path(destination).write_bytes(content)
+            return digest
+
+    executor = FakeSSHExecutor()
+    matched_input: list[bytes] = []
+
+    def local_verifier(_worktree: Path, claim: Claim, _checkpoint: dict[str, object]):
+        current = source.read_bytes()
+        matched_input.append(current)
+        source_hash = hashlib.sha256(current).hexdigest()
+        reports = []
+        for _ in range(2):
+            report = strict_report(claim.address)
+            report["status"] = "NONMATCHING"
+            report["verified_decompilation"] = False
+            report["provenance"]["source_sha256"] = source_hash  # type: ignore[index]
+            report["match"].update(  # type: ignore[union-attr]
+                status="NONMATCHING",
+                matching_words=3,
+                total_words=4,
+                difference_count=1,
+                differences=[{"word_index": 3}],
+            )
+            reports.append(report)
+        return {
+            "status": "NONMATCHING",
+            "source_sha256": source_hash,
+            "matching_words": 3,
+            "total_words": 4,
+            "build_sha256": [item["provenance"]["object_sha256"] for item in reports],
+            "reports": reports,
+        }
+
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([Candidate(address, 16, "0x12345678", 1, "EXACT", evidence={})])
+    claim = store.claim_next(
+        "remote-alluka",
+        "opencode:alluka",
+        model_provider="opencode",
+        reserve_only=True,
+    )
+    assert claim is not None
+    worker = Worker(
+        "remote-alluka",
+        "opencode",
+        "opencode/deepseek-v4.1-flash-free",
+        "seto-decomp-worker",
+        "ssh",
+        "Alluka",
+        "/home/operator/seto-worker",
+        "opencode:alluka",
+    )
+    runner = CampaignRunner(
+        store,
+        opencode_command=["opencode-unused"],
+        worktrees={worker.worker_id: worktree},
+        verifier=local_verifier,
+        ssh_executor=executor,  # type: ignore[arg-type]
+        remote_targets={worker.worker_id: decomp_campaign_module.RemoteTarget(worker.host, worker.remote_dir)},
+        remote_policy_path=policy,
+        allowed_models={"opencode/deepseek-v4.1-flash-free"},
+    )
+
+    outcome = runner._run_claim(worker, claim, None)
+
+    task = store.get_task(address)
+    assert outcome == "pending", {
+        "checkpoint": task["checkpoint"],
+        "attempts": store.list_attempts(),
+        "inference_calls": executor.inference_calls,
+        "matched_input": matched_input,
+        "source_hex": source.read_bytes().hex(),
+    }
+    assert executor.inference_calls == 1
+    assert matched_input == [remote_source]
+    assert task["status"] != "matched"
+    assert task["best_result"]["status"] == "NONMATCHING"
+    assert task["best_result"]["campaign_origin"]["provider"] == "opencode"
+    assert task["best_result"]["campaign_origin"]["quota_scope"] == "opencode:alluka"
+
+
+def test_quota_state_isolated_by_remote_execution_scope(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([Candidate("0x1000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    alluka = store.claim_next("remote-alluka", "opencode:alluka", model_provider="opencode")
+    assert alluka is not None
+    alluka = store.bind_session(alluka, "ses_alluka_only")
+    store.fail(alluka, Failure(FailureKind.QUOTA_EXHAUSTED))
+
+    assert store.provider_status("opencode:alluka") == "suspended_quota"
+    assert store.provider_status("opencode:kita-server") == "active"
+    assert store.provider_status("opencode") == "active"
+    kita = store.claim_next(
+        "remote-kita", "opencode:kita-server", model_provider="opencode"
+    )
+    assert kita is not None
+    assert kita.provider == "opencode:kita-server"
+    assert kita.session_id is None
+    assert store.total_attempt_count() == 2
+
+
+@pytest.mark.parametrize("failure", [Failure(FailureKind.NETWORK), Failure(FailureKind.AUTH)])
+def test_remote_host_failure_can_move_same_model_task_without_reusing_session(
+    tmp_path: Path, failure: Failure
+) -> None:
+    store = CampaignStore(tmp_path / f"{failure.kind.value}.sqlite3")
+    store.seed([Candidate("0x2000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    kita = store.claim_next(
+        "remote-kita", "opencode:kita-server", model_provider="opencode"
+    )
+    assert kita is not None
+    kita = store.bind_session(kita, "ses_kita_host_only")
+    store.fail(kita, failure)
+
+    alluka = store.claim_next(
+        "remote-alluka",
+        "opencode:alluka",
+        model_provider="opencode",
+        now=time.time() + 3,
+    )
+
+    assert alluka is not None
+    assert alluka.session_id is None
+    assert store.provider_status("opencode:kita-server") in {
+        "network_backoff",
+        "blocked_auth",
+    }
+    assert store.provider_status("opencode:alluka") == "active"
+
+
+def test_remote_session_location_uses_linux_workspace_and_host_scope(tmp_path: Path) -> None:
+    worktree = tmp_path / "local-staging"
+    worktree.mkdir()
+    store = CampaignStore(tmp_path / "sessions.sqlite3")
+    store.seed([Candidate("0x1000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    claim = store.claim_next(
+        "remote-kita",
+        "opencode:kita-server",
+        model_provider="opencode",
+    )
+    assert claim is not None
+    calls: list[tuple[str, str]] = []
+    session = {
+        "id": "ses_kita_only",
+        "location": {"directory": "/home/operator/seto-worker/functions/1000"},
+        "agent": "seto-decomp-worker",
+        "model": {"providerID": "opencode", "id": "deepseek-v4.1-flash-free"},
+    }
+
+    class FakeSSHExecutor:
+        def command(self, target, argv, **_kwargs):
+            calls.append((target.host, argv[3]))
+            return {
+                "returncode": 0,
+                "stdout": json.dumps({"data": session}),
+                "stderr": "",
+            }
+
+    worker = Worker(
+        "remote-kita",
+        "opencode",
+        "opencode/deepseek-v4.1-flash-free",
+        "seto-decomp-worker",
+        "ssh",
+        "kita-server",
+        "/home/operator/seto-worker",
+        "opencode:kita-server",
+    )
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={worker.worker_id: worktree},
+        ssh_executor=FakeSSHExecutor(),  # type: ignore[arg-type]
+        remote_targets={
+            worker.worker_id: decomp_campaign_module.RemoteTarget(
+                worker.host, worker.remote_dir
+            )
+        },
+    )
+
+    bound = runner._ensure_session(
+        claim,
+        worktree,
+        None,
+        agent=worker.agent,
+        model=worker.model,
+        worker=worker,
+    )
+
+    assert bound.session_id == "ses_kita_only"
+    assert calls == [("kita-server", "/api/session")]
+    assert CampaignRunner._same_location(
+        {"location": {"directory": session["location"]["directory"]}},
+        worktree,
+        session["location"]["directory"],
+    )
+
+
+def test_remote_readiness_requires_exact_zero_cost_catalog_and_restricted_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = "opencode/deepseek-v4.1-flash-free"
+    worktree = tmp_path / "remote-project"
+    policy = worktree / ".opencode" / "agents" / "seto-decomp-worker.md"
+    policy.parent.mkdir(parents=True)
+    policy.write_text("restricted policy", encoding="utf-8")
+    model_record = {
+        "providerID": "opencode",
+        "id": "deepseek-v4.1-flash-free",
+        "settings": {"apiKey": "public"},
+        "status": "active",
+        "enabled": True,
+        "cost": [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}],
+    }
+    calls: list[list[str]] = []
+
+    class FakeSSHExecutor:
+        def request(self, _target, payload, **_kwargs):
+            assert payload == {"op": "ping", "create_workspace": True}
+            return {"ok": True, "python": [3, 12, 3], "architecture": "aarch64", "workspace_writable": True}
+
+        def put_file(self, _target, relative_path, source, **_kwargs):
+            assert relative_path == ".opencode/agents/seto-decomp-worker.md"
+            assert Path(source).read_text(encoding="utf-8") == "restricted policy"
+            return {"sha256": "a" * 64}
+
+        def put_bytes(self, _target, relative_path, content, **_kwargs):
+            assert relative_path == ".opencode/opencode.json"
+            assert json.loads(content)["snapshots"] is False
+            return {"sha256": hashlib.sha256(content).hexdigest()}
+
+        def command(self, _target, argv, **_kwargs):
+            args = argv[1:]
+            calls.append(list(args))
+            if args == ["models"]:
+                stdout = model + "\n"
+            elif args == ["--version"]:
+                stdout = "opencode v2.1.4\n"
+            elif args == ["run", "--help"]:
+                stdout = "run --model --agent --format --session --title"
+            elif args == ["auth", "list", "--format", "json"]:
+                stdout = "[]"
+            elif args == ["api", "get", "/api/model"]:
+                stdout = json.dumps({"data": [model_record]})
+            elif args == ["api", "get", "/api/provider/opencode"]:
+                stdout = json.dumps(
+                    {
+                        "data": {
+                            "id": "opencode",
+                            "package": "@opencode/ai/providers/openai-compatible",
+                            "settings": {
+                                "apiKey": "public",
+                                "baseURL": "https://opencode.ai/inference/openai/v1",
+                            },
+                        }
+                    }
+                )
+            elif args == ["debug", "agents"]:
+                stdout = "[]"
+            else:
+                raise AssertionError(args)
+            return {"returncode": 0, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "worker_agent_policy_is_restricted",
+        lambda *_args: True,
+    )
+    worker = {
+        "provider": "opencode",
+        "model": model,
+        "agent": "seto-decomp-worker",
+        "transport": "ssh",
+        "host": "kita-server",
+        "remote_dir": "/home/operator/seto-worker",
+        "usage_mode": "free",
+        "access_verified": True,
+        "free_model_only": True,
+    }
+
+    readiness = decomp_campaign_module._remote_opencode_preflight(
+        "remote-kita",
+        worker,
+        worktree,
+        {model},
+        FakeSSHExecutor(),  # type: ignore[arg-type]
+        provision_agent=True,
+    )
+
+    assert readiness["ready"] is True
+    assert readiness["blockers"] == []
+    assert readiness["quota_scope"] == "opencode:kita-server"
+    assert not any(args[:1] == ["run"] and len(args) > 2 and args[2] != "--help" for args in calls)
+
+
+def test_remote_target_skips_local_quota_and_keeps_ready_host_when_peer_is_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = "opencode/deepseek-v4.1-flash-free"
+    policy = tmp_path / ".opencode/agents/seto-decomp-worker.md"
+    policy.parent.mkdir(parents=True)
+    policy.write_text("policy", encoding="utf-8")
+    model_record = {
+        "providerID": "opencode",
+        "id": "deepseek-v4.1-flash-free",
+        "settings": {"apiKey": "public"},
+        "status": "active",
+        "enabled": True,
+        "cost": [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}],
+    }
+
+    class FakeSSHExecutor:
+        def request(self, target, _payload, **_kwargs):
+            if target.host == "alluka":
+                raise decomp_campaign_module.SSHExecutionError("offline")
+            return {"ok": True, "python": [3, 12, 3], "architecture": "aarch64", "workspace_writable": True}
+
+        def put_bytes(self, *_args, **_kwargs):
+            return {"sha256": "a" * 64}
+
+        def put_file(self, *_args, **_kwargs):
+            return {"sha256": "a" * 64}
+
+        def command(self, target, argv, **_kwargs):
+            args = argv[1:]
+            if args == ["models"]:
+                output = model + "\n"
+            elif args == ["--version"]:
+                output = "opencode v2.1.4\n"
+            elif args == ["run", "--help"]:
+                output = "--model --agent --format --session --title"
+            elif args == ["auth", "list", "--format", "json"]:
+                output = "[]"
+            elif args == ["api", "get", "/api/model"]:
+                output = json.dumps({"data": [model_record]})
+            elif args == ["api", "get", "/api/provider/opencode"]:
+                output = json.dumps(
+                    {
+                        "data": {
+                            "id": "opencode",
+                            "settings": {
+                                "apiKey": "public",
+                                "baseURL": "https://opencode.ai/inference/openai/v1",
+                            },
+                        }
+                    }
+                )
+            elif args == ["debug", "agents"]:
+                output = "[]"
+            else:
+                raise AssertionError(args)
+            return {"returncode": 0, "stdout": output, "stderr": ""}
+
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_local_opencode_preflight",
+        lambda *_args: pytest.fail("unselected local workers must not be probed"),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "worker_agent_policy_is_restricted",
+        lambda *_args: True,
+    )
+    workers = {
+        "luna-01": {"provider": "openai", "model": "openai/gpt-6-luna"},
+        "remote-alluka": {
+            "provider": "opencode", "model": model, "transport": "ssh",
+            "host": "alluka", "remote_dir": "/home/operator/alluka",
+            "agent": "seto-decomp-worker", "usage_mode": "free",
+            "access_verified": True, "free_model_only": True,
+        },
+        "remote-kita": {
+            "provider": "opencode", "model": model, "transport": "ssh",
+            "host": "kita-server", "remote_dir": "/home/operator/kita",
+            "agent": "seto-decomp-worker", "usage_mode": "free",
+            "access_verified": True, "free_model_only": True,
+        },
+    }
+    config = {
+        "workers": workers,
+        "models": {"allowlist": [model]},
+    }
+
+    preflight = decomp_campaign_module._opencode_preflight(
+        config,
+        tmp_path,
+        execution_target="remote",
+        ssh_executor=FakeSSHExecutor(),  # type: ignore[arg-type]
+        provision_remote_agent=True,
+    )
+
+    assert set(preflight["workers"]) == {"remote-alluka", "remote-kita"}
+    assert preflight["workers"]["remote-alluka"]["ready"] is False
+    assert preflight["workers"]["remote-kita"]["ready"] is True
+    assert select_ready_workers(workers, preflight["workers"], max_workers=4) == [
+        "remote-kita"
+    ]
 
 
 def test_model_execution_is_disabled_until_separately_verified() -> None:
@@ -4252,20 +4794,37 @@ def test_status_report_shows_configured_active_and_idle_workers(tmp_path: Path) 
             "luna-01": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 4},
             "luna-02": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 4},
             "deepseek-01": {"provider": "opencode", "model": "opencode/deepseek-v4.1-flash-free", "max_parallel": 4},
+            "remote-kita": {
+                "provider": "opencode",
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "transport": "ssh",
+                "host": "kita-server",
+                "quota_scope": "opencode:kita-server",
+                "max_parallel": 1,
+            },
         },
     }
 
-    report = decomp_campaign_module._status_report(store, config, tmp_path)
+    report = decomp_campaign_module._status_report(
+        store,
+        config,
+        tmp_path,
+        {"remote-kita": {"ready": True, "blockers": []}},
+    )
 
-    assert report["worker_pool"]["configured"] == 3
+    assert report["worker_pool"]["configured"] == 4
     assert report["worker_pool"]["active"] == 2
-    assert report["worker_pool"]["idle"] == 1
+    assert report["worker_pool"]["idle"] == 2
     assert report["worker_pool"]["workers"]["luna-01"]["assignments"] == [
         {"address": "0x1000", "status": "running", "stage": "inference"}
     ]
     assert report["worker_pool"]["workers"]["deepseek-01"]["assignments"] == [
         {"address": "0x2000", "status": "boundary_checking", "stage": "ghidra"}
     ]
+    assert report["worker_pool"]["workers"]["remote-kita"]["transport"] == "ssh"
+    assert report["worker_pool"]["workers"]["remote-kita"]["host"] == "kita-server"
+    assert report["worker_pool"]["workers"]["remote-kita"]["quota_scope"] == "opencode:kita-server"
+    assert report["worker_pool"]["workers"]["remote-kita"]["readiness"] == "READY"
 
 
 def test_explicit_precomparison_inconclusive_keeps_object_provenance_without_certifying(
@@ -5275,7 +5834,7 @@ def test_productive_run_max_tasks_is_a_cumulative_sqlite_ceiling(
     monkeypatch.setattr(
         decomp_campaign_module,
         "_doctor",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "opencode": {
                 "workers": {"openai": {"ready": True}, "deepseek": {"ready": True}}
             },
@@ -5424,7 +5983,7 @@ def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
     monkeypatch.setattr(
         decomp_campaign_module,
         "_doctor",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "opencode": {
                 "workers": {
                     "luna-01": {"ready": True},

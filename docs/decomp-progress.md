@@ -7096,3 +7096,77 @@ os únicos endereços MATCHED permanecem `0x2C28C` e `0x31650`.
 | `compileall -q src scripts tests` | clean |
 | `git diff --check` | clean |
 | CI Ubuntu/Windows × Python 3.11/3.12 | _(aguardando checks da PR; Python 3.11 não está instalado localmente)_ |
+
+### R2 — Workers OpenCode remotos por SSH (Alluka/Kita)
+
+O PC Windows continua sendo a única autoridade do SQLite, Ghidra, MWCC, matcher,
+checkpoints e promoção. O transporte SSH executa o OpenCode no próprio host e
+leva somente um pacote limitado ao candidato: agente restrito, configuração de
+projeto mínima (`snapshots: false`), triage, log Ghidra validado, C atual/melhor
+e relatórios referenciados. Não são enviados `.git`, SQLite, EBOOT/PRXs, mídia,
+tokens, arquivos `.env` ou configuração pessoal do OpenCode. Cada host possui um
+workspace isolado em `/home/lvinik/seto-worker/functions/<endereço>`; o C volta
+com SHA-256 e substituição atômica antes do pipeline local de verificação.
+Resultados remotos são marcados por endereço e número de tentativa; em caso de
+conexão perdida, o executor procura o resultado concluído e não repete a mesma
+inferência desconhecida. A certificação continua exigindo os dois builds locais.
+
+O CLI mantém `--execution-target local|remote|all`, com `local` como padrão.
+`provider` permanece `openai`/`opencode` para workers legados; o campo existente
+`provider` no ledger usa os escopos de execução `opencode:kita-server` e
+`opencode:alluka`, sem migração ou alteração das 193 tentativas anteriores.
+Somente os workers `remote-kita` e `remote-alluka` estão configurados, conforme
+a decisão do operador de que Illumi e Milluki não têm capacidade para esta
+campanha. O alias SSH existente de Alluka é `alluka` (minúsculo); `ssh Alluka`
+resolve para o usuário Windows padrão e falha com `Permission denied (publickey)`.
+
+| Verificação do host | Kita | Alluka |
+|---|---|---|
+| Alias efetivo | `kita-server` | `alluka` |
+| Arquitetura / Python | `x86_64` / Python 3.12.3 | `aarch64` / Python 3.12.3 |
+| OpenCode / flags `run` | v2.1.4; `--model`, `--agent`, `--format`, `--session`, `--title` confirmados | v2.1.4; mesmas flags confirmadas |
+| Modelo configurado | `opencode/deepseek-v4.1-flash-free` | `opencode/deepseek-v4.1-flash-free` |
+| Catálogo / cobrança | ativo, enabled, API pública e input/output/cache com custo zero | ativo, enabled, API pública e input/output/cache com custo zero |
+| Agente restrito / workspace | READY; política efetivamente carregada | READY; política efetivamente carregada |
+
+Smoke SSH sem modelo: a fonte já validada de `0x3D868` (379 bytes,
+`fea0687776c34118a42d8bda64348df2baf1003ce2b37980e78bc60cd79f09e9`) foi
+transferida e recuperada nos dois hosts com SHA-256 idêntico. Nenhuma tentativa
+SQLite foi criada pelo smoke.
+
+Pilotos reais, cada um limitado a uma tentativa cumulativa e sem uso de Luna:
+
+| Tentativa SQLite | Host/escopo | C retornado | Resultado local MWCC/matcher | Efeito |
+|---:|---|---|---|---|
+| 194 / função `0x3D868` #11 | Kita / `opencode:kita-server` | `35ea88c8ac59b206e5886b6f65f0561fa75c17735819f8aabe0d45e740a74dc1` | MWCC produziu objeto; `.text` tinha 92/96 bytes; matcher `matcher_incomplete` | Não promoveu; melhor verificado preservado em 20/24 |
+| 195 / função `0x3D868` #12 | Alluka / `opencode:alluka` | `5e2ec97b08eee2704c8b7aefdc3ee10f0f5600bdfc257e6d6c0a037ea6c9321c` | MWCC produziu objeto; `.text` tinha 92/96 bytes; matcher `matcher_incomplete` | Não promoveu; melhor verificado preservado em 20/24 |
+
+O ciclo SSH→C→MWCC→matcher→SQLite foi exercitado nos dois hosts; nenhuma das
+duas comparações gerou reports completos, portanto **nenhum resultado parcial foi
+certificado**. O matcher determinístico local reproduziu a causa concreta em
+ambos: falta de uma word no símbolo de 24 instruções (`.text` de 92 bytes,
+contra 96 requeridos). A hipótese do piloto só alterou o endereço do buffer
+(`0x3D894–0x3D89C`); não resolveu o jal de word 5, cuja identidade segue sem
+prova. O SHA de melhor fonte continua `fea068...` (20/24), o candidato está
+`stalled` com 12 tentativas, e as duas fontes de piloto permanecem snapshots
+latest não promovidos. Totais SQLite: **193 → 195**; 169 tentativas OpenAI
+históricas, 24 no escopo legado `opencode` (suspenso por quota), 1 em Kita e 1
+em Alluka. Ambos os escopos remotos permanecem ativos; nenhum host alterou a
+quota registrada dos demais.
+
+O próximo candidato foi seletivamente reaberto com hipótese documentada
+(`0x38B58`, exact, 4/24, sem limitações), mas a execução adicional parou antes
+de qualquer inferência porque o preflight local de Ghidra ficou BLOCKED. Causa
+observada: WSL não tem `/usr/bin/java`/`/usr/lib/jvm`; `JAVA_HOME` global aponta
+para Corretto 25, incompatível com Ghidra 12.1.3; o JDK 21.0.3 instalado também
+foi recusado como versão não suportada. O launcher Windows pelo caminho UNC
+terminou com erro de sintaxe CMD. Nenhum JDK foi instalado, nenhuma verificação
+foi contornada e o candidato `0x38B58` permanece `pending` sem tentativa. A
+retomada produtiva aguarda um Java suportado/local Ghidra READY; o orçamento
+cumulativo continua em 937 e o limite de duração local permanece 21.255 s.
+
+Estado de proteção: SQLite integrity `ok`, 0 leases ativos, `0x4217C` continua
+blocked, `0x2C28C`/`0x31650` não foram reconstruídos, e o baseline MATCHED não
+mudou. O teste local concluiu 1.037 passed e 44 skipped; os skips são integrações
+reais opcionais/WSl ausentes, não falhas do transporte. A documentação/configuração
+está na branch `feat/seto-decomp-046`; PR #47 permanece sem merge.

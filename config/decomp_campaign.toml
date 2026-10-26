@@ -37,8 +37,38 @@ access_verified = false
 max_parallel = 1
 free_model_only = true
 
+[workers.remote-kita]
+transport = "ssh"
+host = "kita-server"
+remote_dir = "/home/lvinik/seto-worker"
+remote_python = "/usr/bin/python3"
+remote_opencode = "/home/lvinik/.opencode/bin/opencode"
+quota_scope = "opencode:kita-server"
+provider = "opencode"
+model = "opencode/deepseek-v4.1-flash-free"
+agent = "seto-decomp-worker"
+usage_mode = "free"
+access_verified = true
+free_model_only = true
+max_parallel = 1
+
+[workers.remote-alluka]
+transport = "ssh"
+host = "alluka"
+remote_dir = "/home/lvinik/seto-worker"
+remote_python = "/usr/bin/python3"
+remote_opencode = "/home/lvinik/.opencode/bin/opencode"
+quota_scope = "opencode:alluka"
+provider = "opencode"
+model = "opencode/deepseek-v4.1-flash-free"
+agent = "seto-decomp-worker"
+usage_mode = "free"
+access_verified = true
+free_model_only = true
+max_parallel = 1
+
 [limits]
-max_workers = 2
+max_workers = 4
 max_tasks = 40
 max_duration_seconds = 7200
 lease_seconds = 3660
