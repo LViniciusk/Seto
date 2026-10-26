@@ -2,8 +2,8 @@
   "schema_version": 1,
   "source_commit": "5a17ff3c5498666604c1fcc124f4c408de18ed9b",
   "baseline": {
-    "eboot_matched_functions": 10,
-    "eboot_matched_instructions": 237,
+    "eboot_matched_functions": 12,
+    "eboot_matched_instructions": 285,
     "eboot_matched_addresses": [
       "0x2c28c",
       "0x31650",
@@ -13,7 +13,9 @@
       "0x36d1c",
       "0x37bc8",
       "0x388b4",
+      "0x38b58",
       "0x38db4",
+      "0x3d868",
       "0x3d8f0"
     ],
     "eboot_matched_ranges": [
@@ -50,8 +52,16 @@
         "size_bytes": 72
       },
       {
+        "address": "0x38b58",
+        "size_bytes": 96
+      },
+      {
         "address": "0x38db4",
         "size_bytes": 252
+      },
+      {
+        "address": "0x3d868",
+        "size_bytes": 96
       },
       {
         "address": "0x3d8f0",

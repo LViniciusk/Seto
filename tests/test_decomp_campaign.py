@@ -41,6 +41,7 @@ from decomp_campaign import (  # noqa: E402
     validate_ghidra_log,
     validate_model_id,
     select_ready_workers,
+    select_execution_workers,
     validated_cached_ghidra_boundary,
     worker_agent_policy_is_restricted,
     worker_readiness,
@@ -468,6 +469,650 @@ def test_models_are_exact_allowlist_only() -> None:
         validate_model_id("openai/gpt-6-luna-fast", allowed)
     with pytest.raises(ValueError, match="not explicitly allowlisted"):
         validate_model_id("openai/gpt-7-paid", allowed)
+
+
+def test_execution_target_filters_workers_before_readiness() -> None:
+    workers = {
+        "luna-01": {"transport": "local"},
+        "remote-alluka": {"transport": "ssh"},
+        "legacy": {},
+    }
+
+    assert select_execution_workers(workers, "local") == ["luna-01", "legacy"]
+    assert select_execution_workers(workers, "remote") == ["remote-alluka"]
+    assert select_execution_workers(workers, "all") == list(workers)
+    with pytest.raises(ValueError, match="execution target"):
+        select_execution_workers(workers, "other")
+
+
+def test_run_execution_target_defaults_to_local_and_accepts_all_modes() -> None:
+    local = decomp_campaign_module.build_parser().parse_args(["run", "--confirm"])
+    remote = decomp_campaign_module.build_parser().parse_args(
+        ["run", "--confirm", "--execution-target", "remote"]
+    )
+    all_workers = decomp_campaign_module.build_parser().parse_args(
+        ["run", "--confirm", "--execution-target", "all"]
+    )
+
+    assert local.execution_target == "local"
+    assert remote.execution_target == "remote"
+    assert all_workers.execution_target == "all"
+
+
+@pytest.mark.skipif(decomp_campaign_module.os.name != "nt", reason="Windows campaign uses the .bat launcher")
+def test_windows_doctor_probes_the_same_ghidra_launcher_as_prepare_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config" / "campaign.toml"
+    config_path.parent.mkdir(parents=True)
+    toolchain = tmp_path / "config" / "seto.toml"
+    toolchain.write_text(
+        '[tools.mwccpsp]\npath = "/mwcc"\n[tools.wibo]\npath = "/wibo"\n',
+        encoding="utf-8",
+    )
+    windows_home = tmp_path / "windows-ghidra"
+    launcher = windows_home / "support" / "analyzeHeadless.bat"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("@echo off\n", encoding="utf-8")
+    java_home = tmp_path / "jdk-21"
+    java_executable = java_home / "bin" / "java.exe"
+    java_executable.parent.mkdir(parents=True)
+    java_executable.write_bytes(b"java test executable")
+    wrapper = tmp_path / "scripts" / "run_ghidra_headless.ps1"
+    wrapper.parent.mkdir()
+    wrapper.write_text("param()\n", encoding="utf-8")
+    ghidra_config = tmp_path / "config" / "ghidra.toml"
+    ghidra_config.write_text(
+        f'[ghidra]\nhome = "/wsl/ghidra"\nwindows_home = "{windows_home.as_posix()}"\n'
+        f'java_home = "{java_home.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    config = {
+        "workers": {
+            "remote-kita": {
+                "transport": "ssh",
+                "provider": "opencode",
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "host": "kita-server",
+                "remote_dir": "/home/worker/seto-worker",
+            }
+        },
+        "opencode": {"command": ["opencode-test"]},
+        "toolchain": {
+            "wsl_distro": "Ubuntu",
+            "mwcc_config": "config/seto.toml",
+            "ghidra_local_config": "config/ghidra.toml",
+        },
+        "inputs": {},
+    }
+    monkeypatch.setattr(decomp_campaign_module, "_sanitize_opencode_prefix", lambda _command: ["opencode-test"])
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_opencode_preflight",
+        lambda *_args, **_kwargs: {"workers": {"remote-kita": {"ready": True, "agent_policy": True}}},
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module.shutil,
+        "which",
+        lambda name: {
+            "wsl.exe": "wsl.exe",
+            "powershell.exe": "powershell.exe",
+            "ai-memory": None,
+        }.get(name),
+    )
+    commands: list[list[str]] = []
+    launcher_environments: list[dict[str, str]] = []
+
+    def fake_run(argv, **kwargs):
+        command = [str(item) for item in argv]
+        commands.append(command)
+        if "-File" in command:
+            launcher_environments.append(kwargs.get("env", {}))
+            return subprocess.CompletedProcess(command, 1, "", "unsupported Windows launcher")
+        if command[:3] == ["wsl.exe", "-d", "Ubuntu"]:
+            return subprocess.CompletedProcess(command, 0, "ready", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(decomp_campaign_module.subprocess, "run", fake_run)
+
+    report = decomp_campaign_module._doctor(
+        config,
+        config_path,
+        execution_target="remote",
+    )
+
+    windows_probe = next((command for command in commands if "-File" in command), None)
+    assert windows_probe is not None
+    assert str(launcher) in windows_probe
+    assert launcher_environments[0]["JAVA_HOME"] == str(java_home)
+    assert str(java_home / "bin") in launcher_environments[0]["PATH"].split(";")
+    assert report["toolchain"]["ghidra"] == "BLOCKED"
+
+
+def test_ghidra_settings_environment_isolates_and_quotes_user_settings(
+    tmp_path: Path,
+) -> None:
+    plain = tmp_path / "plain" / "user-settings"
+    assert decomp_campaign_module._ghidra_settings_environment(plain) == {
+        "GHIDRA_JAVA_OPTIONS": f"-Dapplication.settingsdir={plain}"
+    }
+    spaced = tmp_path / "with space" / "user-settings"
+    assert decomp_campaign_module._ghidra_settings_environment(spaced) == {
+        "GHIDRA_JAVA_OPTIONS": f'-Dapplication.settingsdir="{spaced}"'
+    }
+
+
+def test_configured_public_zero_cost_opencode_model_can_be_verified_exactly() -> None:
+    model = "opencode/beam-free"
+    readiness = worker_readiness(
+        {
+            "provider": "opencode",
+            "model": model,
+            "usage_mode": "free",
+            "free_model_only": True,
+            "access_verified": True,
+        },
+        {
+            "catalog": "available",
+            "auth": "public",
+            "public_model_metadata": True,
+            "model_status": "active",
+            "model_enabled": True,
+            "model_cost_zero": True,
+            "agent_policy": True,
+        },
+        {model},
+    )
+
+    assert readiness == {"ready": True, "blockers": []}
+
+
+def test_unconfigured_or_nonzero_cost_opencode_model_stays_blocked() -> None:
+    worker = {
+        "provider": "opencode",
+        "model": "opencode/beam-free",
+        "usage_mode": "free",
+        "free_model_only": True,
+        "access_verified": True,
+    }
+    observed = {
+        "catalog": "available",
+        "auth": "public",
+        "public_model_metadata": True,
+        "model_status": "active",
+        "model_enabled": True,
+        "model_cost_zero": False,
+        "agent_policy": True,
+    }
+
+    assert worker_readiness(worker, observed, set())["ready"] is False
+    assert "model_cost_not_zero_or_unverified" in worker_readiness(
+        worker, observed, {"opencode/beam-free"}
+    )["blockers"]
+
+
+def test_remote_run_returns_c_to_the_local_matcher_without_certifying_it(
+    tmp_path: Path,
+) -> None:
+    address = "0x1000"
+    source_relative = Path("decomp/src/eboot/func_00001000.c")
+    remote_source = b"int func_00001000(void) { return 7; }\n"
+    worktree = tmp_path / "remote-worker-local-staging"
+    worktree.mkdir()
+    source = worktree / source_relative
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"int func_00001000(void) { return 0; }\n")
+    policy = tmp_path / "seto-decomp-worker.md"
+    policy.write_text("restricted policy", encoding="utf-8")
+
+    class FakeSSHExecutor:
+        def __init__(self) -> None:
+            self.files: dict[tuple[str, str], bytes] = {}
+            self.inference_calls = 0
+            self.remote_directory = ""
+
+        def request(self, target, payload, **_kwargs):
+            if payload["op"] == "ping":
+                return {"ok": True, "workspace_writable": True}
+            raise AssertionError(payload)
+
+        def put_file(self, target, relative_path, path, **_kwargs):
+            self.remote_directory = target.directory
+            self.files[(target.directory, relative_path)] = Path(path).read_bytes()
+            return {"sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+        def put_bytes(self, target, relative_path, content, **_kwargs):
+            self.files[(target.directory, relative_path)] = content
+            return {"sha256": hashlib.sha256(content).hexdigest()}
+
+        def command(self, target, argv, **_kwargs):
+            payload = json.loads(argv[argv.index("--data") + 1])
+            data = {
+                "id": "ses_remote123",
+                "location": {"directory": target.directory},
+                "agent": payload["agent"],
+                "model": {**payload["model"], "variant": "default"},
+            }
+            return {"returncode": 0, "stdout": json.dumps({"data": data}), "stderr": ""}
+
+        def run(self, target, **_kwargs):
+            self.inference_calls += 1
+            assert self.files[(target.directory, source_relative.as_posix())]
+            self.files[(target.directory, source_relative.as_posix())] = remote_source
+            return {
+                "completed": True,
+                "address": address,
+                "attempt_number": 1,
+                "session_id": "ses_remote123",
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {"type": "text", "text": json.dumps({"checkpoint": {"next_experiment": "inspect locally"}})}
+                ),
+                "stderr": "",
+                "source_sha256": hashlib.sha256(remote_source).hexdigest(),
+            }
+
+        def collect_file(self, target, relative_path, destination, **kwargs):
+            content = self.files[(target.directory, relative_path)]
+            digest = hashlib.sha256(content).hexdigest()
+            assert kwargs["expected_sha256"] == digest
+            Path(destination).write_bytes(content)
+            return digest
+
+    executor = FakeSSHExecutor()
+    matched_input: list[bytes] = []
+
+    def local_verifier(_worktree: Path, claim: Claim, _checkpoint: dict[str, object]):
+        current = source.read_bytes()
+        matched_input.append(current)
+        source_hash = hashlib.sha256(current).hexdigest()
+        reports = []
+        for _ in range(2):
+            report = strict_report(claim.address)
+            report["status"] = "NONMATCHING"
+            report["verified_decompilation"] = False
+            report["provenance"]["source_sha256"] = source_hash  # type: ignore[index]
+            report["match"].update(  # type: ignore[union-attr]
+                status="NONMATCHING",
+                matching_words=3,
+                total_words=4,
+                difference_count=1,
+                differences=[{"word_index": 3}],
+            )
+            reports.append(report)
+        return {
+            "status": "NONMATCHING",
+            "source_sha256": source_hash,
+            "matching_words": 3,
+            "total_words": 4,
+            "build_sha256": [item["provenance"]["object_sha256"] for item in reports],
+            "reports": reports,
+        }
+
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([Candidate(address, 16, "0x12345678", 1, "EXACT", evidence={})])
+    claim = store.claim_next(
+        "remote-alluka",
+        "opencode:alluka",
+        model_provider="opencode",
+        reserve_only=True,
+    )
+    assert claim is not None
+    worker = Worker(
+        "remote-alluka",
+        "opencode",
+        "opencode/deepseek-v4.1-flash-free",
+        "seto-decomp-worker",
+        "ssh",
+        "Alluka",
+        "/home/operator/seto-worker",
+        "opencode:alluka",
+    )
+    runner = CampaignRunner(
+        store,
+        opencode_command=["opencode-unused"],
+        worktrees={worker.worker_id: worktree},
+        verifier=local_verifier,
+        ssh_executor=executor,  # type: ignore[arg-type]
+        remote_targets={worker.worker_id: decomp_campaign_module.RemoteTarget(worker.host, worker.remote_dir)},
+        remote_policy_path=policy,
+        allowed_models={"opencode/deepseek-v4.1-flash-free"},
+    )
+
+    outcome = runner._run_claim(worker, claim, None)
+
+    task = store.get_task(address)
+    assert outcome == "pending", {
+        "checkpoint": task["checkpoint"],
+        "attempts": store.list_attempts(),
+        "inference_calls": executor.inference_calls,
+        "matched_input": matched_input,
+        "source_hex": source.read_bytes().hex(),
+    }
+    assert executor.inference_calls == 1
+    assert matched_input == [remote_source]
+    assert task["status"] != "matched"
+    assert task["best_result"]["status"] == "NONMATCHING"
+    assert task["best_result"]["campaign_origin"]["provider"] == "opencode"
+    assert task["best_result"]["campaign_origin"]["quota_scope"] == "opencode:alluka"
+
+
+def test_quota_state_isolated_by_remote_execution_scope(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([Candidate("0x1000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    alluka = store.claim_next("remote-alluka", "opencode:alluka", model_provider="opencode")
+    assert alluka is not None
+    alluka = store.bind_session(alluka, "ses_alluka_only")
+    store.fail(alluka, Failure(FailureKind.QUOTA_EXHAUSTED))
+
+    assert store.provider_status("opencode:alluka") == "suspended_quota"
+    assert store.provider_status("opencode:kita-server") == "active"
+    assert store.provider_status("opencode") == "active"
+    kita = store.claim_next(
+        "remote-kita", "opencode:kita-server", model_provider="opencode"
+    )
+    assert kita is not None
+    assert kita.provider == "opencode:kita-server"
+    assert kita.session_id is None
+    assert store.total_attempt_count() == 2
+
+
+@pytest.mark.parametrize("failure", [Failure(FailureKind.NETWORK), Failure(FailureKind.AUTH)])
+def test_remote_host_failure_can_move_same_model_task_without_reusing_session(
+    tmp_path: Path, failure: Failure
+) -> None:
+    store = CampaignStore(tmp_path / f"{failure.kind.value}.sqlite3")
+    store.seed([Candidate("0x2000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    kita = store.claim_next(
+        "remote-kita", "opencode:kita-server", model_provider="opencode"
+    )
+    assert kita is not None
+    kita = store.bind_session(kita, "ses_kita_host_only")
+    store.fail(kita, failure)
+
+    alluka = store.claim_next(
+        "remote-alluka",
+        "opencode:alluka",
+        model_provider="opencode",
+        now=time.time() + 3,
+    )
+
+    assert alluka is not None
+    assert alluka.session_id is None
+    assert store.provider_status("opencode:kita-server") in {
+        "network_backoff",
+        "blocked_auth",
+    }
+    assert store.provider_status("opencode:alluka") == "active"
+
+
+def test_remote_session_location_uses_linux_workspace_and_host_scope(tmp_path: Path) -> None:
+    worktree = tmp_path / "local-staging"
+    worktree.mkdir()
+    store = CampaignStore(tmp_path / "sessions.sqlite3")
+    store.seed([Candidate("0x1000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    claim = store.claim_next(
+        "remote-kita",
+        "opencode:kita-server",
+        model_provider="opencode",
+    )
+    assert claim is not None
+    calls: list[tuple[str, str]] = []
+    session = {
+        "id": "ses_kita_only",
+        "location": {"directory": "/home/operator/seto-worker/functions/1000"},
+        "agent": "seto-decomp-worker",
+        "model": {"providerID": "opencode", "id": "deepseek-v4.1-flash-free"},
+    }
+
+    class FakeSSHExecutor:
+        def command(self, target, argv, **_kwargs):
+            calls.append((target.host, argv[3]))
+            return {
+                "returncode": 0,
+                "stdout": json.dumps({"data": session}),
+                "stderr": "",
+            }
+
+    worker = Worker(
+        "remote-kita",
+        "opencode",
+        "opencode/deepseek-v4.1-flash-free",
+        "seto-decomp-worker",
+        "ssh",
+        "kita-server",
+        "/home/operator/seto-worker",
+        "opencode:kita-server",
+    )
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={worker.worker_id: worktree},
+        ssh_executor=FakeSSHExecutor(),  # type: ignore[arg-type]
+        remote_targets={
+            worker.worker_id: decomp_campaign_module.RemoteTarget(
+                worker.host, worker.remote_dir
+            )
+        },
+    )
+
+    bound = runner._ensure_session(
+        claim,
+        worktree,
+        None,
+        agent=worker.agent,
+        model=worker.model,
+        worker=worker,
+    )
+
+    assert bound.session_id == "ses_kita_only"
+    assert calls == [("kita-server", "/api/session")]
+    assert CampaignRunner._same_location(
+        {"location": {"directory": session["location"]["directory"]}},
+        worktree,
+        session["location"]["directory"],
+    )
+
+
+def test_remote_readiness_requires_exact_zero_cost_catalog_and_restricted_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = "opencode/deepseek-v4.1-flash-free"
+    worktree = tmp_path / "remote-project"
+    policy = worktree / ".opencode" / "agents" / "seto-decomp-worker.md"
+    policy.parent.mkdir(parents=True)
+    policy.write_text("restricted policy", encoding="utf-8")
+    model_record = {
+        "providerID": "opencode",
+        "id": "deepseek-v4.1-flash-free",
+        "settings": {"apiKey": "public"},
+        "status": "active",
+        "enabled": True,
+        "cost": [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}],
+    }
+    calls: list[list[str]] = []
+
+    class FakeSSHExecutor:
+        def request(self, _target, payload, **_kwargs):
+            assert payload == {"op": "ping", "create_workspace": True}
+            return {"ok": True, "python": [3, 12, 3], "architecture": "aarch64", "workspace_writable": True}
+
+        def put_file(self, _target, relative_path, source, **_kwargs):
+            assert relative_path == ".opencode/agents/seto-decomp-worker.md"
+            assert Path(source).read_text(encoding="utf-8") == "restricted policy"
+            return {"sha256": "a" * 64}
+
+        def put_bytes(self, _target, relative_path, content, **_kwargs):
+            assert relative_path == ".opencode/opencode.json"
+            assert json.loads(content)["snapshots"] is False
+            return {"sha256": hashlib.sha256(content).hexdigest()}
+
+        def command(self, _target, argv, **_kwargs):
+            args = argv[1:]
+            calls.append(list(args))
+            if args == ["models"]:
+                stdout = model + "\n"
+            elif args == ["--version"]:
+                stdout = "opencode v2.1.4\n"
+            elif args == ["run", "--help"]:
+                stdout = "run --model --agent --format --session --title"
+            elif args == ["auth", "list", "--format", "json"]:
+                stdout = "[]"
+            elif args == ["api", "get", "/api/model"]:
+                stdout = json.dumps({"data": [model_record]})
+            elif args == ["api", "get", "/api/provider/opencode"]:
+                stdout = json.dumps(
+                    {
+                        "data": {
+                            "id": "opencode",
+                            "package": "@opencode/ai/providers/openai-compatible",
+                            "settings": {
+                                "apiKey": "public",
+                                "baseURL": "https://opencode.ai/inference/openai/v1",
+                            },
+                        }
+                    }
+                )
+            elif args == ["debug", "agents"]:
+                stdout = "[]"
+            else:
+                raise AssertionError(args)
+            return {"returncode": 0, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "worker_agent_policy_is_restricted",
+        lambda *_args: True,
+    )
+    worker = {
+        "provider": "opencode",
+        "model": model,
+        "agent": "seto-decomp-worker",
+        "transport": "ssh",
+        "host": "kita-server",
+        "remote_dir": "/home/operator/seto-worker",
+        "usage_mode": "free",
+        "access_verified": True,
+        "free_model_only": True,
+    }
+
+    readiness = decomp_campaign_module._remote_opencode_preflight(
+        "remote-kita",
+        worker,
+        worktree,
+        {model},
+        FakeSSHExecutor(),  # type: ignore[arg-type]
+        provision_agent=True,
+    )
+
+    assert readiness["ready"] is True
+    assert readiness["blockers"] == []
+    assert readiness["quota_scope"] == "opencode:kita-server"
+    assert not any(args[:1] == ["run"] and len(args) > 2 and args[2] != "--help" for args in calls)
+
+
+def test_remote_target_skips_local_quota_and_keeps_ready_host_when_peer_is_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = "opencode/deepseek-v4.1-flash-free"
+    policy = tmp_path / ".opencode/agents/seto-decomp-worker.md"
+    policy.parent.mkdir(parents=True)
+    policy.write_text("policy", encoding="utf-8")
+    model_record = {
+        "providerID": "opencode",
+        "id": "deepseek-v4.1-flash-free",
+        "settings": {"apiKey": "public"},
+        "status": "active",
+        "enabled": True,
+        "cost": [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}],
+    }
+
+    class FakeSSHExecutor:
+        def request(self, target, _payload, **_kwargs):
+            if target.host == "alluka":
+                raise decomp_campaign_module.SSHExecutionError("offline")
+            return {"ok": True, "python": [3, 12, 3], "architecture": "aarch64", "workspace_writable": True}
+
+        def put_bytes(self, *_args, **_kwargs):
+            return {"sha256": "a" * 64}
+
+        def put_file(self, *_args, **_kwargs):
+            return {"sha256": "a" * 64}
+
+        def command(self, target, argv, **_kwargs):
+            args = argv[1:]
+            if args == ["models"]:
+                output = model + "\n"
+            elif args == ["--version"]:
+                output = "opencode v2.1.4\n"
+            elif args == ["run", "--help"]:
+                output = "--model --agent --format --session --title"
+            elif args == ["auth", "list", "--format", "json"]:
+                output = "[]"
+            elif args == ["api", "get", "/api/model"]:
+                output = json.dumps({"data": [model_record]})
+            elif args == ["api", "get", "/api/provider/opencode"]:
+                output = json.dumps(
+                    {
+                        "data": {
+                            "id": "opencode",
+                            "settings": {
+                                "apiKey": "public",
+                                "baseURL": "https://opencode.ai/inference/openai/v1",
+                            },
+                        }
+                    }
+                )
+            elif args == ["debug", "agents"]:
+                output = "[]"
+            else:
+                raise AssertionError(args)
+            return {"returncode": 0, "stdout": output, "stderr": ""}
+
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_local_opencode_preflight",
+        lambda *_args: pytest.fail("unselected local workers must not be probed"),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "worker_agent_policy_is_restricted",
+        lambda *_args: True,
+    )
+    workers = {
+        "luna-01": {"provider": "openai", "model": "openai/gpt-6-luna"},
+        "remote-alluka": {
+            "provider": "opencode", "model": model, "transport": "ssh",
+            "host": "alluka", "remote_dir": "/home/operator/alluka",
+            "agent": "seto-decomp-worker", "usage_mode": "free",
+            "access_verified": True, "free_model_only": True,
+        },
+        "remote-kita": {
+            "provider": "opencode", "model": model, "transport": "ssh",
+            "host": "kita-server", "remote_dir": "/home/operator/kita",
+            "agent": "seto-decomp-worker", "usage_mode": "free",
+            "access_verified": True, "free_model_only": True,
+        },
+    }
+    config = {
+        "workers": workers,
+        "models": {"allowlist": [model]},
+    }
+
+    preflight = decomp_campaign_module._opencode_preflight(
+        config,
+        tmp_path,
+        execution_target="remote",
+        ssh_executor=FakeSSHExecutor(),  # type: ignore[arg-type]
+        provision_remote_agent=True,
+    )
+
+    assert set(preflight["workers"]) == {"remote-alluka", "remote-kita"}
+    assert preflight["workers"]["remote-alluka"]["ready"] is False
+    assert preflight["workers"]["remote-kita"]["ready"] is True
+    assert select_ready_workers(workers, preflight["workers"], max_workers=4) == [
+        "remote-kita"
+    ]
 
 
 def test_model_execution_is_disabled_until_separately_verified() -> None:
@@ -1463,6 +2108,7 @@ def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
 
     def fake_ghidra(argv, **_kwargs):
         observed["argv"] = list(argv)
+        observed["environment"] = _kwargs.get("environment_overrides")
         console_lines = []
         for line in detailed_ghidra_log().splitlines():
             if line.startswith("SETO_") or line == "}":
@@ -1520,6 +2166,15 @@ def test_prepare_claim_refreshes_boundary_only_cached_ghidra_log(
     assert observed["argv"]
     assert observed["ghidra_slots_available_at_finish_event"] == 1
     assert "SetoAnalyzeEntry.java" in observed["argv"]
+    environment = observed["environment"]
+    assert isinstance(environment, dict)
+    settings_option = environment.get("GHIDRA_JAVA_OPTIONS", "")
+    assert settings_option.startswith("-Dapplication.settingsdir=")
+    settings_path = Path(settings_option.split("=", 1)[1].strip('"'))
+    assert settings_path.name == "user-settings"
+    assert settings_path.is_relative_to(
+        worktree / "build" / "decomp-campaign" / "openai" / "1000"
+    )
     assert "/evidence/ghidra-run-" in prepared.checkpoint["ghidra_log_path"]
     assert prepared.checkpoint["ghidra_log_path"].endswith(".log")
     assert "SETO_INSN=0x1000 SIZE=4 nop" in new_log.read_text(encoding="utf-8")
@@ -1579,6 +2234,55 @@ def test_cached_ghidra_evidence_is_reused_only_when_bound_to_address_and_hash(
     unsafe = replace(cached, checkpoint={**cached.checkpoint, "ghidra_log_path": "../../outside.log"})
     with pytest.raises(ValueError, match="outside"):
         validated_cached_ghidra_boundary(worktree, unsafe)
+
+
+def test_prepare_claim_copies_hash_named_archived_ghidra_cache_into_worker(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    claim = store.claim_next("luna-02", "openai", reserve_only=True)
+    assert claim is not None
+    claim = store.bind_session(claim, "ses_test_cache_copy")
+    source_worktree = tmp_path / "archive-luna-01"
+    target_worktree = tmp_path / "luna-02"
+    source_relative = (
+        "decomp-campaign/luna-01/1000/evidence/"
+        "ghidra-cache-" + hashlib.sha256(detailed_ghidra_log().encode()).hexdigest() + ".log"
+    )
+    source_log = campaign_build_path(source_worktree, source_relative)
+    source_log.parent.mkdir(parents=True)
+    source_log.write_text(detailed_ghidra_log(), encoding="utf-8")
+    digest = hashlib.sha256(source_log.read_bytes()).hexdigest()
+    checkpoint = {
+        **claim.checkpoint,
+        "ghidra_log_path": source_relative,
+        "ghidra_log_sha256": digest,
+        "boundary_status": "EXACT",
+    }
+    store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+    claim = replace(claim, checkpoint=checkpoint)
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": source_worktree, "luna-02": target_worktree},
+        verifier=lambda *_args: {},
+        checkpoint_repo_root=tmp_path,
+    )
+
+    boundary = runner._copy_cached_ghidra_evidence(
+        target_worktree,
+        claim,
+        source_worker="luna-01",
+        source_relative=source_relative,
+        source_sha256=digest,
+    )
+
+    assert boundary is not None and boundary["size_bytes"] == 16
+    target_relative = claim.checkpoint["ghidra_log_path"]
+    assert target_relative == f"decomp-campaign/luna-02/1000/evidence/ghidra-cache-{digest}.log"
+    assert campaign_build_path(target_worktree, target_relative).read_bytes() == source_log.read_bytes()
+    assert validated_cached_ghidra_boundary(target_worktree, claim)["size_bytes"] == 16  # type: ignore[index]
 
 
 def test_promotion_preflight_checks_snapshots_reports_ghidra_and_conflicts(tmp_path: Path) -> None:
@@ -1914,6 +2618,8 @@ def test_successful_worker_with_incomplete_matcher_result_is_local_error_without
     source = worktree / "decomp" / "src" / "eboot" / "func_00001000.c"
     source.parent.mkdir(parents=True)
     source.write_text("void func_00001000(void) { return; }\n", encoding="utf-8")
+    checkpoint_repo = tmp_path / "checkpoint-repo"
+    checkpoint_repo.mkdir()
 
     def matcher_incomplete(*_args):
         raise ValueError("candidate .text is 8 bytes; private token sk-sensitive-secret")
@@ -1923,21 +2629,26 @@ def test_successful_worker_with_incomplete_matcher_result_is_local_error_without
         opencode_command=fake_opencode_command(tmp_path, simulator),
         worktrees={"openai": worktree},
         verifier=matcher_incomplete,
+        checkpoint_repo_root=checkpoint_repo,
     )
     claim = store.claim_next("openai", "openai")
     assert claim is not None
 
-    assert runner._run_claim(Worker("openai", "openai", "openai/gpt-6-luna"), claim, None) == "blocked"
+    assert runner._run_claim(Worker("openai", "openai", "openai/gpt-6-luna"), claim, None) == "pending"
 
     task = store.get_task("0x1000")
     attempt = store.list_attempts()[0]
-    assert task["status"] == "blocked"
+    assert task["status"] == "pending"
     assert task["checkpoint"]["next_experiment"] == "recover missing function body"
     assert task["checkpoint"]["limitations"] == ["compiled object has only 8 bytes"]
     assert task["checkpoint"]["last_diagnostic"] == {
         "stage": "matcher",
         "code": "matcher_incomplete",
     }
+    latest_snapshot = task["checkpoint"]["latest_source_snapshot"]
+    assert task["checkpoint"]["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert not task["checkpoint"].get("best_source_snapshot")
+    assert (checkpoint_repo / "build" / latest_snapshot).read_bytes() == source.read_bytes()
     assert attempt["outcome"] == "matcher_incomplete"
     assert attempt["failure_kind"] == "agent_error"
     persisted = json.dumps(task["checkpoint"]) + json.dumps(attempt)
@@ -2270,10 +2981,294 @@ def test_fast_worker_claims_another_task_before_slow_worker_finishes(tmp_path: P
     slow_done = events / "slow-0x2000-done"
     assert result["attempted"] == 3
     assert fast_next.is_file() and slow_done.is_file()
-    assert fast_next.stat().st_mtime_ns < slow_done.stat().st_mtime_ns
+    fast_next_claim = next(
+        event
+        for event in store.list_recent_events(limit=100)
+        if event["kind"] == "inference_started" and event["address"] == "0x3000"
+    )
+    assert int(float(fast_next_claim["created_at"]) * 1_000_000_000) < slow_done.stat().st_mtime_ns
+
+
+def test_successive_matcher_improvements_refine_same_function_and_session(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    recovery_source = worktree / "build/decomp-campaign/experiments/1000/recovered.c"
+    recovery_source.parent.mkdir(parents=True)
+    recovery_source.write_text("int recovered(void) { return 0; }\n", encoding="utf-8")
+    recovery_source_sha256 = hashlib.sha256(recovery_source.read_bytes()).hexdigest()
+    recovery_report = strict_report("0x1000")
+    recovery_report["function"] = "func_00001000"
+    recovery_report["symbol"] = "func_00001000"
+    recovery_report["status"] = "NONMATCHING"
+    recovery_report["verified_decompilation"] = False
+    recovery_report["provenance"]["source_sha256"] = recovery_source_sha256
+    recovery_report["match"].update(
+        status="NONMATCHING",
+        matching_words=1,
+        total_words=4,
+        difference_count=3,
+        differences=[{"word_index": index} for index in range(3)],
+    )
+    recovery_report_path = worktree / "build/decomp-campaign/experiments/1000/recovered.match.json"
+    recovery_report_path.write_text(json.dumps(recovery_report), encoding="utf-8")
+    recovery = {
+        "origin_kind": "local_recovery",
+        "status": "NONMATCHING",
+        "matching_words": 1,
+        "total_words": 4,
+        "source_path": "build/decomp-campaign/experiments/1000/recovered.c",
+        "source_sha256": recovery_source_sha256,
+        "report_path": "build/decomp-campaign/experiments/1000/recovered.match.json",
+    }
+    recovery_reason = "SETO-DECOMP-046-R2: validated local NONMATCHING recovery evidence"
+    with store._connect() as db:
+        db.execute(
+            "UPDATE candidates SET checkpoint_json=? WHERE address='0x1000'",
+            (json.dumps({"local_recoveries": [recovery], "recovery_reason": recovery_reason}),),
+        )
+    worker_script = tmp_path / "iterative_worker.py"
+    worker_script.write_text(
+        "import json, pathlib, sys\n"
+        "state_path = pathlib.Path('.fake-opencode-sessions.json')\n"
+        "state = json.loads(state_path.read_text())\n"
+        "version = len(state['runs'])\n"
+        "state.setdefault('prompts', []).append(sys.argv[-1])\n"
+        "state_path.write_text(json.dumps(state))\n"
+        "source = pathlib.Path('decomp/src/eboot/func_00001000.c')\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text(f'int func_00001000(void) {{ return {version}; }}\\n')\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{'next_experiment':'use matcher feedback'}})}))\n",
+        encoding="utf-8",
+    )
+    checkpoint_repo = tmp_path / "checkpoints"
+    checkpoint_repo.mkdir()
+    score = 0
+    def verifier(path: Path, claim: Claim, _checkpoint: dict[str, object]):
+        nonlocal score
+        score += 1
+        source = path / "decomp/src/eboot/func_00001000.c"
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        reports = []
+        for _ in (1, 2):
+            report = strict_report(claim.address)
+            report["status"] = "NONMATCHING"
+            report["symbol"] = f"func_{claim.numeric_address:08X}"
+            report["verified_decompilation"] = False
+            report["provenance"]["source_sha256"] = source_hash
+            report["match"].update(
+                status="NONMATCHING",
+                matching_words=score,
+                difference_count=4 - score,
+                differences=[{"word_index": item} for item in range(4 - score)],
+            )
+            reports.append(report)
+        return {
+            "status": "NONMATCHING",
+            "source_sha256": source_hash,
+            "matching_words": score,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"] for report in reports],
+            "reports": reports,
+        }
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, worker_script),
+        worktrees={"luna-01": worktree},
+        verifier=verifier,
+        timeout_seconds=5,
+        checkpoint_repo_root=checkpoint_repo,
+        max_consecutive_attempts=3,
+    )
+
+    result = runner.run(
+        [Worker("luna-01", "openai", "openai/gpt-6-luna")], max_tasks=3
+    )
+
     attempts = store.list_attempts()
-    assert len(attempts) == 3
-    assert len({attempt["address"] for attempt in attempts}) == 3
+    task = store.get_task("0x1000")
+    session_state = json.loads(
+        (worktree / ".fake-opencode-sessions.json").read_text(encoding="utf-8")
+    )
+    assert result["attempted"] == 3
+    assert [item["attempt_number"] for item in attempts] == [1, 2, 3]
+    assert [item["outcome"] for item in attempts] == ["pending", "pending", "pending"]
+    assert len({item["session_id"] for item in attempts}) == 1
+    assert len(session_state["created"]) == 1
+    assert len(session_state["runs"]) == 3
+    assert all(recovery["report_path"] in prompt for prompt in session_state["prompts"])
+    assert all(recovery["source_path"] in prompt for prompt in session_state["prompts"])
+    assert all(recovery_reason in prompt for prompt in session_state["prompts"])
+    assert task["status"] == "pending"
+    assert task["checkpoint"]["local_recoveries"] == [recovery]
+    assert task["checkpoint"]["recovery_reason"] == recovery_reason
+    assert task["best_result"]["matching_words"] == 3
+    assert task["best_result"]["status"] == "NONMATCHING"
+    assert task["best_result"]["campaign_origin"]["attempt_number"] == 3
+    assert all(attempt["outcome"] != "matched" for attempt in attempts)
+
+
+def test_compiler_failure_is_fed_back_and_each_luna_call_is_counted(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    worker_script = tmp_path / "feedback_worker.py"
+    worker_script.write_text(
+        "import json, pathlib, sys\n"
+        "state_path = pathlib.Path('.fake-opencode-sessions.json')\n"
+        "state = json.loads(state_path.read_text())\n"
+        "version = len(state['runs'])\n"
+        "prompt = sys.argv[-1]\n"
+        "state.setdefault('prompts', []).append(prompt)\n"
+        "state_path.write_text(json.dumps(state))\n"
+        "source = pathlib.Path('decomp/src/eboot/func_00001000.c')\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text(f'void func_00001000(void) {{ return {version}; }}\\n')\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{'next_experiment':'fix compiler diagnostic'}})}))\n",
+        encoding="utf-8",
+    )
+    calls = 0
+
+    def verifier(path: Path, claim: Claim, _checkpoint: dict[str, object]):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise decomp_campaign_module.MatcherCompilerError(
+                "MWCC compilation failed",
+                excerpt="error: illegal conversion near local declaration",
+            )
+        source = path / "decomp/src/eboot/func_00001000.c"
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        reports = []
+        for _ in (1, 2):
+            report = strict_report(claim.address)
+            report["status"] = "NONMATCHING"
+            report["symbol"] = f"func_{claim.numeric_address:08X}"
+            report["verified_decompilation"] = False
+            report["provenance"]["source_sha256"] = source_hash
+            report["match"].update(
+                status="NONMATCHING",
+                matching_words=1,
+                difference_count=3,
+                differences=[{"word_index": index} for index in range(3)],
+            )
+            reports.append(report)
+        return {
+            "status": "NONMATCHING",
+            "source_sha256": source_hash,
+            "matching_words": 1,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"] for report in reports],
+            "reports": reports,
+        }
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, worker_script),
+        worktrees={"luna-01": worktree},
+        verifier=verifier,
+        timeout_seconds=5,
+        max_consecutive_attempts=2,
+    )
+
+    result = runner.run(
+        [Worker("luna-01", "openai", "openai/gpt-6-luna")], max_tasks=2
+    )
+
+    attempts = store.list_attempts()
+    task = store.get_task("0x1000")
+    session_state = json.loads(
+        (worktree / ".fake-opencode-sessions.json").read_text(encoding="utf-8")
+    )
+    assert result["attempted"] == 2
+    assert [item["outcome"] for item in attempts] == ["compiler_failed", "pending"]
+    assert attempts[0]["failure_kind"] == "agent_error"
+    assert len({item["session_id"] for item in attempts}) == 1
+    assert len(session_state["created"]) == 1
+    assert len(session_state["runs"]) == 2
+    assert "illegal conversion" in session_state["prompts"][1]
+    assert task["best_result"]["status"] == "NONMATCHING"
+    assert task["best_result"]["campaign_origin"]["attempt_number"] == 2
+
+
+def test_unchanged_source_hash_is_not_compiled_or_matched_again(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000", preferred_provider="openai")])
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    checkpoint_repo = tmp_path / "checkpoints"
+    checkpoint_repo.mkdir()
+    worker_script = tmp_path / "unchanged_worker.py"
+    worker_script.write_text(
+        "import json, pathlib\n"
+        "source = pathlib.Path('decomp/src/eboot/func_00001000.c')\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text('void func_00001000(void) { return 0; }\\n')\n"
+        "print(json.dumps({'type':'text','text':json.dumps({'checkpoint':{'next_experiment':'inspect first divergence'}})}))\n",
+        encoding="utf-8",
+    )
+    matcher_calls = 0
+
+    def verifier(path: Path, claim: Claim, _checkpoint: dict[str, object]):
+        nonlocal matcher_calls
+        matcher_calls += 1
+        source_hash = hashlib.sha256(
+            (path / "decomp/src/eboot/func_00001000.c").read_bytes()
+        ).hexdigest()
+        reports = []
+        for _ in (1, 2):
+            report = strict_report(claim.address)
+            report["status"] = "NONMATCHING"
+            report["verified_decompilation"] = False
+            report["provenance"]["source_sha256"] = source_hash
+            report["match"].update(
+                status="NONMATCHING",
+                matching_words=1,
+                difference_count=3,
+                differences=[{"word_index": index} for index in range(3)],
+            )
+            reports.append(report)
+        return {
+            "status": "NONMATCHING",
+            "source_sha256": source_hash,
+            "matching_words": 1,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"] for report in reports],
+            "reports": reports,
+        }
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path, worker_script),
+        worktrees={"luna-01": worktree},
+        verifier=verifier,
+        timeout_seconds=5,
+        checkpoint_repo_root=checkpoint_repo,
+        max_consecutive_attempts=3,
+    )
+
+    result = runner.run(
+        [Worker("luna-01", "openai", "openai/gpt-6-luna")], max_tasks=3
+    )
+
+    attempts = store.list_attempts()
+    task = store.get_task("0x1000")
+    assert result["attempted"] == 2
+    assert matcher_calls == 1
+    assert [attempt["outcome"] for attempt in attempts] == ["pending", "source_unchanged"]
+    assert task["status"] == "stalled"
+    assert task["checkpoint"]["last_diagnostic"] == {
+        "stage": "worker_return",
+        "code": "source_unchanged",
+    }
+    assert task["best_result"]["campaign_origin"]["attempt_number"] == 1
 
 
 def test_pilot_candidate_filter_does_not_drain_the_rest_of_inventory(tmp_path: Path) -> None:
@@ -3807,6 +4802,62 @@ def test_historical_hypothesis_keeps_better_checkpoint_and_source_precedence(
     assert candidate_source.read_bytes() == best_source
 
 
+def test_restore_candidate_source_prefers_latest_hypothesis_without_overwriting_best(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "luna-01"
+    worktree.mkdir()
+    best_source = b"void func_00001000(void) { return 1; }\n"
+    latest_source = b"void func_00001000(void) { return 2; }\n"
+    best_hash = hashlib.sha256(best_source).hexdigest()
+    latest_hash = hashlib.sha256(latest_source).hexdigest()
+    best_relative = f"decomp-campaign/checkpoints/00001000/{best_hash}.c"
+    latest_relative = f"decomp-campaign/checkpoints/00001000/{latest_hash}.c"
+    for relative, content in (
+        (best_relative, best_source),
+        (latest_relative, latest_source),
+    ):
+        snapshot = campaign_build_path(repo, relative)
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(content)
+    candidate_source = worktree / "decomp/src/eboot/func_00001000.c"
+    candidate_source.parent.mkdir(parents=True)
+    candidate_source.write_bytes(b"stale worktree hypothesis\n")
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={"luna-01": worktree},
+        checkpoint_repo_root=repo,
+    )
+    claim = Claim(
+        "0x1000",
+        16,
+        "0x12345678",
+        10,
+        "EXACT",
+        "luna-01",
+        "openai",
+        None,
+        3,
+        0,
+        {
+            "best_source_sha256": best_hash,
+            "best_source_snapshot": best_relative,
+            "source_sha256": latest_hash,
+            "latest_source_snapshot": latest_relative,
+        },
+        {},
+    )
+
+    runner._restore_best_source(worktree, claim)
+
+    assert candidate_source.read_bytes() == latest_source
+    assert (campaign_build_path(repo, best_relative)).read_bytes() == best_source
+    assert (campaign_build_path(repo, latest_relative)).read_bytes() == latest_source
+
+
 def test_status_report_exposes_only_the_bounded_diagnostic(tmp_path: Path) -> None:
     store = CampaignStore(tmp_path / "campaign.sqlite3")
     store.seed([candidate("0x1000", preferred_provider="openai")])
@@ -3856,20 +4907,37 @@ def test_status_report_shows_configured_active_and_idle_workers(tmp_path: Path) 
             "luna-01": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 4},
             "luna-02": {"provider": "openai", "model": "openai/gpt-6-luna", "max_parallel": 4},
             "deepseek-01": {"provider": "opencode", "model": "opencode/deepseek-v4.1-flash-free", "max_parallel": 4},
+            "remote-kita": {
+                "provider": "opencode",
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "transport": "ssh",
+                "host": "kita-server",
+                "quota_scope": "opencode:kita-server",
+                "max_parallel": 1,
+            },
         },
     }
 
-    report = decomp_campaign_module._status_report(store, config, tmp_path)
+    report = decomp_campaign_module._status_report(
+        store,
+        config,
+        tmp_path,
+        {"remote-kita": {"ready": True, "blockers": []}},
+    )
 
-    assert report["worker_pool"]["configured"] == 3
+    assert report["worker_pool"]["configured"] == 4
     assert report["worker_pool"]["active"] == 2
-    assert report["worker_pool"]["idle"] == 1
+    assert report["worker_pool"]["idle"] == 2
     assert report["worker_pool"]["workers"]["luna-01"]["assignments"] == [
         {"address": "0x1000", "status": "running", "stage": "inference"}
     ]
     assert report["worker_pool"]["workers"]["deepseek-01"]["assignments"] == [
         {"address": "0x2000", "status": "boundary_checking", "stage": "ghidra"}
     ]
+    assert report["worker_pool"]["workers"]["remote-kita"]["transport"] == "ssh"
+    assert report["worker_pool"]["workers"]["remote-kita"]["host"] == "kita-server"
+    assert report["worker_pool"]["workers"]["remote-kita"]["quota_scope"] == "opencode:kita-server"
+    assert report["worker_pool"]["workers"]["remote-kita"]["readiness"] == "READY"
 
 
 def test_explicit_precomparison_inconclusive_keeps_object_provenance_without_certifying(
@@ -4019,7 +5087,10 @@ def test_matcher_wrapper_does_not_replace_malformed_json_with_text_diagnostic(
 @pytest.mark.parametrize(
     ("stderr", "error_type"),
     [
-        ("error: compilation failed (exit 1)", decomp_campaign_module.MatcherCompilerError),
+        (
+            r"error: compilation failed in C:\private\secret.c token sk-sensitive-secret",
+            decomp_campaign_module.MatcherCompilerError,
+        ),
         (
             "error: candidate section '.text': needs 36 bytes at offset 0 but the section is 20 bytes",
             decomp_campaign_module.MatcherIncomplete,
@@ -4029,10 +5100,35 @@ def test_matcher_wrapper_does_not_replace_malformed_json_with_text_diagnostic(
 def test_matcher_process_failures_keep_compiler_and_incomplete_distinctions(
     stderr: str, error_type: type[Exception]
 ) -> None:
-    with pytest.raises(error_type):
+    with pytest.raises(error_type) as raised:
         _raise_matcher_process_error(
             decomp_campaign_module.WorkResult(1, "", stderr)
         )
+    excerpt = raised.value.excerpt
+    assert excerpt
+    assert len(excerpt) <= 600
+    assert "C:\\private" not in excerpt
+    assert "sk-sensitive-secret" not in excerpt
+
+
+def test_mwccincludes_usage_warning_is_not_a_compiler_failure() -> None:
+    result = decomp_campaign_module.WorkResult(
+        5,
+        "",
+        "### mwccpsp.exe Usage Warning:\n"
+        "# Environment variable 'MWCIncludes' not found\n"
+        "INCONCLUSIVE: symbol 'func_00001000' is not present in the candidate",
+    )
+
+    _raise_matcher_process_error(result)
+
+    excerpt = decomp_campaign_module._safe_diagnostic_excerpt(
+        "### mwccpsp.exe Usage Warning:\n"
+        "# Environment variable 'MWCIncludes' not found\n"
+        "# Error: illegal conversion in candidate source"
+    )
+    assert "illegal conversion" in excerpt
+    assert "MWCIncludes" not in excerpt
 
 
 def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
@@ -4073,6 +5169,15 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
                 "producer_worker_id": "openai",
                 "producer_attempt_number": 2,
             },
+            "last_diagnostic_detail": {
+                "stage": "compiler",
+                "code": "compiler_failed",
+                "excerpt": "illegal conversion in the candidate source",
+            },
+            "last_diagnostic": {
+                "stage": "worker_return",
+                "code": "candidate_source_missing",
+            },
             "local_experiments": [
                 {
                     "origin_kind": "local_experiment",
@@ -4111,10 +5216,14 @@ def test_prompt_makes_local_evidence_primary_and_memory_optional() -> None:
     assert "26" in prompt and "28" in prompt
     assert "0x14a30004" in prompt and "0x54a30005" in prompt
     assert "last_attempt" in prompt and "producer_attempt_number" in prompt
+    assert "did not leave the required C source file" in prompt
+    assert "illegal conversion" in prompt
     assert "conditional-pointer.c" in prompt
     assert "4217c/variant.c" not in prompt
     assert "func_0002C28C" in prompt
     assert "Ghidra's autogenerated FUN_ label" in prompt
+    assert "first binary divergence verified by a complete matcher report" in prompt
+    assert "do not repeat a tested source hash" in prompt
     assert "optional" in prompt.lower()
     assert "if retrieval is unavailable, report that limitation" in prompt
     assert "first use" not in prompt.lower()
@@ -4155,6 +5264,13 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("local-tool-paths\n", encoding="utf-8")
+    local_opencode = repo / ".opencode" / "opencode.json"
+    local_opencode.parent.mkdir(parents=True)
+    local_opencode.write_text(
+        json.dumps({"plugins": ["local-auth-plugin"], "providers": {"openai": {}}}),
+        encoding="utf-8",
+    )
+    local_opencode_hash = hashlib.sha256(local_opencode.read_bytes()).hexdigest()
 
     worker_names = [
         *(f"luna-{index:02d}" for index in range(1, 5)),
@@ -4187,6 +5303,7 @@ def test_worker_worktrees_are_distinct_and_receive_only_verified_local_inputs(
         for input_name, relative in inputs.items():
             assert hashlib.sha256((worktree / relative).read_bytes()).hexdigest() == hashes[input_name]
         assert (worktree / "config/wsl/seto.toml").is_file()
+        assert hashlib.sha256((worktree / ".opencode/opencode.json").read_bytes()).hexdigest() == local_opencode_hash
 
 
 def test_unverified_inventory_boundary_runs_without_spending_model_attempt(
@@ -4454,11 +5571,20 @@ def test_best_source_snapshot_survives_a_lower_scoring_retry(tmp_path: Path) -> 
     assert checkpoint["best_match"]["source_sha256"] == best_hash
     snapshot = repo / "build" / checkpoint["best_source_snapshot"]
     assert snapshot.read_text(encoding="utf-8") == "version-one"
+    latest_source = (
+        worktree / "decomp/src/eboot/func_00001000.c"
+    ).read_bytes()
+    latest_hash = hashlib.sha256(latest_source).hexdigest()
+    assert latest_source != b"version-one"
+    latest_snapshot = repo / "build" / checkpoint["latest_source_snapshot"]
+    assert checkpoint["source_sha256"] == latest_hash
+    assert latest_snapshot.read_bytes() == latest_source
 
     next_claim = store.claim_next("openai", "openai")
     assert next_claim is not None
     runner._restore_best_source(worktree, next_claim)
-    assert (worktree / "decomp/src/eboot/func_00001000.c").read_text(encoding="utf-8") == "version-one"
+    assert (worktree / "decomp/src/eboot/func_00001000.c").read_bytes() == latest_source
+    assert snapshot.read_text(encoding="utf-8") == "version-one"
 
 
 def test_lower_score_from_fallback_worker_keeps_best_report_provenance(
@@ -4821,7 +5947,7 @@ def test_productive_run_max_tasks_is_a_cumulative_sqlite_ceiling(
     monkeypatch.setattr(
         decomp_campaign_module,
         "_doctor",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "opencode": {
                 "workers": {"openai": {"ready": True}, "deepseek": {"ready": True}}
             },
@@ -4970,7 +6096,7 @@ def test_all_eligible_run_discovers_exports_and_seeds_zero_size_boundaries(
     monkeypatch.setattr(
         decomp_campaign_module,
         "_doctor",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "opencode": {
                 "workers": {
                     "luna-01": {"ready": True},
@@ -5088,6 +6214,76 @@ def test_selective_retry_rejects_active_lease(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="lease"):
         store.retry_blocked_addresses(["0x1000"])
     assert store.get_task("0x1000")["status"] == "blocked"
+
+
+def test_reopen_recoverable_candidate_requires_reason_exact_boundary_and_preserves_history(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000")])
+    with store._connect() as db:
+        db.execute(
+            """UPDATE candidates SET status='stalled',attempt_count=9,
+               attempts_without_progress=2,session_id='ses_kept',
+               checkpoint_json=?,best_result_json=? WHERE address='0x1000'""",
+            (
+                json.dumps({"source_sha256": "a" * 64, "next_experiment": "keep"}),
+                json.dumps({"status": "NONMATCHING", "matching_words": 3}),
+            ),
+        )
+        db.execute(
+            "UPDATE candidates SET status='blocked',boundary_status='UNVERIFIED',size_bytes=0 "
+            "WHERE address='0x2000'"
+        )
+        for attempt in range(1, 10):
+            db.execute(
+                """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,
+                   started_at,ended_at,outcome) VALUES('0x1000',?,'old','openai','ses_kept',?,?,?)""",
+                (attempt, float(attempt), float(attempt) + 0.5, "pending"),
+            )
+
+    reason = "EXACT source/object from luna-01; current matcher can reproduce full comparison"
+    reopened = store.reopen_recoverable_candidates(
+        {"0x1000": reason},
+        max_attempts_per_candidate=12,
+        campaign_id="SETO-DECOMP-046",
+    )
+
+    task = store.get_task("0x1000")
+    assert reopened == ["0x1000"]
+    assert task["status"] == "pending"
+    assert task["attempt_count"] == 9
+    assert task["attempts_without_progress"] == 2
+    assert task["session_id"] == "ses_kept"
+    assert task["checkpoint"]["source_sha256"] == "a" * 64
+    assert task["checkpoint"]["recovery_reason"] == f"SETO-DECOMP-046: {reason}"
+    assert len(store.list_attempts()) == 9
+    assert store.reopen_recoverable_candidates(
+        {"0x1000": reason},
+        max_attempts_per_candidate=12,
+        campaign_id="SETO-DECOMP-046",
+    ) == []
+
+    with pytest.raises(ValueError, match="EXACT boundary"):
+        store.reopen_recoverable_candidates(
+            {"0x2000": "boundary evidence invalid"},
+            max_attempts_per_candidate=12,
+            campaign_id="SETO-DECOMP-046",
+        )
+    with pytest.raises(ValueError, match="requires a concrete reason"):
+        store.reopen_recoverable_candidates(
+            {"0x2000": "   "},
+            max_attempts_per_candidate=12,
+            campaign_id="SETO-DECOMP-046",
+        )
+    with pytest.raises(ValueError, match="does not exceed"):
+        with store._connect() as db:
+            db.execute("UPDATE candidates SET status='stalled' WHERE address='0x1000'")
+        store.reopen_recoverable_candidates(
+            {"0x1000": "limit too low"},
+            max_attempts_per_candidate=9,
+            campaign_id="SETO-DECOMP-046",
+        )
 
 
 def test_resume_main_retries_only_the_requested_blocked_address(
@@ -5252,7 +6448,255 @@ def test_local_match_experiment_is_checkpointed_without_changing_campaign_best(
     assert task["attempt_count"] == 0
     assert task["best_result"] == {}
     assert task["checkpoint"]["local_experiments"] == [summary]
-    assert store.list_attempts() == []
+
+
+def test_discover_local_recovery_prefers_best_hash_and_keeps_symbol_mismatch_for_recheck(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "build").mkdir(parents=True)
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    best_source = b"void func_00001000(void) { return 1; }\n"
+    other_source = b"void func_00001000(void) { return 2; }\n"
+    mismatch_source = b"void FUN_00001000(void) { return 3; }\n"
+    best_hash = hashlib.sha256(best_source).hexdigest()
+    other_hash = hashlib.sha256(other_source).hexdigest()
+    snapshot_relative = f"decomp-campaign/checkpoints/00001000/{best_hash}.c"
+    snapshot = campaign_build_path(repo, snapshot_relative)
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_bytes(best_source)
+    worker = tmp_path / "luna-01"
+    source = worker / "decomp/src/eboot/func_00001000.c"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(other_source)
+    mismatch_worker = tmp_path / "luna-02"
+    mismatch_path = mismatch_worker / "decomp/src/eboot/func_00001000.c"
+    mismatch_path.parent.mkdir(parents=True)
+    mismatch_path.write_bytes(mismatch_source)
+    report_base = worker / "build/decomp-campaign/luna-01/1000/attempt-1/verify-1"
+    report_base.mkdir(parents=True)
+    report = strict_report()
+    report["function"] = "func_00001000"
+    report["status"] = "NONMATCHING"
+    report["verified_decompilation"] = False
+    report["provenance"]["source_sha256"] = other_hash
+    report["match"].update(
+        status="NONMATCHING",
+        matching_words=3,
+        difference_count=1,
+        differences=[{"word_index": 3}],
+    )
+    (report_base / "func_00001000.match.json").write_text(
+        json.dumps(report), encoding="utf-8"
+    )
+    with store._connect() as db:
+        db.execute(
+            """UPDATE candidates SET checkpoint_json=?,best_result_json=?
+               WHERE address='0x1000'""",
+            (
+                json.dumps(
+                    {
+                        "best_source_sha256": best_hash,
+                        "best_source_snapshot": snapshot_relative,
+                    }
+                ),
+                json.dumps({"status": "NONMATCHING", "source_sha256": best_hash}),
+            ),
+        )
+
+    variants = decomp_campaign_module.discover_local_recovery_sources(
+        store.get_task("0x1000"),
+        repo,
+        {"luna-01": worker, "luna-02": mismatch_worker},
+        max_variants=3,
+    )
+
+    mismatch_hash = hashlib.sha256(mismatch_source).hexdigest()
+    assert {item["source_sha256"] for item in variants} == {
+        best_hash,
+        other_hash,
+        mismatch_hash,
+    }
+    assert variants[0]["source_sha256"] == best_hash
+    assert variants[1]["source_sha256"] == other_hash
+    assert variants[1]["matching_words"] == 3
+    assert variants[2]["source_sha256"] == mismatch_hash
+    assert variants[2]["has_exact_symbol"] is False
+
+
+def test_local_recovery_compares_once_and_reopens_only_with_verified_reason(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "private/decrypted").mkdir(parents=True)
+    (repo / "config/wsl").mkdir(parents=True)
+    (repo / "scripts").mkdir()
+    (repo / "build").mkdir()
+    (repo / "private/decrypted/ULUS10136_EBOOT.elf").write_bytes(b"eboot")
+    (repo / "config/wsl/seto.toml").write_text("local config", encoding="utf-8")
+    (repo / "scripts/match_function.py").write_text("matcher", encoding="utf-8")
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    source_root = tmp_path / "archive/luna-01"
+    source = source_root / "decomp/src/eboot/func_00001000.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("void func_00001000(void) { return 0; }\n", encoding="utf-8")
+    ghidra_relative = (
+        "decomp-campaign/luna-01/1000/evidence/"
+        "ghidra-run-0123456789abcdef0123456789abcdef.log"
+    )
+    ghidra_path = campaign_build_path(source_root, ghidra_relative)
+    ghidra_path.parent.mkdir(parents=True)
+    ghidra_path.write_text(ghidra_log(), encoding="utf-8")
+    ghidra_hash = hashlib.sha256(ghidra_path.read_bytes()).hexdigest()
+    with store._connect() as db:
+        db.execute(
+            """UPDATE candidates SET status='blocked',attempt_count=1,checkpoint_json=?
+               WHERE address='0x1000'""",
+            (json.dumps({"ghidra_log_path": ghidra_relative, "ghidra_log_sha256": ghidra_hash}),),
+        )
+        db.execute(
+            """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,
+               started_at,ended_at,outcome) VALUES('0x1000',1,'luna-01','openai','ses_old',1,2,'blocked')"""
+        )
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={},
+        checkpoint_repo_root=repo,
+    )
+    matcher_calls = []
+
+    def fake_matcher(
+        worktree: Path,
+        claim: Claim,
+        candidate_source: Path,
+        _eboot: Path,
+        _config: Path,
+        _matcher: Path,
+        *,
+        verification_numbers: tuple[int, ...],
+    ):
+        matcher_calls.extend(verification_numbers)
+        source_hash = hashlib.sha256(candidate_source.read_bytes()).hexdigest()
+        reports = []
+        for number in verification_numbers:
+            relative_out = (
+                f"decomp-campaign/experiments/1000/attempt-{claim.attempt_number}/verify-{number}"
+            )
+            out = campaign_build_path(worktree, relative_out)
+            out.mkdir(parents=True, exist_ok=True)
+            report = strict_report()
+            report["function"] = "func_00001000"
+            report["status"] = "NONMATCHING"
+            report["verified_decompilation"] = False
+            report["provenance"]["source_sha256"] = source_hash
+            report["match"].update(
+                status="NONMATCHING",
+                matching_words=2,
+                difference_count=2,
+                differences=[
+                    {
+                        "word_index": 2,
+                        "address": "0x1008",
+                        "candidate": "0x00000000",
+                        "original": "0x00000001",
+                    },
+                    {"word_index": 3},
+                ],
+            )
+            report_relative = (
+                f"build/{relative_out}/func_00001000.match.json"
+            )
+            report["report_path"] = report_relative
+            (out / "func_00001000.match.json").write_text(
+                json.dumps(report), encoding="utf-8"
+            )
+            reports.append(report)
+        return reports
+
+    runner._run_matcher_native = fake_matcher  # type: ignore[method-assign]
+    runner._run_matcher_wsl = fake_matcher  # type: ignore[method-assign]
+
+    result = decomp_campaign_module.recover_local_artifacts(
+        runner,
+        repo,
+        {"luna-01": source_root},
+        excluded_addresses={"0x4217c"},
+        max_attempts_per_candidate=12,
+        campaign_id="SETO-DECOMP-046",
+    )
+
+    task = store.get_task("0x1000")
+    assert matcher_calls == [1]
+    assert result["comparisons_complete"] == 1
+    assert result["reopened"] == ["0x1000"]
+    assert task["status"] == "pending"
+    assert task["attempt_count"] == 1
+    assert len(store.list_attempts()) == 1
+    recovery = task["checkpoint"]["local_recoveries"][0]
+    assert recovery["status"] == "NONMATCHING"
+    assert recovery["matching_words"] == 2
+    assert recovery["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert task["checkpoint"]["recovery_reason"].startswith("SETO-DECOMP-046: local matcher")
+
+    new_worktree = tmp_path / "new-luna-01"
+    new_worktree.mkdir()
+    assert decomp_campaign_module.provision_local_recovery_evidence(
+        store,
+        repo,
+        {"luna-01": new_worktree},
+        source_worktrees={"luna-01": source_root},
+    ) == 1
+    assert campaign_build_path(new_worktree, ghidra_relative).is_file()
+    ghidra_claim = Claim(
+        "0x1000",
+        16,
+        "0x12345678",
+        50,
+        "EXACT",
+        "luna-01",
+        "openai",
+        "ses_luna",
+        2,
+        1,
+        store.get_task("0x1000")["checkpoint"],
+        {},
+    )
+    assert decomp_campaign_module.validated_cached_ghidra_boundary(
+        new_worktree, ghidra_claim
+    )["size_bytes"] == 16
+    prompt_claim = Claim(
+        "0x1000",
+        16,
+        "0x12345678",
+        50,
+        "EXACT",
+        "luna-01",
+        "openai",
+        "ses_luna",
+        2,
+        1,
+        task["checkpoint"],
+        {},
+    )
+    prompt = decomp_campaign_module._prompt(prompt_claim, task["checkpoint"], new_worktree)
+    assert "local_recoveries" in prompt
+    assert recovery["report_path"] in prompt
+    assert (new_worktree / recovery["source_path"]).is_file()
+    assert (new_worktree / recovery["report_path"]).is_file()
+
+    second_result = decomp_campaign_module.recover_local_artifacts(
+        runner,
+        repo,
+        {"luna-01": source_root},
+        excluded_addresses={"0x4217c"},
+        max_attempts_per_candidate=12,
+        campaign_id="SETO-DECOMP-046",
+    )
+    assert second_result["sources_selected"] == 1
+    assert matcher_calls == [1]
 
 
 def test_local_match_experiment_rejects_report_with_wrong_source_hash(tmp_path: Path) -> None:
