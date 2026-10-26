@@ -6975,6 +6975,6 @@ A execução ativa tinha carregado o wrapper anterior às correções diagnósti
 | Suíte completa, Windows / Python 3.12 | **1002 passed, 44 skipped** |
 | `compileall -q src scripts tests` | clean |
 | `git diff --check` | clean |
-| CI GitHub Actions | A executar após abertura da PR |
+| CI GitHub Actions | **passou** nos dois eventos (push e pull request), Ubuntu/Windows × Python 3.11/3.12; 8 jobs concluídos |
 
 Token/custo não são reportados pela integração OpenCode atual. O throughput de inferência foi 82 tentativas em 5.357,39 s (**55,1 tentativas/h**); os eventos mediram 60 execuções OpenAI (média 38,8 s) e 22 OpenCode/DeepSeek (média 411,3 s, incluindo timeouts).
