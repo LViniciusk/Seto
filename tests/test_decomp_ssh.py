@@ -55,9 +55,12 @@ def test_ssh_request_uses_verified_noninteractive_transport_and_json_stdin(tmp_p
     assert response == {"ok": True}
 
 
-def test_remote_file_operations_hash_and_reject_escape_paths(tmp_path: Path) -> None:
+def test_remote_file_operations_hash_and_reject_escape_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "remote"
     root.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     request = {
         "op": "put",
         "root": str(root),
@@ -189,6 +192,7 @@ def test_remote_helper_runs_one_opencode_attempt_and_caches_its_result(
 ) -> None:
     root = tmp_path / "remote"
     root.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     source = b"int func_0002C28C(void) { return 9; }\n"
     calls = 0
 
