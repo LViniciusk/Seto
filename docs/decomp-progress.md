@@ -7282,7 +7282,7 @@ a **13 funções / 315 instruções**, com uma única entrada de 120 bytes para
 Ambos permaneceram `stalled` com `matcher_incomplete` e **nenhum score
 verificado** registrado. `0xD28C` (strcpy alinhado com pré-teste de word,
 loop rotacionado e cauda byte a byte) foi reescrito localmente em seis
-variantes; os objetos gerados ficaram entre 124 e 140 bytes, abaixo dos 152
+variantes; os objetos gerados ficaram entre 104 e 140 bytes, abaixo dos 152
 bytes originais, e nenhuma variante foi certificada. `0x37F38` manteve o
 diagnóstico de corpo incompleto nas duas tentativas da janela. Nenhum
 resultado parcial foi promovido.
