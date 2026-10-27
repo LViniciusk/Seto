@@ -7639,4 +7639,7 @@ seção candidata: **252 passed** em `test_decomp_campaign.py`,
 os skips são integrações opt-in ou ferramentas indisponíveis nesta máquina. Uma
 primeira execução completa teve um timeout isolado no teste stop/resume; o teste
 passou isoladamente e a repetição completa, sem validações concorrentes, passou.
-CI será registrado após o push/abertura da PR.
+CI da PR #50 passou nos **8 jobs** Ubuntu/Windows × Python 3.11/3.12. A primeira
+execução CI revelou CRLF em checkout Windows alterando o SHA-256 bruto das
+fontes; `decomp/src/** text eol=lf` em `.gitattributes` tornou os bytes fonte
+determinísticos e a repetição dos 8 jobs passou.
