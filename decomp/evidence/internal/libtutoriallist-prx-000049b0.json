@@ -1,0 +1,123 @@
+{
+  "address": "0x49b0",
+  "build_sha256": [
+    "b7318d790f3d9b395592b0c693a5a4f49471c821392e6b4447a70ad5526fa6e1",
+    "b7318d790f3d9b395592b0c693a5a4f49471c821392e6b4447a70ad5526fa6e1"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "libtutoriallist.prx",
+  "reports": [
+    {
+      "address": "0x49b0",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_000049B0",
+      "match": {
+        "address": 18864,
+        "candidate": {
+          "location": "symbol 'func_000049B0' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libtutoriallist/49b0/round-03-verify-1/func_000049B0.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_000049B0",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libtutoriallist/49b0/round-03-verify-1/func_000049B0.o",
+        "object_sha256": "b7318d790f3d9b395592b0c693a5a4f49471c821392e6b4447a70ad5526fa6e1",
+        "source": "decomp/src/libtutoriallist/func_000049B0.c",
+        "source_sha256": "fdf1924a256649e737d335c9133acfcf21d66f2424aae07ab0f4d08847974278"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_000049B0",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x49b0",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_000049B0",
+      "match": {
+        "address": 18864,
+        "candidate": {
+          "location": "symbol 'func_000049B0' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libtutoriallist/49b0/round-03-verify-2/func_000049B0.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_000049B0",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libtutoriallist/49b0/round-03-verify-2/func_000049B0.o",
+        "object_sha256": "b7318d790f3d9b395592b0c693a5a4f49471c821392e6b4447a70ad5526fa6e1",
+        "source": "decomp/src/libtutoriallist/func_000049B0.c",
+        "source_sha256": "fdf1924a256649e737d335c9133acfcf21d66f2424aae07ab0f4d08847974278"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_000049B0",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".sceStub.text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/libtutoriallist/func_000049B0.c",
+  "source_sha256": "fdf1924a256649e737d335c9133acfcf21d66f2424aae07ab0f4d08847974278"
+}

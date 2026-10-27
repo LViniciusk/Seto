@@ -1,0 +1,123 @@
+{
+  "address": "0x235c",
+  "build_sha256": [
+    "1bb3f21cd3800223fbd21ca1c5fc1f18319b7d9723157e9b1c5b82776cb55be2",
+    "1bb3f21cd3800223fbd21ca1c5fc1f18319b7d9723157e9b1c5b82776cb55be2"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "libhtml_view.prx",
+  "reports": [
+    {
+      "address": "0x235c",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0000235C",
+      "match": {
+        "address": 9052,
+        "candidate": {
+          "location": "symbol 'func_0000235C' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/235c/round-02-verify-1/func_0000235C.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_0000235C",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/235c/round-02-verify-1/func_0000235C.o",
+        "object_sha256": "1bb3f21cd3800223fbd21ca1c5fc1f18319b7d9723157e9b1c5b82776cb55be2",
+        "source": "decomp/src/libhtml_view/func_0000235C.c",
+        "source_sha256": "49eed1d523d74dc67e2f7d43d3aff081b7f1e20d82ef0b19837c1eb62656130c"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_0000235C",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x235c",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0000235C",
+      "match": {
+        "address": 9052,
+        "candidate": {
+          "location": "symbol 'func_0000235C' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/235c/round-02-verify-2/func_0000235C.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_0000235C",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/235c/round-02-verify-2/func_0000235C.o",
+        "object_sha256": "1bb3f21cd3800223fbd21ca1c5fc1f18319b7d9723157e9b1c5b82776cb55be2",
+        "source": "decomp/src/libhtml_view/func_0000235C.c",
+        "source_sha256": "49eed1d523d74dc67e2f7d43d3aff081b7f1e20d82ef0b19837c1eb62656130c"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_0000235C",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".sceStub.text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/libhtml_view/func_0000235C.c",
+  "source_sha256": "49eed1d523d74dc67e2f7d43d3aff081b7f1e20d82ef0b19837c1eb62656130c"
+}

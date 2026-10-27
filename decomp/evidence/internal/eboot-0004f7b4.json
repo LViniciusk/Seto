@@ -1,0 +1,127 @@
+{
+  "address": "0x4f7b4",
+  "build_sha256": [
+    "9f4fbf25e56b3ffbddc882d70df54f360d5aed259873b2affbe29ebe832f98c1",
+    "9f4fbf25e56b3ffbddc882d70df54f360d5aed259873b2affbe29ebe832f98c1"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x4f7b4",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0004F7B4",
+      "match": {
+        "address": 325556,
+        "candidate": {
+          "location": "symbol 'func_0004F7B4' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/4f7b4/integrated-verify-1/func_0004F7B4.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 3,
+        "name": "func_0004F7B4",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 1 (0x4f7b8): ThreadManForUser/0x812346E4 (stub 0x6b004, target 0x6b004) <=> ThreadManForUser/0x812346E4 (stub 0x6b004, symbol 'func_0006B004' -> 0x6b004)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 3
+      },
+      "object_path": "build/seto049/experiments/internal/4f7b4/integrated-verify-1/func_0004F7B4.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/4f7b4/integrated-verify-1/func_0004F7B4.o",
+        "object_sha256": "9f4fbf25e56b3ffbddc882d70df54f360d5aed259873b2affbe29ebe832f98c1",
+        "source": "decomp/src/eboot/func_0004F7B4.c",
+        "source_sha256": "26ba1e6a52b67adf044cf82ebc77d3651a907e3b02bcece8962b70f08fa8a8dd"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0004F7B4",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x4f7b4",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0004F7B4",
+      "match": {
+        "address": 325556,
+        "candidate": {
+          "location": "symbol 'func_0004F7B4' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/4f7b4/integrated-verify-2/func_0004F7B4.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 3,
+        "name": "func_0004F7B4",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 1 (0x4f7b8): ThreadManForUser/0x812346E4 (stub 0x6b004, target 0x6b004) <=> ThreadManForUser/0x812346E4 (stub 0x6b004, symbol 'func_0006B004' -> 0x6b004)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 3
+      },
+      "object_path": "build/seto049/experiments/internal/4f7b4/integrated-verify-2/func_0004F7B4.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/4f7b4/integrated-verify-2/func_0004F7B4.o",
+        "object_sha256": "9f4fbf25e56b3ffbddc882d70df54f360d5aed259873b2affbe29ebe832f98c1",
+        "source": "decomp/src/eboot/func_0004F7B4.c",
+        "source_sha256": "26ba1e6a52b67adf044cf82ebc77d3651a907e3b02bcece8962b70f08fa8a8dd"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0004F7B4",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 12,
+  "source_path": "decomp/src/eboot/func_0004F7B4.c",
+  "source_sha256": "26ba1e6a52b67adf044cf82ebc77d3651a907e3b02bcece8962b70f08fa8a8dd"
+}

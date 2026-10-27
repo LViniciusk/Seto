@@ -13,6 +13,8 @@ from internal_functions import (
     DiscoveredFunction,
     FunctionManifest,
     InternalFunction,
+    counts_as_decompiled_code,
+    internal_catalog_metrics,
     internal_function_key,
     load_internal_catalog,
     load_function_manifest,
@@ -25,19 +27,32 @@ from internal_functions import (
 
 def _write_catalog(path: Path, functions: list[dict[str, object]]) -> None:
     path.write_text(
-        json.dumps({"schema_version": 1, "functions": functions}), encoding="utf-8"
+        json.dumps({"schema_version": 2, "functions": functions}), encoding="utf-8"
     )
 
 
 def _entry(
     module: str, address: str, size_bytes: int, *, boundary_status: str = "EXACT"
 ) -> dict[str, object]:
+    numeric = int(address, 0)
+    if module == "EBOOT":
+        section = ".text"
+    elif module == "libtutoriallist.prx":
+        section = ".text" if numeric < 0x25B0 else ".sceStub.text"
+    elif module == "libhtml_view.prx":
+        section = ".text" if numeric < 0x7F4 else ".sceStub.text"
+    else:
+        section = ".text"
     return {
         "module": module,
         "address": address,
         "size_bytes": size_bytes,
+        "instruction_count": size_bytes // 4,
         "boundary_status": boundary_status,
+        "kind": "import_stub" if section == ".sceStub.text" else "code",
+        "section": section,
         "evidence_path": "docs/decomp-progress.md#internal-functions",
+        "result": {"status": "UNMATCHED"},
     }
 
 
@@ -47,7 +62,7 @@ def test_internal_identity_is_module_and_address(tmp_path: Path) -> None:
         catalog,
         [
             _entry("EBOOT", "0x31308", 92),
-            _entry("libtutoriallist.prx", "0x31308", 32),
+            _entry("libtutoriallist.prx", "0x200", 32),
             _entry("EBOOT", "0x3129c", 108),
         ],
     )
@@ -59,14 +74,16 @@ def test_internal_identity_is_module_and_address(tmp_path: Path) -> None:
         InternalFunction("EBOOT", 0x31308, 92, "EXACT", "docs/decomp-progress.md#internal-functions"),
         InternalFunction(
             "libtutoriallist.prx",
-            0x31308,
+            0x200,
             32,
             "EXACT",
             "docs/decomp-progress.md#internal-functions",
+            "code",
+            ".text",
         ),
     )
     assert internal_function_key(functions[1]) == ("eboot", 0x31308)
-    assert internal_function_key(functions[2]) == ("libtutoriallist.prx", 0x31308)
+    assert internal_function_key(functions[2]) == ("libtutoriallist.prx", 0x200)
 
 
 def test_internal_catalog_rejects_duplicate_module_address(tmp_path: Path) -> None:
@@ -240,6 +257,57 @@ def test_checked_in_internal_catalog_has_verified_31308_and_no_fake_nids() -> No
     helper = next(item for item in functions if internal_function_key(item) == ("eboot", 0x31308))
     assert helper.size_bytes == 92
     assert helper.boundary_status == "EXACT"
+    assert helper.kind == "code"
+    assert helper.section == ".text"
+
+
+def test_import_stubs_are_technical_matches_not_decompiled_code() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    document = json.loads(
+        (repo / "config" / "decomp_internal_inventory.json").read_text(encoding="utf-8")
+    )
+
+    tutorial_stub = next(
+        entry
+        for entry in document["functions"]
+        if entry["module"] == "libtutoriallist.prx" and entry["address"] == "0x3790"
+    )
+    html_stub = next(
+        entry
+        for entry in document["functions"]
+        if entry["module"] == "libhtml_view.prx" and entry["address"] == "0x2ef4"
+    )
+
+    assert tutorial_stub["kind"] == html_stub["kind"] == "import_stub"
+    assert tutorial_stub["section"] == html_stub["section"] == ".sceStub.text"
+    assert not counts_as_decompiled_code(tutorial_stub)
+    assert not counts_as_decompiled_code(html_stub)
+    assert counts_as_decompiled_code(
+        next(entry for entry in document["functions"] if entry["address"] == "0x31308")
+    )
+
+    metrics = internal_catalog_metrics(
+        document["functions"],
+        {
+            "eboot_matched_functions": 16,
+            "eboot_matched_instructions": 368,
+            "prx_matched_functions": 16,
+            "prx_matched_instructions": 912,
+        },
+    )
+    assert metrics["code_matched_instructions"] == 2316
+    assert metrics["import_stub_matched_instructions"] == 184
+    assert metrics["technical_matched_instructions"] == 2500
+
+
+def test_import_stub_cannot_claim_code_section_or_eboot_identity(tmp_path: Path) -> None:
+    catalog = tmp_path / "internal.json"
+    entry = _entry("EBOOT", "0x31308", 92)
+    entry.update({"section": ".sceStub.text", "kind": "code"})
+    _write_catalog(catalog, [entry])
+
+    with pytest.raises(ValueError, match="section disagrees with module address range"):
+        load_internal_catalog(catalog)
 
 
 def test_every_catalogued_internal_match_has_two_full_identical_build_hashes() -> None:
@@ -437,12 +505,15 @@ def _matcher_report(
         "verified_decompilation": True,
         "match": {
             "status": "MATCHED",
+            "address": address,
             "matching_words": size_bytes // 4,
             "total_words": size_bytes // 4,
             "difference_count": 0,
             "differences": [],
             "limitations": [],
             "relocation_issues": [],
+            "resolved_calls": [],
+            "resolved_data": [],
         },
     }
 
@@ -455,20 +526,17 @@ def _certificate_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, ob
     object_sha256 = "c" * 64
     reports = []
     for index in (1, 2):
+        payload = _matcher_report(
+            address=0x1000,
+            size_bytes=8,
+            source="decomp/src/eboot/func_00001000.c",
+            source_sha256=source_sha256,
+            object_sha256=object_sha256,
+        )
+        payload["provenance"]["object"] = f"build/objects/verify-{index}.o"
         report = tmp_path / "build" / "reports" / f"verify-{index}.json"
         report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(
-            json.dumps(
-                _matcher_report(
-                    address=0x1000,
-                    size_bytes=8,
-                    source="decomp/src/eboot/func_00001000.c",
-                    source_sha256=source_sha256,
-                    object_sha256=object_sha256,
-                )
-            ),
-            encoding="utf-8",
-        )
+        report.write_text(json.dumps(payload), encoding="utf-8")
         reports.append(report)
     return source, reports[0], reports[1], {"object_sha256": object_sha256}
 
@@ -576,18 +644,37 @@ def test_internal_certificate_writer_refuses_conflicting_content(tmp_path: Path)
         report_paths=[first, second],
         repo_root=tmp_path,
     )
-    path = tmp_path / "build" / "certificates" / "eboot-00001000.json"
+    path = Path("build/certificates/eboot-00001000.json")
 
-    assert write_internal_certificate(path, document) == digest
-    assert write_internal_certificate(path, document) == digest
-    path.write_text("different\n", encoding="utf-8")
+    assert write_internal_certificate(path, document, repo_root=tmp_path) == digest
+    assert write_internal_certificate(path, document, repo_root=tmp_path) == digest
+    with pytest.raises(ValueError, match="repository-relative"):
+        write_internal_certificate(
+            tmp_path / "build" / "certificates" / "absolute.json",
+            document,
+            repo_root=tmp_path,
+        )
+    with pytest.raises(ValueError, match="non-traversing"):
+        write_internal_certificate(Path("../escape.json"), document, repo_root=tmp_path)
+    alias = tmp_path / "build" / "certificates" / "alias.json"
+    try:
+        alias.symlink_to((tmp_path / path), target_is_directory=False)
+    except (OSError, NotImplementedError):
+        pass
+    else:
+        with pytest.raises(ValueError, match="symlink"):
+            write_internal_certificate(
+                Path("build/certificates/alias.json"), document, repo_root=tmp_path
+            )
+    (tmp_path / path).write_text("different\n", encoding="utf-8")
     with pytest.raises(ValueError, match="refusing to overwrite"):
-        write_internal_certificate(path, document)
+        write_internal_certificate(path, document, repo_root=tmp_path)
 
 
 def test_catalog_evidence_validation_requires_certificate_coverage(tmp_path: Path) -> None:
     from internal_functions import (
         build_internal_certificate,
+        serialize_internal_certificate,
         validate_internal_catalog_evidence,
         write_internal_certificate,
     )
@@ -601,8 +688,9 @@ def test_catalog_evidence_validation_requires_certificate_coverage(tmp_path: Pat
         report_paths=[first, second],
         repo_root=tmp_path,
     )
-    certificate = tmp_path / "build" / "certificates" / "eboot-00001000.json"
-    write_internal_certificate(certificate, document)
+    certificate_relative = Path("build/certificates/eboot-00001000.json")
+    certificate = tmp_path / certificate_relative
+    write_internal_certificate(certificate_relative, document, repo_root=tmp_path)
     entry = _entry("EBOOT", "0x1000", 8)
     entry.update(
         {
@@ -622,16 +710,75 @@ def test_catalog_evidence_validation_requires_certificate_coverage(tmp_path: Pat
     catalog.parent.mkdir(parents=True)
     _write_catalog(catalog, [entry])
 
-    assert validate_internal_catalog_evidence(catalog, repo_root=tmp_path) == ()
+    assert validate_internal_catalog_evidence(
+        catalog,
+        repo_root=tmp_path,
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    ) == ()
+
+    original_certificate = certificate.read_bytes()
+    tampered = json.loads(original_certificate)
+    tampered["reports"][0]["match"]["limitations"] = ["comparison was incomplete"]
+    tampered_bytes = serialize_internal_certificate(tampered).encode("utf-8")
+    certificate.write_bytes(tampered_bytes)
+    entry["result"]["certificate_sha256"] = hashlib.sha256(tampered_bytes).hexdigest()
+    _write_catalog(catalog, [entry])
+    problems = validate_internal_catalog_evidence(
+        catalog,
+        repo_root=tmp_path,
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    )
+    assert any("production strict-match gate" in problem for problem in problems)
+
+    tampered["reports"][0]["match"]["limitations"] = []
+    tampered["reports"][1]["provenance"]["object_sha256"] = "d" * 64
+    tampered_bytes = serialize_internal_certificate(tampered).encode("utf-8")
+    certificate.write_bytes(tampered_bytes)
+    entry["result"]["certificate_sha256"] = hashlib.sha256(tampered_bytes).hexdigest()
+    _write_catalog(catalog, [entry])
+    problems = validate_internal_catalog_evidence(
+        catalog,
+        repo_root=tmp_path,
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    )
+    assert any("deterministic-match gate" in problem for problem in problems)
+
+    certificate.write_bytes(original_certificate)
+    entry["result"]["certificate_sha256"] = digest
+    entry["result"]["certificate_path"] = "../escape.json"
+    _write_catalog(catalog, [entry])
+    problems = validate_internal_catalog_evidence(
+        catalog,
+        repo_root=tmp_path,
+        mode="metadata-only",
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    )
+    assert any("unsafe certificate path" in problem for problem in problems)
+    entry["result"]["certificate_path"] = "build/certificates/eboot-00001000.json"
+    _write_catalog(catalog, [entry])
 
     entry["result"]["certificate_path"] = "build/certificates/missing.json"
     _write_catalog(catalog, [entry])
-    problems = validate_internal_catalog_evidence(catalog, repo_root=tmp_path)
+    problems = validate_internal_catalog_evidence(
+        catalog,
+        repo_root=tmp_path,
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    )
     assert len(problems) == 1
     assert "certificate is missing" in problems[0]
 
     entry["result"].pop("certificate_path")
     _write_catalog(catalog, [entry])
-    problems = validate_internal_catalog_evidence(catalog, repo_root=tmp_path)
+    problems = validate_internal_catalog_evidence(
+        catalog,
+        repo_root=tmp_path,
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    )
     assert len(problems) == 1
     assert "has no certificate" in problems[0]

@@ -7699,55 +7699,65 @@ independente por endereço e certificados de dois builds no catálogo:
 O SQLite permanece em 217 tentativas cumulativas (teto 725), `integrity_check`
 `ok` e zero leases; os baselines export EBOOT 16/368 e PRX 16/912 não mudaram.
 
-### Terceira rodada — meta de 2.500 instruções
+### Correção da métrica, certificados e execução interna
 
-Foram certificados mais **115 MATCHED / 822 instruções**: 62 helpers EBOOT
-(716 instruções) e 53 leaves PRX de duas instruções cada (106 instruções). Com
-as baselines export preservadas (EBOOT 368 + PRXs 912), o total agregado chegou
-a **2.500 instruções matched**. Os indicadores permanecem separados:
+As seções históricas acima registraram **2.500 instruções matched agregadas**.
+Essa soma incluía os 92 stubs importados PRX (`jr $ra; nop`) e não representa
+2.500 instruções de código reconstruído. A classificação estrutural corrigida é:
 
-| Categoria | MATCHED | Instruções |
-|---|---:|---:|
-| EBOOT exports | 16 | 368 |
-| EBOOT internos | 128 | 1 036 |
-| `libtutoriallist.prx` internos | 63 | 126 |
-| `libhtml_view.prx` internos | 29 | 58 |
-| PRX exports | 16 | 912 |
+| Categoria | MATCHED | Instruções | Classificação |
+|---|---:|---:|---|
+| EBOOT exports | 16 | 368 | código |
+| EBOOT internas `.text` | 128 | 1 036 | código |
+| PRX exports | 16 | 912 | código |
+| `libtutoriallist.prx` `.sceStub.text` | 63 | 126 | stub técnico |
+| `libhtml_view.prx` `.sceStub.text` | 29 | 58 | stub técnico |
+| **Código real reconstruído** | **160** | **2 316** | **cobertura real** |
+| **Stubs de importação** | **92** | **184** | **não contam como código** |
+| **Total técnico** | **252** | **2 500** | **não é cobertura real** |
 
-Os 62 novos endereços EBOOT são: `0x25154`, `0x29038`, `0x39f94`, `0x3aa60`,
-`0x3ae0c`, `0x3aec8`, `0x3af80`, `0x3b860`, `0x3b8b8`, `0x3ba34`, `0x3ba54`,
-`0x3ba88`, `0x3babc`, `0x3baf0`, `0x3c3bc`, `0x3c3f0`, `0x3c65c`, `0x3c67c`,
-`0x3c74c`, `0x3ca44`, `0x3cd08`, `0x3cd2c`, `0x3cd4c`, `0x3cd78`, `0x3cd9c`,
-`0x3cec8`, `0x3d1f0`, `0x3d2b8`, `0x3d2ec`, `0x3d4c0`, `0x3d76c`, `0x3d834`,
-`0x3d968`, `0x41870`, `0x49880`, `0x498e4`, `0x49a84`, `0x49aac`, `0x49ad4`,
-`0x49af8`, `0x49b20`, `0x49b44`, `0x49b88`, `0x49bcc`, `0x4a44c`, `0x4a4c0`,
-`0x4a4e4`, `0x4a508`, `0x4a52c`, `0x4a550`, `0x4a574`, `0x4cb88`, `0x4e488`,
-`0x4f648`, `0x4f750`, `0x54c58`, `0x5a4ec`, `0x6a874`, `0x6a89c`, `0x6a8c4`,
-`0x6a90c`, `0x6a92c`.
+A meta de **2.500 instruções reais permanece aberta**: faltam 184 instruções
+reconstruídas legítimas. `0x61a3c` continua `NONMATCHING`; a identidade do par
+HI16/LO16 permanece sem prova e não foi promovida. A classificação v2 fixa
+módulo, seção e intervalos originais: EBOOT `.text` `0x0–0x6ad2c`,
+`libtutoriallist.prx` `.text` `0x0–0x25b0` e `.sceStub.text` `0x25b0–0x4c98`,
+`libhtml_view.prx` `.text` `0x0–0x7f4` e `.sceStub.text` `0x7f4–0x2f94`.
+`kind` não pode contradizer a seção; wrappers genuínos da `.text` EBOOT continuam
+sendo código.
 
-Os 53 novos stubs PRX são as 39 entradas `libtutoriallist.prx` e 14 entradas
-`libhtml_view.prx` do manifesto de descoberta ainda não certificadas na rodada
-anterior. Cada uma recebeu boundary Ghidra `EXACT` individual, C vazio,
-comparação integral 2/2 em dois builds e identidade módulo/endereço sem NID.
-O catálogo de 262 entradas registra por endereço SHA-256 da fonte, hashes dos
-dois objetos e digest/caminho do certificado; assim ficam auditáveis também as
-funções cujos hashes não foram repetidos em uma tabela de Markdown.
+Os 220 certificados JSON textuais foram copiados para
+`decomp/evidence/internal/` após remover caminhos absolutos locais de compiler e
+loader. Não foram incluídos binários, fontes privadas ou credenciais. A auditoria
+`--full` valida os dois relatórios armazenados com `is_strict_match()` e
+`is_deterministic_match()`, identidade, seção, fonte, hashes, relocations,
+diferenças e builds independentes. **Essa auditoria não recompila com MWCC**.
+`--metadata-only` valida schema, layout, fontes rastreadas/hash, sobreposições e
+metadados sem certificar resultados MATCHED.
 
-- `libtutoriallist.prx`: `0x3790`, `0x37e0`, `0x3850`, `0x3a08`, `0x3a38`,
-  `0x3a68`, `0x3a70`, `0x3aa8`, `0x3ab0`, `0x3ae8`, `0x3af0`, `0x3b78`,
-  `0x3bc0`, `0x3bc8`, `0x3c38`, `0x3c70`, `0x3c90`, `0x3c98`, `0x3ca0`,
-  `0x3ca8`, `0x3d90`, `0x4120`, `0x41d8`, `0x4270`, `0x4280`, `0x4298`,
-  `0x42a8`, `0x42c8`, `0x42e0`, `0x42f0`, `0x4300`, `0x4310`, `0x4358`,
-  `0x48f0`, `0x48f8`, `0x49a0`, `0x49b0`, `0x49c0`;
-- `libhtml_view.prx`: `0x2ef4`, `0x2efc`, `0x2f04`, `0x2f0c`, `0x2f14`,
-  `0x2f1c`, `0x2f24`, `0x2f2c`, `0x2f34`, `0x2f3c`, `0x2f44`, `0x2f4c`,
-  `0x2f54`, `0x2f5c`.
+Reprodução portátil e auditoria das evidências versionadas:
 
-O ciclo usou apenas Ghidra/MWCC/matcher locais: não consumiu inferências nem
-tentativas e não alterou o SQLite (217/725; 508 tentativas de teto ainda livres,
-integridade `ok`, zero leases). Tempo agregado da rodada de ferramenta não foi
-medido separadamente; os processos Ghidra e builds foram executados
-sequencialmente.
+```powershell
+python scripts/internal_functions.py validate --metadata-only
+python scripts/internal_functions.py validate --full
+```
+
+O `night-run` agora executa ou reutiliza a enumeração read-only limitada de
+`SetoEnumerateFunctions.java` (somente pistas EBOOT `.text`) e encaminha
+candidatos para fila SQLite aditiva com identidade `(module, address)`. Cada
+worker exige prova independente `SetoAnalyzeEntry.java` `EXACT`, worker
+restrito, matcher MWCC duplo, certificado e promoção atômica do catálogo. As
+tentativas internas
+compartilham teto, deadline e cancelamento com exports; leases, retries e
+checkpoints internos não alteram o schema/tarefas anteriores de exports. Um
+teste ponta a ponta sintético percorre descoberta, boundary, worker, matcher,
+certificação e registro sem NID. **Nenhuma execução Ghidra, inferência ou
+recompilação MWCC real foi iniciada nesta correção**; o teste sintético não prova
+disponibilidade do toolchain nem substitui uma campanha autorizada.
+
+Validação local desta correção em Windows/Python 3.12: **1074 passed, 44 skipped**;
+`compileall`, `git diff --check`, validação `--metadata-only` e auditoria `--full`
+passaram. Os skips continuam sendo integrações opt-in/ferramentas indisponíveis;
+CI da PR após estas alterações ainda não foi executado.
 
 ### Hipóteses ainda abertas
 

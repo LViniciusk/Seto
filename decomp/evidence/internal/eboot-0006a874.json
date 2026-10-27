@@ -1,0 +1,129 @@
+{
+  "address": "0x6a874",
+  "build_sha256": [
+    "19be7373f2646d1251eb449602399d9d73a9e7fcfd6e7afb30d18547c76d0c8b",
+    "19be7373f2646d1251eb449602399d9d73a9e7fcfd6e7afb30d18547c76d0c8b"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x6a874",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0006A874",
+      "match": {
+        "address": 436340,
+        "candidate": {
+          "location": "symbol 'func_0006A874' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/6a874/integrated-verify-1/func_0006A874.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 10,
+        "name": "func_0006A874",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 2 (0x6a87c): this module @ 0x6a7a4 <=> this module @ 0x6a7a4",
+          "word 4 (0x6a884): this module @ 0x6a674 <=> this module @ 0x6a674"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/6a874/integrated-verify-1/func_0006A874.o",
+        "object_sha256": "19be7373f2646d1251eb449602399d9d73a9e7fcfd6e7afb30d18547c76d0c8b",
+        "source": "decomp/src/eboot/func_0006A874.c",
+        "source_sha256": "1e1eacb7f60c924ac9dd148ae0dd1a196ee0aa24c9496f48d48c6fd92f642b69"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0006A874",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x6a874",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0006A874",
+      "match": {
+        "address": 436340,
+        "candidate": {
+          "location": "symbol 'func_0006A874' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/6a874/integrated-verify-2/func_0006A874.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 10,
+        "name": "func_0006A874",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 2 (0x6a87c): this module @ 0x6a7a4 <=> this module @ 0x6a7a4",
+          "word 4 (0x6a884): this module @ 0x6a674 <=> this module @ 0x6a674"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/6a874/integrated-verify-2/func_0006A874.o",
+        "object_sha256": "19be7373f2646d1251eb449602399d9d73a9e7fcfd6e7afb30d18547c76d0c8b",
+        "source": "decomp/src/eboot/func_0006A874.c",
+        "source_sha256": "1e1eacb7f60c924ac9dd148ae0dd1a196ee0aa24c9496f48d48c6fd92f642b69"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0006A874",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 40,
+  "source_path": "decomp/src/eboot/func_0006A874.c",
+  "source_sha256": "1e1eacb7f60c924ac9dd148ae0dd1a196ee0aa24c9496f48d48c6fd92f642b69"
+}

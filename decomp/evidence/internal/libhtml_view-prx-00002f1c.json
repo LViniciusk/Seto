@@ -1,0 +1,123 @@
+{
+  "address": "0x2f1c",
+  "build_sha256": [
+    "22016e967ce185f67bf16666ae6388f4267b52db5f817c671f21364a9c6431c2",
+    "22016e967ce185f67bf16666ae6388f4267b52db5f817c671f21364a9c6431c2"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "libhtml_view.prx",
+  "reports": [
+    {
+      "address": "0x2f1c",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00002F1C",
+      "match": {
+        "address": 12060,
+        "candidate": {
+          "location": "symbol 'func_00002F1C' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/2f1c/round-03-verify-1/func_00002F1C.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00002F1C",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/2f1c/round-03-verify-1/func_00002F1C.o",
+        "object_sha256": "22016e967ce185f67bf16666ae6388f4267b52db5f817c671f21364a9c6431c2",
+        "source": "decomp/src/libhtml_view/func_00002F1C.c",
+        "source_sha256": "dcb3d1bf29b381bd6715cee98e8c53c75d2fb0722b53e9a0a5bc766bf8c424c1"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_00002F1C",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2f1c",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00002F1C",
+      "match": {
+        "address": 12060,
+        "candidate": {
+          "location": "symbol 'func_00002F1C' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/2f1c/round-03-verify-2/func_00002F1C.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00002F1C",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/2f1c/round-03-verify-2/func_00002F1C.o",
+        "object_sha256": "22016e967ce185f67bf16666ae6388f4267b52db5f817c671f21364a9c6431c2",
+        "source": "decomp/src/libhtml_view/func_00002F1C.c",
+        "source_sha256": "dcb3d1bf29b381bd6715cee98e8c53c75d2fb0722b53e9a0a5bc766bf8c424c1"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_00002F1C",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".sceStub.text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/libhtml_view/func_00002F1C.c",
+  "source_sha256": "dcb3d1bf29b381bd6715cee98e8c53c75d2fb0722b53e9a0a5bc766bf8c424c1"
+}

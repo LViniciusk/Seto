@@ -148,3 +148,33 @@ def test_coordinator_stops_on_global_stop_request() -> None:
 
     assert calls == 0
     assert result["stop_reason"] == "stop_requested"
+
+
+def test_queued_work_without_new_discovery_reports_external_work_remains() -> None:
+    clock = FakeClock()
+    runs = 0
+    discoveries = 0
+
+    def run_segment(_deadline: float, _max_tasks: int) -> dict[str, object]:
+        nonlocal runs
+        runs += 1
+        return {"attempted": 0, "external_work_remains": True}
+
+    def discover(_deadline: float) -> DiscoveryResult:
+        nonlocal discoveries
+        discoveries += 1
+        return DiscoveryResult("internal", "same-snapshot", eligible_work=True)
+
+    result = ContinuousCampaignCoordinator(
+        run_segment=run_segment,
+        discovery_steps=[discover],
+        attempts_used=lambda: 0,
+        stop_requested=lambda: False,
+        max_tasks=4,
+        duration_seconds=30,
+        monotonic=clock,
+    ).run()
+
+    assert runs == 2
+    assert discoveries == 2
+    assert result["stop_reason"] == "external_work_remains"

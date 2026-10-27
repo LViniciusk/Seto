@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "functions": [
     {
       "module": "EBOOT",
@@ -21,9 +21,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-000008f0.json",
-        "certificate_sha256": "dfd2f4048cb6188407467254702f0d6848b511fbef174dfa0c8240ea794ee8cc"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-000008f0.json",
+        "certificate_sha256": "f6923d692f6606a46094a8c2edc148e7d11ab9225eb7d82b847961d619dea7ca"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -42,7 +44,9 @@
         "candidate_code_bytes": 8,
         "required_code_bytes": 28,
         "reason": "direct forwarding was tail-call optimized; source shape preserving the original link-register frame remains unproven"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -59,7 +63,9 @@
         "candidate_code_bytes": 8,
         "required_code_bytes": 28,
         "reason": "direct return forwarding tail-call optimizes away the original call/return frame"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -76,7 +82,9 @@
         "matching_words": 0,
         "total_words": 11,
         "reason": "conditional source form compiled differently from the exact branch/layout"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -93,7 +101,9 @@
         "matching_words": 1,
         "total_words": 11,
         "reason": "conditional source form compiled differently from the exact branch/layout"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -115,9 +125,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00005bac.json",
-        "certificate_sha256": "c69495964a83de00c0c0baabe130f7580f129db2bdf8a94f6e8425758694710d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00005bac.json",
+        "certificate_sha256": "9f440c4213e16aef6c2ab23898dc5ee5ffe896732257502aa01a8e33ed731d76"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -134,7 +146,9 @@
         "matching_words": 0,
         "total_words": 5,
         "reason": "union-based float sign-bit clearing creates a stack frame rather than using the original FPU/register bit operations"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -151,7 +165,9 @@
         "matching_words": 0,
         "total_words": 5,
         "reason": "union-based NaN classification spills the input, unlike the original FPU-to-GPR bit extraction sequence"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -168,7 +184,9 @@
         "matching_words": 0,
         "total_words": 3,
         "reason": "the signed compare/negation source does not generate the original Allegrex max instruction"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -184,7 +202,9 @@
           "0x92fc"
         ],
         "data_reference_count": 9
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -200,7 +220,9 @@
           "0x92fc"
         ],
         "data_reference_count": 2
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -223,7 +245,9 @@
           "c827ba7888f8068a59efd27f87fc2483e399bd7bdef81531479e568a53b6aa9a"
         ],
         "limitation": "both hypotheses differ in frame offsets and call-argument delay-slot scheduling"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -244,7 +268,9 @@
         "best_matching_words": 2,
         "total_words": 6,
         "reason": "loop scheduling and return-register assignment remain different from the exact string scan body"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -261,7 +287,9 @@
         "matching_words": 0,
         "total_words": 4,
         "reason": "union-based NaN bit construction creates a stack frame and does not materialize the result in FPU return register f0"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -278,7 +306,9 @@
         "matching_words": 1,
         "total_words": 4,
         "reason": "the natural clear-and-return hypothesis schedules the result move after the stores, unlike the original entry schedule"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -301,7 +331,9 @@
         "best_matching_words": 2,
         "total_words": 8,
         "reason": "two local float-vector scaling forms leave FPU register assignment and store order mismatched"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -318,7 +350,9 @@
         "matching_words": 1,
         "total_words": 5,
         "reason": "clear-and-return hypothesis schedules the result move after the stores, unlike the original entry schedule"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -335,7 +369,9 @@
         "candidate_code_bytes": 40,
         "required_code_bytes": 52,
         "reason": "source hypothesis compiled to 40 bytes; full 52-byte interval was not comparable"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -357,9 +393,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00025154.json",
-        "certificate_sha256": "b7a9c9b9b18ffe4b4db95084aca5317ff62201b2d7d5e72930a14614b59a50c2"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00025154.json",
+        "certificate_sha256": "38df6e8db12839cf1d2bbc594c1275092614fb3111c98eac3366fe77a79629b7"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -381,9 +419,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00026d88.json",
-        "certificate_sha256": "6343635bc089438f751da0c2402900488dcf85de19a8eccbe7434a78894e6ca4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00026d88.json",
+        "certificate_sha256": "c366ff2920fdd6bd79ba8cfa1a964596810466f6ef791072bfbfb809f3bd735e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -407,9 +447,11 @@
           "0x9104"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00028414.json",
-        "certificate_sha256": "3f39010066195dea6910245643a24c123550e0b6509674d3c9eb5fb719c2794e"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00028414.json",
+        "certificate_sha256": "ec1645d1aed8fc68f492671cbd110ba6665d49a5f47212f14880698f2efe3f93"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -431,9 +473,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00028b3c.json",
-        "certificate_sha256": "df186f40cf5d5ca09060df8170e91e6dc55cbc3c680fe5e236da873b3686b408"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00028b3c.json",
+        "certificate_sha256": "7468053e90f73222f9cf483c743a6c12db5b19f649bd8d9833aed69d878e647e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -457,9 +501,11 @@
           "word 5 (0x29018): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00029004.json",
-        "certificate_sha256": "99511a12fcf0cd219a9ade42ccbef5912a1650a9c02617e9792c2b737f3f5ab0"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00029004.json",
+        "certificate_sha256": "716d63eee6ae7797217afe26f65bef1f62bba2f861e029b17cb0a5ac94c8c2d8"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -481,9 +527,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00029038.json",
-        "certificate_sha256": "a1268e57f5f51db4f4fd5f96b3c6cbedb619e54fda379c65d3393966ea777289"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00029038.json",
+        "certificate_sha256": "1d409b7922f7569d91379e989fa5a848adc4badc735ee7be076447db7824f360"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -507,9 +555,11 @@
           "0x33ae0"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-000291b4.json",
-        "certificate_sha256": "e41c897368e20f01ca312bb62f125d4d2c61c4ef821d524a5c4ff7511d6aa280"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-000291b4.json",
+        "certificate_sha256": "43eccfbb5a11b0e40d2d15bfed95ced80654d0ee17da4a11f83d342cb66cd4c5"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -531,9 +581,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-000297ec.json",
-        "certificate_sha256": "e6c7d0296f34292f8d8046dc9f807324579ea81cc2053ee3cea72e0019b8bf87"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-000297ec.json",
+        "certificate_sha256": "9f4e5a2243cbeb32e0a9255b6bf20e5a094562f9e5d644df26e777824212f615"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -547,7 +599,9 @@
         "status": "BLOCKED_CALLING_CONVENTION",
         "tail_call_target": "0x2adf8",
         "reason": "wrapper passes incoming a3 through t0 while forcing a3=0; no C prototype reproducing this fifth-register convention has been demonstrated"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -569,7 +623,9 @@
           "0x6ae34"
         ],
         "data_reference_count": 0
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -585,7 +641,9 @@
           "0x2b0f4"
         ],
         "data_reference_count": 3
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -609,9 +667,11 @@
           "0x1b6e4"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002b408.json",
-        "certificate_sha256": "34054e9e63ef3fe8bed0e99c1d025911fab09208ccde5989605dc8f7c8bb39f1"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002b408.json",
+        "certificate_sha256": "f434d699474d0337e34171539351d42eb60feb400566f8135169c0a8a10e334c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -635,9 +695,11 @@
           "word 2 (0x2b42c): this module @ 0x1b94c <=> this module @ 0x1b94c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002b424.json",
-        "certificate_sha256": "6b55b8ef42302ca7942646d91a631fbc68f1f5603d969b75e08c602d5ad180bb"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002b424.json",
+        "certificate_sha256": "cd299eeef01dbc3be5065bb2ad6e00f91dd6889917f7fef67d3fe31dc4b6fd6c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -661,9 +723,11 @@
           "IoFileMgrForUser/0x810C4BC3@0x6ad94"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002bc34.json",
-        "certificate_sha256": "78ccb5865dc2f6f214a839f14d1bb78a42ce7e0cc996d3e8cb476b5ada7f4b43"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002bc34.json",
+        "certificate_sha256": "79e6ce88037c2bab9cdaeaf843ed1b7ae4a65855a792fb9350014820951b99a3"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -685,9 +749,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002bd58.json",
-        "certificate_sha256": "8af117515df4995526960aa93f17246ef7cda0c488553db437f7f147e83d46c4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002bd58.json",
+        "certificate_sha256": "39aacb0a225923430f99a8678c90e637e44cadf73025efc5d97f00b4943f688a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -711,9 +777,11 @@
           "0x2bf10"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002c0e8.json",
-        "certificate_sha256": "a0e1ad89bd2290d6c2acb59c13534409aa07506264d7a705488f8631e40f47d8"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002c0e8.json",
+        "certificate_sha256": "3e00b32856bfa800100f3ce1b6fd4b0992f5d5328ea92983ff9995491142fe97"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -735,9 +803,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002ce44.json",
-        "certificate_sha256": "bfa93dab327f851d6fac64cb9e4248a9fd63fddeafc08330d56cb4904fc0ff1f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002ce44.json",
+        "certificate_sha256": "0799b1e7601de3137ccfbd9ca0982e25f8fd91aaefa0f78e9eae413cc7ec7fdb"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -761,9 +831,11 @@
           "0x2fac0"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002fbb8.json",
-        "certificate_sha256": "eeed9d7b8d8d6a4e1ecde7938f88b6fd8b4f44d8bc824ae40db0988477fb6e30"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002fbb8.json",
+        "certificate_sha256": "126017266b4bb06f78b6aebacd7040ca86f952a86de50bc77a93a181e9d4f067"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -785,9 +857,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0002fc88.json",
-        "certificate_sha256": "e6d83c9b4f3869e15e6734ac141553d09b65ced854fa35e8e1750246b7a1dda5"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0002fc88.json",
+        "certificate_sha256": "38eeec29512cfb5b3ba39b95572f4bcdacd45b73d015b69a9937bab98ca76206"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -803,7 +877,9 @@
         "last_object_bytes": 88,
         "required_object_bytes": 108,
         "reason": "Initial local hypothesis compiled short; data references and separate address materialization still need resolution."
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -827,9 +903,11 @@
           "0x3129c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00031308.json",
-        "certificate_sha256": "1a08ebd9b9e5eb8a55bff7f09fa62fbf40d58538c74e16452228e242f0063377"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00031308.json",
+        "certificate_sha256": "7d98c5646d8cb3a2ee0d9e2b01adae7182e0f3467f4ee6696c9450993403e58a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -853,9 +931,11 @@
           "0x3236c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003279c.json",
-        "certificate_sha256": "cefb07d4e8ca54050633ace1ffd25d984169053df343ccf4e5ffc4b962f55ac4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003279c.json",
+        "certificate_sha256": "5d051d832a69badc248c20702b8f76389e2baa0436671d833381c5af9882fd6c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -872,7 +952,9 @@
         "matching_words": 13,
         "total_words": 14,
         "reason": "only the commutative AND operands in word 10 are scheduled in the opposite register order; one operand-order source variant retained the same mismatch"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -896,9 +978,11 @@
           "word 3 (0x39fa0): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00039f94.json",
-        "certificate_sha256": "9ca862af92129091d947a111f861b64e980c7e32fca651fa6d6d5a94f8e90e5d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00039f94.json",
+        "certificate_sha256": "63d1bb1650fff1b731783421d2fe6522144456c3b4efb749c2e7fb49c3be8476"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -918,7 +1002,9 @@
         "called_by": [
           "0x3d868"
         ]
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -940,9 +1026,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003aa58.json",
-        "certificate_sha256": "cb215ab582ae74ecb17a53c4105b734d57c0afa72f81e23700f3a1d5f4adef73"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003aa58.json",
+        "certificate_sha256": "2b17f30012d16680a1798a5adb0cf300eadeb68190181e5498de301ca6a6ed70"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -967,9 +1055,11 @@
           "word 7 (0x3aa7c): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003aa60.json",
-        "certificate_sha256": "d9dee375c8ecff1d61d9cd4cd9a018fb1bda985646ed163dbbec6b03340c964f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003aa60.json",
+        "certificate_sha256": "0042b8e8666055634ad5d3cbb93bf7685b212f0936666474a70881faa6666d0b"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -993,9 +1083,11 @@
           "word 2 (0x3aa9c): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003aa94.json",
-        "certificate_sha256": "0b43a4a6ac8a14efd605776fd4cfdf6b9a330c984136a39f28dd204345fc066b"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003aa94.json",
+        "certificate_sha256": "c7c91a09f60030d0a7cd4d922ea7408a56eae2038081adde67d5d6babda1bd9d"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1019,9 +1111,11 @@
           "word 2 (0x3acc0): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003acb8.json",
-        "certificate_sha256": "fd27323b2822a2e3e638aa87d88b1c21dbb85c66a8ecc18ef0793df1b30aff3d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003acb8.json",
+        "certificate_sha256": "ec48abe93c4187720779a00fd4dfb914f7fed6d6a9769993caaca637a755f1b9"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1045,9 +1139,11 @@
           "word 3 (0x3ae18): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003ae0c.json",
-        "certificate_sha256": "7755094b34881452aa8c66a713ce647e4203e97f39922117ecadf1c10eab6dab"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003ae0c.json",
+        "certificate_sha256": "16ea88a7a7774580ee22ad76e563bfed5cd35ccf8d059c559db5d821c0b076b3"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1071,9 +1167,11 @@
           "word 2 (0x3aed0): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003aec8.json",
-        "certificate_sha256": "b7763c9ed71597d4bbd258067db12ba79527d17ebab2ff96a3a076e25e17df59"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003aec8.json",
+        "certificate_sha256": "d67fc92304b6d7153358b26ac3ab88a9e2e368a3e7679db3b225512ea88d552c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1097,9 +1195,11 @@
           "word 2 (0x3af88): this module @ 0x3aec8 <=> this module @ 0x3aec8"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003af80.json",
-        "certificate_sha256": "4a171fe2055f45135dba0aadf1dd997201381d7aeb5a44d0540036b57848aa75"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003af80.json",
+        "certificate_sha256": "972aefd9b4f583161b65bd1a4b14d817c6a6953d8def22a528c0236f708d62b1"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1125,9 +1225,11 @@
           "word 15 (0x3b89c): this module @ 0x3dfd8 <=> this module @ 0x3dfd8"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003b860.json",
-        "certificate_sha256": "6c3953ee62a724519e523cc52c5e442e310ab36b49fbc25fd996efa8ac3a4650"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003b860.json",
+        "certificate_sha256": "256d0e96217c4f73d4fe3eb6cc277c16b730f956106298cda71b3405105787c3"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1151,9 +1253,11 @@
           "word 2 (0x3b8c0): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003b8b8.json",
-        "certificate_sha256": "2fd14916b98f599c8b89f1f80ba1d723922bba46decc29ebe13a6297dc911be4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003b8b8.json",
+        "certificate_sha256": "89ea7e32faac3df7fcc9f28fce579840a09b63e791f3595affc093b5e77acca1"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1177,9 +1281,11 @@
           "word 2 (0x3ba3c): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003ba34.json",
-        "certificate_sha256": "af421cf3a663c931c3c5b098c7790dc05970c26cf2d2e8229a51523f3341928e"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003ba34.json",
+        "certificate_sha256": "877d7812245595b012500ff50f5d3cc0c2f323ac1a07fb912c3317fa8fe7e1a7"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1204,9 +1310,11 @@
           "word 7 (0x3ba70): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003ba54.json",
-        "certificate_sha256": "6c8a12bee760335f0d167f3221b4ab938d263a05cbf8225d96d7c95e27e49db4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003ba54.json",
+        "certificate_sha256": "1714c5bca51d4074c04abce3d2dc55fa5261ebcd3ecc08a423eb39fc5f5df75e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1231,9 +1339,11 @@
           "word 7 (0x3baa4): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003ba88.json",
-        "certificate_sha256": "88dc98f074ccc51e268692364f1c4c3aebce1faa2fdcfdd942db0015092da444"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003ba88.json",
+        "certificate_sha256": "89561c7f5b121693a43b96a66f9b16da21ed6f172ab83d1f633ab4c65aa86b94"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1258,9 +1368,11 @@
           "word 7 (0x3bad8): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003babc.json",
-        "certificate_sha256": "879bc445a094d80a05313980f9b054fc12de85ea315ecd3f160766111379d434"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003babc.json",
+        "certificate_sha256": "38b74fbc8ec6d8b497dfd1d876ac2e7c4d7cb30bbcc7ff77575f8ffb85c5332b"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1285,9 +1397,11 @@
           "word 6 (0x3bb08): this module @ 0xa140 <=> this module @ 0xa140"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003baf0.json",
-        "certificate_sha256": "0d05b6bd9fb68e86a591858c8c52cb6877a6bf0255bd4f814e49c75dbbca381b"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003baf0.json",
+        "certificate_sha256": "1588661f67fd6c15bcf7a359e8e24b2a75f3f352f7cb863c630ae28f78c18343"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1304,7 +1418,9 @@
         "matching_words": 7,
         "total_words": 19,
         "reason": "nested selector/getter source produced different branch-likely control flow"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1321,7 +1437,9 @@
         "matching_words": 9,
         "total_words": 21,
         "reason": "selector setter source produced different branch-likely control flow"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1346,9 +1464,11 @@
           "word 7 (0x3c3d8): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003c3bc.json",
-        "certificate_sha256": "f91969ac1605c903e7be78708695299cd298003801da4f43b5f69e30b21211f8"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003c3bc.json",
+        "certificate_sha256": "a6fd898eb48a88740350e3bebedffd64fa25f372921119308eb943f40a15720a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1373,9 +1493,11 @@
           "word 7 (0x3c40c): this module @ 0x9d1c <=> this module @ 0x9d1c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003c3f0.json",
-        "certificate_sha256": "30b506b6d4215a2e23f75077f9a4fbbac5622d1caa5c28a25947be5ca10ab6b1"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003c3f0.json",
+        "certificate_sha256": "b6151d62b3ed1ef91b6dbc2d93e743c846df66ce994587454a9a84dfa9153102"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1392,7 +1514,9 @@
         "matching_words": 3,
         "total_words": 21,
         "reason": "index*42 pointer-offset hypothesis compiles to a different address/code shape; first comparison only 3/21"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1416,9 +1540,11 @@
           "word 2 (0x3c664): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003c65c.json",
-        "certificate_sha256": "4790959d617e6057235d0bdfbb47e1f5c155831af23b9e3ee6944f4518da9684"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003c65c.json",
+        "certificate_sha256": "56fe9ad20f04d5952c7696cddf1337ff5b9e39d8a2ad18511ea751e875d7b299"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1442,9 +1568,11 @@
           "word 2 (0x3c684): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003c67c.json",
-        "certificate_sha256": "c7823338961704338a9b2e35b6120ecab6350a2c34559e25f4258178f0b63199"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003c67c.json",
+        "certificate_sha256": "57f06ccba3cc1026a12e13ccd13fc60761a3edeb3c59a4ce1fccccc808d928b8"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1468,9 +1596,11 @@
           "word 2 (0x3c6f0): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003c6e8.json",
-        "certificate_sha256": "8135ff1543c0c53abd97ba8e2c622250e21da1d857fe5a28cb9cc9c3de6b979e"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003c6e8.json",
+        "certificate_sha256": "47c82f609ff15b164ac01d11512765ab46bb19ea46e11b909ae9825c3988ef38"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1487,7 +1617,9 @@
         "candidate_code_bytes": 776,
         "required_code_bytes": 64,
         "reason": "masked byte setter hypothesis compiled short (56/64 bytes)"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1511,9 +1643,11 @@
           "word 2 (0x3c754): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003c74c.json",
-        "certificate_sha256": "8f9eb0de5c48748ab2bb17401f2c0ca2449e9d20804a4d70c0ab8018ca46143a"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003c74c.json",
+        "certificate_sha256": "0a72e3a7cfc5a1650523f640f2bd21f4fdb4ca078a30fc4245d35395b1ebf55a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1530,7 +1664,9 @@
         "matching_words": 11,
         "total_words": 15,
         "reason": "nibble setter hypothesis differed in address/register scheduling"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1547,7 +1683,9 @@
         "matching_words": 5,
         "total_words": 11,
         "reason": "indexed getter prototype/register layout hypothesis only matched 5/11 words"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1564,7 +1702,9 @@
         "candidate_code_bytes": 760,
         "required_code_bytes": 48,
         "reason": "single-sign-bit predicate hypothesis compiled short (40/48 bytes)"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1588,9 +1728,11 @@
           "word 2 (0x3ca4c): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003ca44.json",
-        "certificate_sha256": "52cb8dabed989aab18abc6fa5a43c7cf4f8b7437e22280712ac64b6719e41cd0"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003ca44.json",
+        "certificate_sha256": "f5ec897d28e6709c2411f288658d4108e979f45db7fb024f7ff9fcc533154db2"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1614,9 +1756,11 @@
           "word 2 (0x3cd10): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003cd08.json",
-        "certificate_sha256": "b1ca3cded98c4ab477fc40c03f820da641a3848ea1633048ae1abaae62c338a5"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003cd08.json",
+        "certificate_sha256": "a4694f26cf06e8f55e60f4a91a2516d7b56d5ad46ac0bf2989f7a620c4a2648f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1640,9 +1784,11 @@
           "word 2 (0x3cd34): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003cd2c.json",
-        "certificate_sha256": "7073c316bab7bcfcecc467fc6962eff43f73a97b2d8bfd26f5963c4461647d2d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003cd2c.json",
+        "certificate_sha256": "51e41737df88d6b4534faabc99f2c563d7d68699f10839e016fc9b6ad7e6843c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1666,9 +1812,11 @@
           "word 2 (0x3cd54): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003cd4c.json",
-        "certificate_sha256": "1707c81d713d051a0c8294a9c52fd482c6e1448101a3f32b340a2acd6ae8f1b1"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003cd4c.json",
+        "certificate_sha256": "0109a55b8813cc7dff7aee560d7924ffbbb2c0409f1be94c68b18c4d985ed7df"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1692,9 +1840,11 @@
           "word 2 (0x3cd80): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003cd78.json",
-        "certificate_sha256": "cb8ab1b628adf2110a13da62cca5027faeb02d4773a68221904f1fd182f0e6b9"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003cd78.json",
+        "certificate_sha256": "170514449e08b66b128eb01fb570d17f06a80d72d9de3b9ae5e58b9637f57e19"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1718,9 +1868,11 @@
           "word 2 (0x3cda4): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003cd9c.json",
-        "certificate_sha256": "cb6a09296ff3cfddf5bef5c42926d0f0e77d06cb68362825558af1cbf83e47a9"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003cd9c.json",
+        "certificate_sha256": "2a0c1eaf0b27aa4ca91c6ff32c86d4ce9bf767840e261969430d92a623b20073"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1744,9 +1896,11 @@
           "word 3 (0x3ced4): this module @ 0x3cd08 <=> this module @ 0x3cd08"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003cec8.json",
-        "certificate_sha256": "b5bd553889f6beabd11d5f094e1d75a807c219a2fec225ce735a6421fb7026a2"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003cec8.json",
+        "certificate_sha256": "f9d4f4a3e94bb6e0a7a7e71cc71d1aed81483b143ce116ef9e7fb8f95c882eab"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1763,7 +1917,9 @@
         "candidate_code_bytes": 760,
         "required_code_bytes": 52,
         "reason": "byte flag setter hypothesis compiled short (40/52 bytes)"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1787,9 +1943,11 @@
           "word 3 (0x3d1fc): this module @ 0x3cd2c <=> this module @ 0x3cd2c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d1f0.json",
-        "certificate_sha256": "8778dda2c08b768868ef1efbc7673deb389eb75dad5e86d0ec47b11a5e3bc2f4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d1f0.json",
+        "certificate_sha256": "fdb4b2d8e5d60803139dc60e30513f41088a85d481bccc0856e13113f4474228"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1813,9 +1971,11 @@
           "word 3 (0x3d2c4): this module @ 0x3cd2c <=> this module @ 0x3cd2c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d2b8.json",
-        "certificate_sha256": "a711230352c1ec2e4ea8acb6eb532d520715c5ad4c766fdccc4aac4f6e227bda"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d2b8.json",
+        "certificate_sha256": "a5c9388b92229dfbcfdb2245d3725bb491e30fc388482b9ce1d6a6e3444e7a1f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1839,9 +1999,11 @@
           "word 3 (0x3d2f8): this module @ 0x3cd2c <=> this module @ 0x3cd2c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d2ec.json",
-        "certificate_sha256": "5ed561d4ab860c3be8fa7ced45dd1190c765343cc1e86dcca8240bbadc749cd3"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d2ec.json",
+        "certificate_sha256": "b57a5aa0ab2ad0d14fe53ea5d32044f9c0d0e80d98f1557f6feef2108b38a635"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1865,9 +2027,11 @@
           "word 3 (0x3d4cc): this module @ 0x3cd4c <=> this module @ 0x3cd4c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d4c0.json",
-        "certificate_sha256": "e60146cf9734cef5e290d29569c5de47a236ee3953cb60f83d88df44037e6d79"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d4c0.json",
+        "certificate_sha256": "c7eec64ee5d724c691aa1cd15771522d130b3167d57bd0487b76d1406a3ce77e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1891,9 +2055,11 @@
           "word 3 (0x3d778): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d76c.json",
-        "certificate_sha256": "f4b6761e6eb50e10747a0637b3b948783305de1f859bcd0104d6329eaa030aa3"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d76c.json",
+        "certificate_sha256": "92af453a6cf19c2f3efce5f040cef20f6cbf6e8a27eb3c7393661293384dfbbf"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1917,9 +2083,11 @@
           "word 3 (0x3d840): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d834.json",
-        "certificate_sha256": "bd803efcc5cb7d7780c15c83383cf74fe1f2524e47499da30fca391aea4f80e5"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d834.json",
+        "certificate_sha256": "8a9f7e0763eea83bd8565849fb10befe2f8676279d85c2df052ba80990e3da5c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1943,9 +2111,11 @@
           "word 2 (0x3d970): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0003d968.json",
-        "certificate_sha256": "6962b9042ac04d13df41f8ff3d024a00bc1ababc5eb5969e022f6890b4c0a9ef"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0003d968.json",
+        "certificate_sha256": "78fdab7fe42736befb7d373e84cf5b87074762ccf54b525841ee19f15c9e1e8e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1962,7 +2132,9 @@
         "candidate_code_bytes": 776,
         "required_code_bytes": 64,
         "reason": "masked byte-field setter hypothesis compiled short (56/64 bytes)"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1979,7 +2151,9 @@
         "matching_words": 1,
         "total_words": 9,
         "reason": "halfword zero-scan hypothesis differs in pointer/counter register assignment and loop scheduling"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -1996,7 +2170,9 @@
         "matching_words": 0,
         "total_words": 17,
         "reason": "halfword-copy source did not reproduce pointer and branch-delay scheduling"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2018,9 +2194,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00041870.json",
-        "certificate_sha256": "ba182dc472ebef80edaa59852055373f0935732368b37285281da7dce747cf71"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00041870.json",
+        "certificate_sha256": "c17549611c855d94c02ffae80db6abb76e0d2b8402bfaa341cbf24276932863e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2037,7 +2215,9 @@
         "matching_words": 2,
         "total_words": 16,
         "reason": "entry-scan source differed in null/loop branch structure"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2061,9 +2241,11 @@
           "0x15924"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00041ddc.json",
-        "certificate_sha256": "62e7c8fbc29f8afc9d3b1c4a12b2383a7c34f77399104b46eeaf89126b6e7c26"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00041ddc.json",
+        "certificate_sha256": "269e8e33edb3d6223258a731792b3589a7fbe35d542d0bbe6d18d681eb0c4e76"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2087,9 +2269,11 @@
           "0x15660"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00041de8.json",
-        "certificate_sha256": "d71051bb1c4871088b3b8168ac5cb04aaf9d64fad54515878635273f81e38eed"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00041de8.json",
+        "certificate_sha256": "3c77183fc133fe0cd2260fac573e60062239ad7173eb2b9bf50e7c16b38ca874"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2113,9 +2297,11 @@
           "0x49794"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004978c.json",
-        "certificate_sha256": "01ff2d88235765b395921b38573b8ceb7d92fbf2f09783ad6d3575ecb5008a1c"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004978c.json",
+        "certificate_sha256": "fecd73b70b9fbfd1dee22acf8eef0c1563ab4a0a1962b58dad32125f08ccaaf0"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2139,9 +2325,11 @@
           "word 2 (0x49888): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049880.json",
-        "certificate_sha256": "2cbf9428b5bfcb67fd6346848af0ad7e0e4bbfd0958b02f75fccb208e1a29f8f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049880.json",
+        "certificate_sha256": "1963f574856ba4a1309858c508b014703ac5c204ec80b74e19938a9da310106f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2165,9 +2353,11 @@
           "word 2 (0x498ec): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-000498e4.json",
-        "certificate_sha256": "a12ab4cc81c6f4826564da5b0aae9e989d04d8e6c8b18b523c7766d41f8c964a"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-000498e4.json",
+        "certificate_sha256": "88ea44fe83a40e370d0c237d489ce1bc411ad3831014041a684e42aefca58316"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2191,9 +2381,11 @@
           "word 2 (0x49a8c): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049a84.json",
-        "certificate_sha256": "5843fab40081a9b52209df50c11424ff15ecb2d5db473a1c5a3b5ef5de925136"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049a84.json",
+        "certificate_sha256": "92d9781dc22db2568375468e9b00c2c31e948fd4737da8000fce2afcea156fab"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2217,9 +2409,11 @@
           "word 2 (0x49ab4): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049aac.json",
-        "certificate_sha256": "213ae5eb13ca0d00d0422f62f2649a72da96bdfb90331ddcec5c1440f20dd604"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049aac.json",
+        "certificate_sha256": "355de887e9530b0579a3a7602b00188892b2cfa68d0cffc568e549f096aadca5"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2243,9 +2437,11 @@
           "word 2 (0x49adc): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049ad4.json",
-        "certificate_sha256": "b0674234e11146a44b921b080d67b802414a9f0efa99254c27650dcc748ec18f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049ad4.json",
+        "certificate_sha256": "3dafc9c33d70429b7bceb2c33b0fe3d155c837deaec0401dd78b1d3e9a9e556c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2269,9 +2465,11 @@
           "word 2 (0x49b00): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049af8.json",
-        "certificate_sha256": "783911b00eacec6b5ed39a66f05953ff111ef2b5e59c638de313dde6220ef0d4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049af8.json",
+        "certificate_sha256": "dcabb3c2e4bfeeb44a622091434d051449363995a7247611209826a64cab800f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2295,9 +2493,11 @@
           "word 2 (0x49b28): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049b20.json",
-        "certificate_sha256": "15cd5cbf266ec6ea1e8a2c69dcdaf3a962a09c5d8724c304108e1c8beb853a3f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049b20.json",
+        "certificate_sha256": "e001e88fecf3c041b0ea8af7ac593e28dd36144e08460305a2fed7dbd30acf5d"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2321,9 +2521,11 @@
           "word 2 (0x49b4c): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049b44.json",
-        "certificate_sha256": "fc3ff4f011cf2c4015b0786bdbd91460dc62832d97b8293f5bdfa8bcf9232d51"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049b44.json",
+        "certificate_sha256": "15074e2c0b913ad1ff1838619f1d8434d19715d9a966b2acb9749cd3b18d9417"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2347,9 +2549,11 @@
           "word 2 (0x49b90): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049b88.json",
-        "certificate_sha256": "3fe80830027c20849d225844ffb5531540c7155c6580ea61f133290457e76342"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049b88.json",
+        "certificate_sha256": "cef2229f741dc2d4b3aaf5aaa0f202c2e19457ad9e61763dc89eb6c7b5e1d599"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2373,9 +2577,11 @@
           "word 2 (0x49bd4): this module @ 0x49850 <=> this module @ 0x49850"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00049bcc.json",
-        "certificate_sha256": "1c45309d979a62bb4ad4345e6acbd4c9cf563d75bcc2f54f5c7d1c0e94cc07e7"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00049bcc.json",
+        "certificate_sha256": "63d73fdd49675e6044cf89d5a4364c05c06f899835c706a857d7987ace6d7708"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2392,7 +2598,9 @@
         "matching_words": 16,
         "total_words": 17,
         "reason": "sentinel 0xFFFF compiled as add-immediate rather than the original OR-immediate; a separate shift-width variant remained incomplete"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2409,7 +2617,9 @@
         "matching_words": 1,
         "total_words": 10,
         "reason": "guard/conditional control-flow hypothesis differed from the exact branch and delay-slot layout"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2433,9 +2643,11 @@
           "word 2 (0x4a454): this module @ 0x49b20 <=> this module @ 0x49b20"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a44c.json",
-        "certificate_sha256": "39333fda6904a5fbaeba043c2b682abe16c46bef42092da01b0188d5cfa260c0"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a44c.json",
+        "certificate_sha256": "70aed29ccd43090b056230483c51b418e29fa3c6ba37850a781138291b6f06e9"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2459,9 +2671,11 @@
           "word 2 (0x4a4c8): this module @ 0x49f78 <=> this module @ 0x49f78"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a4c0.json",
-        "certificate_sha256": "bbe7b37c5667cc3f914532175c10f08e2dd5fc025ae5a2a16c606dbeb2e8bcd9"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a4c0.json",
+        "certificate_sha256": "c88766454cb7383dfeabd93985971db957dd1cf1f326b081ac2930fc45711604"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2485,9 +2699,11 @@
           "word 2 (0x4a4ec): this module @ 0x49f78 <=> this module @ 0x49f78"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a4e4.json",
-        "certificate_sha256": "d40782b631a005795bbeb0372da26e42de248b6264f31f0099def9b591ccb996"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a4e4.json",
+        "certificate_sha256": "2bb00b7b483e9c2986987d4a77344406a0c0a20bffdab6e8fc516189d51eb161"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2511,9 +2727,11 @@
           "word 2 (0x4a510): this module @ 0x49b20 <=> this module @ 0x49b20"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a508.json",
-        "certificate_sha256": "0a34d21456f1199de0cfa337a57d345d0a27a782f3dba5a5d1320fb4971bbf41"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a508.json",
+        "certificate_sha256": "3c9f16fcd551dfe2f6e26a0c6870d166f218b28f7d9ba61aecaa2b064b01976a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2537,9 +2755,11 @@
           "word 2 (0x4a534): this module @ 0x49b20 <=> this module @ 0x49b20"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a52c.json",
-        "certificate_sha256": "2525156c6a933e613905aee01716f0f77951a8a211c58514a5109d663b68623d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a52c.json",
+        "certificate_sha256": "6165ef8ba95820d47bad1d7c869941d9844e1660c7c5dfaeb5ac95ca8c78ef53"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2563,9 +2783,11 @@
           "word 2 (0x4a558): this module @ 0x49b20 <=> this module @ 0x49b20"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a550.json",
-        "certificate_sha256": "65b9a8131402df2277b2e1dc7a270c9be6df61dd92511ce01fd375c41788c0ca"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a550.json",
+        "certificate_sha256": "d11b5b14f5b1345300ad4ef96a262420c8ee3aa0bcfb189ca416fae6611194b0"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2589,9 +2811,11 @@
           "word 2 (0x4a57c): this module @ 0x49b20 <=> this module @ 0x49b20"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004a574.json",
-        "certificate_sha256": "84b507a0327ee6d32472ddd973fc3f1941d11b258f1a16723c9213353470c05f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004a574.json",
+        "certificate_sha256": "d1165fa0de55f20d11df3e4b9ad92dacecf709229faa0c3af0987ca34e911fc4"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2613,9 +2837,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca70.json",
-        "certificate_sha256": "42e57a721c61142255ac0fc1d6e6c0055bb8ba62b3925d3d7c9616ecbdcdadcb"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ca70.json",
+        "certificate_sha256": "249758b37948e0fbc673b4f04aadc09b57dc101b15cc4a4044afc434c6d21f25"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2637,9 +2863,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca80.json",
-        "certificate_sha256": "765e4964ce2fbfac008033be223ce4add7068de8217d778f4c8999be6c6d0f5b"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ca80.json",
+        "certificate_sha256": "7110ad6d33c78e888e33d182bfdf8a1fd0af610f1f9b3768b23b5c0ac809cf6c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2661,9 +2889,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca94.json",
-        "certificate_sha256": "c6410979ab85ce9093cb0bf0dd650f5ee0ba8fb4c342ca4ec7c7b31cd11acc96"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ca94.json",
+        "certificate_sha256": "0c69b19e7a55157a4a42bbf742522e92fdf596244a1d98054dafb217960bc190"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2685,9 +2915,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca9c.json",
-        "certificate_sha256": "17a61b50ae9718377b9f25baf3126180885e94a707f740312e135625a096a247"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ca9c.json",
+        "certificate_sha256": "f7b15100db50046a5932906f2b18e0a6726f62c58b9c6f4bd4769f8e704ec14f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2709,9 +2941,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004caa4.json",
-        "certificate_sha256": "0bf2321800cad638a0f5a6fcfc578a1d6687559e84c76da2f331de1e0f5b7d7c"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004caa4.json",
+        "certificate_sha256": "937b00971e4141ca04a96ea4d2dabd16c6c55408e8dbf17221bc719fb6259f34"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2736,9 +2970,11 @@
           "word 12 (0x4cbb8): this module @ 0x4caa4 <=> this module @ 0x4caa4"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004cb88.json",
-        "certificate_sha256": "3f99db48313678137c6f25ef0e6bfdc5e30e67b6408c9e4ae481c79a79e2d66d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004cb88.json",
+        "certificate_sha256": "d258ab84740a47059314efa0c77103973481e7402af745ba1cddbc9e3afee7c6"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2762,9 +2998,11 @@
           "word 2 (0x4dcf8): this module @ 0x4ef60 <=> this module @ 0x4ef60"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004dcf0.json",
-        "certificate_sha256": "58e82dbda6a24709f241920d316b5bc696a71781a4158e4429147e297c7f977f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004dcf0.json",
+        "certificate_sha256": "0aeaf74dd01f277a675bac88eb49affdf6ab5a07c9a7ad356fdd037978bcd87f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2788,9 +3026,11 @@
           "word 5 (0x4e49c): this module @ 0x4e598 <=> this module @ 0x4e598"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004e488.json",
-        "certificate_sha256": "74590a863d1c6dd961969638289c74ba1336c4e910f06eeb0e176fb94071fff8"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004e488.json",
+        "certificate_sha256": "58fa210f5ed19f6106df6c7ae3e403d9ce07dca0eb4e8c3d2239df4ae470b8c7"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2812,9 +3052,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004e514.json",
-        "certificate_sha256": "8e29ed7ffcc8ce8623917c500f175503d255e1eccbfec4456afdb89fe788442e"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004e514.json",
+        "certificate_sha256": "6bf6a438732d4a8ae8d28db0386ddde85fa2583a2c5753a16cf9173efc611583"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2836,9 +3078,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004e598.json",
-        "certificate_sha256": "2b67d78db03272091c1b92619c0680114da22ff64a033b3dd3f9d7899d542602"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004e598.json",
+        "certificate_sha256": "058163baffcea5b3ff5301142a95f126a1efd3590b56130a8476dcc97f91d90a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2860,9 +3104,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004e5a8.json",
-        "certificate_sha256": "612ef635ac80ea1b7dbc24ab9a7641ab648dcbd0259c7a430ae7c11763825e01"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004e5a8.json",
+        "certificate_sha256": "26f0f0e1899a897c4fd20c396d69d9b7415c74499c66a95bd0c4331963788e69"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2886,9 +3132,11 @@
           "word 2 (0x4ebb4): this module @ 0x4cd4c <=> this module @ 0x4cd4c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ebac.json",
-        "certificate_sha256": "90a1709ee1019e0fc18b391c692d94d9c7de2240f1439c39895da374f0477e0c"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ebac.json",
+        "certificate_sha256": "2e1f91e13e96428f11be96134e29f3b3af1311fd8f033ea6796b64cbf38c8595"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2912,9 +3160,11 @@
           "word 2 (0x4ec50): this module @ 0x4ec84 <=> this module @ 0x4ec84"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ec48.json",
-        "certificate_sha256": "9b0292bba66d93c3e3e064c7806cbee20e820a8ee9a2572073c0bb8176dcd6da"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ec48.json",
+        "certificate_sha256": "0a432188006e70b230c8b7454489bfad61f4166afb49dffa1f1616411e8a31f7"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2936,9 +3186,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ec68.json",
-        "certificate_sha256": "2bd745cc8c3482b589e3f7ce29252b9864a2659046b776ab8e0170708fecea1b"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ec68.json",
+        "certificate_sha256": "da8ffe213f22a3b97c50cc7d7141d6a96a8e6fc47487bdea91f8a42892f21da3"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2960,9 +3212,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004ec84.json",
-        "certificate_sha256": "dd2df4ccbb802ebc76f47d1ad44f30332d04e643558958ec4975644c652fbcaa"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004ec84.json",
+        "certificate_sha256": "8e866b8f8c94c416f9af22ab1ae4b4aaa4465e90a824f5cd06b94020a05cfcca"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -2984,9 +3238,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f008.json",
-        "certificate_sha256": "4e326aad10f350cfd86418df9563bf7ecc2b13ec3603be5d4968640deff159d2"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f008.json",
+        "certificate_sha256": "03cb4dcc30c05c7972052c9366739a1715e3c96f0515b5329cf0c4d02a012b0b"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3010,9 +3266,11 @@
           "word 5 (0x4f65c): this module @ 0x4f738 <=> this module @ 0x4f738"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f648.json",
-        "certificate_sha256": "ce4a3039ea1dcbbbef107ef340101c0bf79a349ebde42c29e95cd02a871fcfb7"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f648.json",
+        "certificate_sha256": "180c1c5d5de9e09776ba9582157c0dbb38d97b74012797ceadf0717d8c72825c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3034,9 +3292,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f698.json",
-        "certificate_sha256": "02778cd22322590f64fdb8f2e79da4db6c6c54d71aec7ee835b21300094e70ea"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f698.json",
+        "certificate_sha256": "157b61378699155274041bcc858ee41e4ed54057b64cd45edd14243f0430eb78"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3058,9 +3318,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f6b4.json",
-        "certificate_sha256": "3d0b93edd75cbbb9779c421ec1aefb8bd714875a05b7c9dd926f0504fe6c073f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f6b4.json",
+        "certificate_sha256": "437beefb722ef655f817f91540e700b45a45e57a7ccfe9370ab6939ebe218825"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3082,9 +3344,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f738.json",
-        "certificate_sha256": "1504a8a80da5745023ea7cc6e65712e0e5d5f7e62ad027f702e62a3af983aec6"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f738.json",
+        "certificate_sha256": "084a81d9a5f42172f4df70ecd125a09c9488c1ce41497b3d505198a623108813"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3106,9 +3370,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f748.json",
-        "certificate_sha256": "d81127c50b7b2ec17a97e0174e0fb316d81280e26712684ee4132af09e24eae0"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f748.json",
+        "certificate_sha256": "c375af5187d8fdb16f329c02e941089b5642020363d8dadb31f86d06a0aa5385"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3133,9 +3399,11 @@
           "word 13 (0x4f784): this module @ 0x4f7a0 <=> this module @ 0x4f7a0"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f750.json",
-        "certificate_sha256": "9831b53cc1938d21ee9e281bd709163ed8c45c619f82bc4c589bb900052ebbb3"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f750.json",
+        "certificate_sha256": "629ded9c9c8f205eeaa0d0f64bd9bb063b4f06dd1628c486ee89e7466d59bc65"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3157,9 +3425,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f7a0.json",
-        "certificate_sha256": "241c22a82204d5131235555333e79d08888150439a3883ee08d5d0eafe158c90"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f7a0.json",
+        "certificate_sha256": "ee4966abee2c5b22b9b53e460b8c5c544b7eed64588c6033e0a8fd2055fa8748"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3181,9 +3451,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f7ac.json",
-        "certificate_sha256": "18251e7650b48b1e00fefa90a35940318d70ffe6e35efdf9f231b855439a904a"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f7ac.json",
+        "certificate_sha256": "f3df57fb9d301b9038a885fc4b8e79e87534cecec58dd1c6627868cf0b7e9f86"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3207,9 +3479,11 @@
           "ThreadManForUser/0x812346E4@0x6b004"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004f7b4.json",
-        "certificate_sha256": "f8fb18509673ea68c4f918ff152999f0f6136f022697a3ffbb9b2ac139ef7d27"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004f7b4.json",
+        "certificate_sha256": "0f36d0f45611211566557f60135e8e11bab47d5cba61115cf424a3754096b1ab"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3231,9 +3505,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0004fe8c.json",
-        "certificate_sha256": "9934f7fbd55e712a15a5cbd7b7264c010b5ab4ba8ebb4db0d2b1e647eeffa4d1"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0004fe8c.json",
+        "certificate_sha256": "cea137c92e44b199e5d37d50bfce0cb7be385d41dfd323c1a91b9124a3706fb3"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3255,9 +3531,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00050678.json",
-        "certificate_sha256": "c8c2bb4f1dacedf65085ed8560bcb200d35c04aa9aed628444ac87bbaef7296a"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00050678.json",
+        "certificate_sha256": "f413b9c9911e2eef6295fb4589c8a6a5c01f14e37fcb266be834ad707a6a039f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3279,9 +3557,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005088c.json",
-        "certificate_sha256": "d10acc433a1f6f0bcb57cfb971cd392854bb4c32a50d174d28fc3c3bdde4b572"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005088c.json",
+        "certificate_sha256": "58abe99a4cdb36a13b7d4df10b05949b9a34fb55c097e8994c06550086dec25e"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3303,9 +3583,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00054c58.json",
-        "certificate_sha256": "6cc398918193f35d043206a61c153d14e611a0104ce74dfa179b0da340162b07"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00054c58.json",
+        "certificate_sha256": "5ff7ea05272e205007d7cb93f9eed89b4907be83237259fa362b06c7c4c21ab9"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3321,7 +3603,9 @@
           "0x53bd4"
         ],
         "data_reference_count": 1
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3337,7 +3621,9 @@
           "0x53bd4"
         ],
         "data_reference_count": 4
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3361,9 +3647,11 @@
           "0x391c0"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00055044.json",
-        "certificate_sha256": "38c3020e909ee38e90862dd3076973d69c536a4b618013ca8481cfff0b1ecffa"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00055044.json",
+        "certificate_sha256": "016dd3086d43ee4bc4ebc2e7fc45c2b453b66c1c63460ab59e6c1fb624305e92"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3385,9 +3673,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00055804.json",
-        "certificate_sha256": "62220accd393856e1e40489d2ed5d8af8cacc72f1818134e7ec78c4a7242b75d"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00055804.json",
+        "certificate_sha256": "668167cebb0f9fd047947bcb009dad5eb59d20e1aaf90c89bbe6874f5049148f"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3409,9 +3699,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00055814.json",
-        "certificate_sha256": "06523226cc5a8cc7d2bd52e28ffaae8545ff34a446ea09deffe886f5094f51ab"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00055814.json",
+        "certificate_sha256": "7a5266abe4bd9345b7b6c7b8e1be7b642910aab070bfd71ef04629ba017ffb58"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3433,9 +3725,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005a19c.json",
-        "certificate_sha256": "3b8f8f5969d5670c50e35fca42682f1360a50d3ac462c0bd2de53c46cfd30988"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005a19c.json",
+        "certificate_sha256": "2bd8c26dc42bcbf0ce2f0c5cf98cb728f86aebb68a79910c8a208cbdb1243d2a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3457,9 +3751,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005a1b8.json",
-        "certificate_sha256": "ac0aefb28e568123a5196318331511b5fc95c21b991186761aef8b3a0eb3c9cc"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005a1b8.json",
+        "certificate_sha256": "c696b337fbe280d556ac2e722b93898290d9deed5fb177f29fad63afe4d86cf6"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3481,9 +3777,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005a1cc.json",
-        "certificate_sha256": "92f180a9f5dc179b5ff702789c6d21c2d076ae83aadfdb5988ea44e9d91c27a1"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005a1cc.json",
+        "certificate_sha256": "2cf571433722ddd600be4813206431b10b5f305220626e825b0d63074675a6bc"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3505,9 +3803,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005a3c8.json",
-        "certificate_sha256": "e2de83c3db16e8fc2d38b8c2e9c4f92ef00d41b12c25bfd9e7c8cf0d7d0aac79"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005a3c8.json",
+        "certificate_sha256": "3f485e3d2c8608bd1e667cb9fc9609209a23e9480ec668bb1e6244d958849b32"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3529,9 +3829,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005a4ec.json",
-        "certificate_sha256": "b4f5eba277a93bfd1df6f7c40de8e8a3d38a36afa0eefadb954b6a803ebd5b8f"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005a4ec.json",
+        "certificate_sha256": "c95c7c99cfe59322672c023e38e0140754025baadc52d0314f8a97ecd3f8b037"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3553,9 +3855,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005a50c.json",
-        "certificate_sha256": "c822399eeb6928b29be1f0ad9e4d310e12cd2e5a23cfc5ab3aeacbef5ef0e00e"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005a50c.json",
+        "certificate_sha256": "93b3c4dbcb80ee83971ae898b7897c33938410d02359b474fc91c516348c2bd0"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3579,9 +3883,11 @@
           "0x5a634"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005ab88.json",
-        "certificate_sha256": "af59b938bbc7df21103441230437a7b4aa50329d3e08507935fe5c14d62d00a7"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005ab88.json",
+        "certificate_sha256": "484c3a4ec4d042324aea8486ac2c30e3865e5f6f810aeb348b57d628c359499a"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3601,7 +3907,9 @@
         "matching_words": 0,
         "total_words": 6,
         "reason": "both guard/control-flow forms retain a frame and do not reproduce the original branch-likely tail call"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3625,9 +3933,11 @@
           "word 2 (0x5cff4): this module @ 0x5cf7c <=> this module @ 0x5cf7c"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005cfec.json",
-        "certificate_sha256": "d402c458158990cc5b776edce29f789cd58f71a66b206b5c7fe8000c3806a73b"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005cfec.json",
+        "certificate_sha256": "761c29fbd8643bbee6fed7040edec1604d4a1bffbfe3ef38396de5c88613aa66"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3644,7 +3954,9 @@
         "matching_words": 9,
         "total_words": 11,
         "reason": "packed-field hypothesis was NONMATCHING (9/11) due register/code-generation differences"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3666,9 +3978,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005e4ac.json",
-        "certificate_sha256": "5da73c2b6bf226f597a51720564df0df262d1955d0b3d75a13130b2244857f48"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005e4ac.json",
+        "certificate_sha256": "decfa493f6b9e5b026fd7995964e2f56236162fb18f51734ddd8a10b4980572b"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3690,9 +4004,11 @@
         ],
         "resolved_calls": [],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0005e4c8.json",
-        "certificate_sha256": "6dc3f19de6be5299c68a482affd97446d88213ce604a97a376e7d3fb68d0c453"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0005e4c8.json",
+        "certificate_sha256": "65cade39623a2cae23b497810ca9d4f15bac95ad2195eaebd72f5cec6f537a82"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3709,7 +4025,9 @@
         "matching_words": 5,
         "total_words": 11,
         "reason": "same indexed getter hypothesis as 0x3C7F4 only matched 5/11 words"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3733,9 +4051,11 @@
           "0x5c4b4"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006168c.json",
-        "certificate_sha256": "184b498396c027ee292b80f6dcc25304a80d0384696e33ce6e88d421960fecf7"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006168c.json",
+        "certificate_sha256": "28ceb32c5bcb46fdf63ed3034389c5d53a2a2cfc196440591a98761506f848b1"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3752,7 +4072,9 @@
         "matching_words": 3,
         "total_words": 5,
         "reason": "candidate constant 0x41bae8 has no relocation, unlike the original HI16/LO16 pair to the unresolved data object"
-      }
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3776,9 +4098,11 @@
           "0x661c4"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00066318.json",
-        "certificate_sha256": "c7e08bb12bae065e68a6c2f700ffe16fc43fd4dd325d0cbc8ba0b97e4c197930"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00066318.json",
+        "certificate_sha256": "89f55602e47d385793af9deda373d30db979be612c499445cc668834af013d9c"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3802,9 +4126,11 @@
           "0x661c4"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00066324.json",
-        "certificate_sha256": "2f27e971ec064754d114decad54c58951085609e336d532bba7c781df11312a4"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00066324.json",
+        "certificate_sha256": "4f2957d7d3685f3f0bea3f008eb4bd178d6299d97620eac3c7782c0795c541aa"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3828,9 +4154,11 @@
           "0x661c4"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-00066330.json",
-        "certificate_sha256": "c75d37cd6bbda8652c2f4b904a0ad6a5cc54c2c928488eff0760376b26568811"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-00066330.json",
+        "certificate_sha256": "2432a483234eca0580a47f76450322426d5ba3f54e66acfb8983de95199f7a11"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3855,9 +4183,11 @@
           "word 4 (0x6a884): this module @ 0x6a674 <=> this module @ 0x6a674"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006a874.json",
-        "certificate_sha256": "54db3d2bba70016a101bd0a0be9e19aa7c3d998a92b40472fc37409315a5bd90"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006a874.json",
+        "certificate_sha256": "7e34b8918c1440a4256cdf777ab34e44fcdd90f22476a53d5eb3a2b23aea97ae"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3882,9 +4212,11 @@
           "word 4 (0x6a8ac): this module @ 0x6a674 <=> this module @ 0x6a674"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006a89c.json",
-        "certificate_sha256": "406bf8fca94b4a1437db3a5f777085c6b1e3bff8ac05ecd0c6f7969b9a6037d2"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006a89c.json",
+        "certificate_sha256": "5dc88dd06673415d032be9dfa0f5e8643e4732f93cb002dfdae250408653283d"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3909,9 +4241,11 @@
           "word 4 (0x6a8d4): this module @ 0x6a674 <=> this module @ 0x6a674"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006a8c4.json",
-        "certificate_sha256": "661fb0070b7d1ec4898059416c4276ec55c9466c7a56a4253329e784b682dbce"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006a8c4.json",
+        "certificate_sha256": "b962492850259a36e29843a7848183dba8f190624694a6ec5ec51ebc221e7241"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3935,9 +4269,11 @@
           "word 2 (0x6a8f4): this module @ 0x6a674 <=> this module @ 0x6a674"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006a8ec.json",
-        "certificate_sha256": "5d99bc14e5ce34294de0261d11bf95f8a7dd68d4f68f55ef010792c88f1d0e9c"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006a8ec.json",
+        "certificate_sha256": "92b0e9969b5f5a223c00c51946af56cf9cb837a5427c4c77b7af73aee504e024"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3961,9 +4297,11 @@
           "word 2 (0x6a914): this module @ 0x6a674 <=> this module @ 0x6a674"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006a90c.json",
-        "certificate_sha256": "469225e42b648cda3a20c0a67c16c586622db7bce6679868295ec1b37c86b8a3"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006a90c.json",
+        "certificate_sha256": "8a0ba878f06cada45b848b435adff4ae305df2fc6dd1228b89714a834f5765a0"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "EBOOT",
@@ -3987,9 +4325,11 @@
           "word 2 (0x6a934): this module @ 0x6a674 <=> this module @ 0x6a674"
         ],
         "data_reference_count": 0,
-        "certificate_path": "build/seto049/internal-certificates/eboot-0006a92c.json",
-        "certificate_sha256": "95ba126bd3c218c245979dc91ace2374b496746105db365a029da8044bd2b9fa"
-      }
+        "certificate_path": "decomp/evidence/internal/eboot-0006a92c.json",
+        "certificate_sha256": "05ab2ddf0d98a3f0ee45d472cf001f5f31b89dfe8c4b6a279a3f34bd984f98cb"
+      },
+      "section": ".text",
+      "kind": "code"
     },
     {
       "module": "libhtml_view.prx",
@@ -4014,9 +4354,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000854.json",
-        "certificate_sha256": "1244b00c051b3f51f3a5e0e131e703e3370a12d3f352bfd68be2f2542cc96411"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00000854.json",
+        "certificate_sha256": "07d4684fe51998f41a0c9c4c738ac52c9b06bac4606939ccfacd8f1455d087ea"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4041,9 +4382,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000894.json",
-        "certificate_sha256": "ad76016ad40d0496ee27200335f9e2826a115e22cb552085e50ee80de341bb9c"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00000894.json",
+        "certificate_sha256": "d879f2ae987c7f2969754a10a3f209764054fe2653b5a4c4250d980bf239ce52"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4068,9 +4410,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-000008a4.json",
-        "certificate_sha256": "f86be340d201cbab18653e488e5037b5fb8a81072908afaaca4cebf42f138254"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-000008a4.json",
+        "certificate_sha256": "ce7966a07aa62a3b5b896e7f581bff9eecc2f767a07b54b12df7a836e2f45487"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4095,9 +4438,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000964.json",
-        "certificate_sha256": "f350527a8cc23c83a62627d8c1e66953f90320455eab660bf7a5738e6d597e9e"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00000964.json",
+        "certificate_sha256": "d2059127c72c45d9c911b5252dac42f6618bdf2a942728fb8ddec328545f2f61"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4122,9 +4466,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000b1c.json",
-        "certificate_sha256": "4b08959005fa8beb916715ff240ee10115f17378004dd6948eae9d8df0bc6ecc"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00000b1c.json",
+        "certificate_sha256": "d7c05589f0b665c0e0fa741821dc2497908bdd1e89422334849bf582385958a3"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4149,9 +4494,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00001f04.json",
-        "certificate_sha256": "f7fae7f8753c7382777ac1fb32ea7a7cf1f21831e0566ac3fe67b0edca584798"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00001f04.json",
+        "certificate_sha256": "863fcccf3c2d573a21a122e993793fcc0add4ae71c29b062146ed7749f2777de"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4176,9 +4522,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002354.json",
-        "certificate_sha256": "58fe71c06fcd21ae5191932864955bdb27c3b6ffa0de89fefbbb3f078b1ee37a"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002354.json",
+        "certificate_sha256": "bbfa876fc5558a86061b552c864e24d6ac2cf5d6a64885e84e9110214d160618"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4203,9 +4550,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-0000235c.json",
-        "certificate_sha256": "f376e53610c185ce7a69ed83511f8d138860538dedf5bd0cc2f00cf1c0058ea6"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-0000235c.json",
+        "certificate_sha256": "b87d5acaa53dd305e81c04fd165eeac22a57e75a71c99abb2526f560fc750f1c"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4230,9 +4578,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002364.json",
-        "certificate_sha256": "774f71dfcfea25da881ad69382136d8f8c9463d77115804497788a7f7817a643"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002364.json",
+        "certificate_sha256": "6b48f4d2ebd0f3f279114ce13ab577fe5b435d9eada13e625236116d8fad5718"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4257,9 +4606,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-0000295c.json",
-        "certificate_sha256": "a3a0f65e1bd97667cd1399b85816e1773d72c54c89288fd8ff21b3a83395280c"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-0000295c.json",
+        "certificate_sha256": "baca7772303c0935b072ba71c92c33d33d65a67bd89418e4b1846e7a257a44ed"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4284,9 +4634,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002adc.json",
-        "certificate_sha256": "74ad47182ac71af0c00cd74c8ae09033f8ddacb586d6ef2fe9ab61c1d4230ebd"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002adc.json",
+        "certificate_sha256": "5d116b6698b2af16deaa9b58b7b5128ba4a6295a7c54aea948e4c0e009675ce7"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4311,9 +4662,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002d0c.json",
-        "certificate_sha256": "1edde5b41c00a54ec5be5ff13a097d35cf07b52e9ba9efc746c9171fd45ce980"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002d0c.json",
+        "certificate_sha256": "a8cc94dd29a1d2bad5ee5b7103ee15e9385fe3c878c797b6b223a4a4b2cdbf8c"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4338,9 +4690,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002edc.json",
-        "certificate_sha256": "ef2c60beedbcc45908872d4aa6a66f9734dec24c1eedf61523230e70cbe026b6"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002edc.json",
+        "certificate_sha256": "b333735eab01b7f7fdf9120d62c0709851c4b61d4dfa3e5f35af1aca4fcfc934"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4365,9 +4718,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002ee4.json",
-        "certificate_sha256": "4c440fdcf94a04cfa3205f8265c00522c1d2b04891b95c188a774efeece42aeb"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002ee4.json",
+        "certificate_sha256": "35bc2f5e449f22194d558e244b7a88e845dada1a012bc13e2d260454a9f9e606"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4392,9 +4746,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002eec.json",
-        "certificate_sha256": "f175ffd14e7772a90f79c708c5c89ff7c1e67ecc84c2c747d9af66be2f64b70f"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002eec.json",
+        "certificate_sha256": "f8a4fe4d1e0df963ceb2aa317b72c74eaa208e2bccd402453d71ffaaa4f77a5b"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4419,9 +4774,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002ef4.json",
-        "certificate_sha256": "9363a4f8cd61a946f5c5db3cea70cfe4cee21cc41f8efca4ef852552725415f0"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002ef4.json",
+        "certificate_sha256": "4654ac7e0be4f6b593b94a80dbd29f4b779793b0a89a33b7ac9cb654be93382d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4446,9 +4802,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002efc.json",
-        "certificate_sha256": "17c6925f659bb56c422d6e4b64baf15f90ea9857ca880f4db4229b2a7927b180"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002efc.json",
+        "certificate_sha256": "3e43d8ebb8f89ac06d59bddc40ba983766006b93f7a6252f9292ec6138a43a8f"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4473,9 +4830,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f04.json",
-        "certificate_sha256": "5099abe6e148779c766d0da9968eca3857d010b78f4a5714aad234a18f764bb3"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f04.json",
+        "certificate_sha256": "4ff16f76b73e5306a26b091719f532eba9c877c6687ea72adc5086ef05f25ad2"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4500,9 +4858,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f0c.json",
-        "certificate_sha256": "20227849bf1ec9f9ab3b0403cb57aee132364852f000d2af34ce6187ecfa7179"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f0c.json",
+        "certificate_sha256": "b5ab5000037302ad7a591f6d6416727d991bde57ca6bc90dd32d00ac3e84029e"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4527,9 +4886,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f14.json",
-        "certificate_sha256": "51e9cf8efb349e13ea35f1625de33ad9a9ba1d1241147a13be3a0027e7aebd37"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f14.json",
+        "certificate_sha256": "754869fac94f1ee041834f3ed854639199e6cc6d727b83f9286db039e35fef63"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4554,9 +4914,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f1c.json",
-        "certificate_sha256": "3af59f39e3a3f92388ede32e16bbfb7597faac6b4e94c29305be9ce8d939cb67"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f1c.json",
+        "certificate_sha256": "7c5910bcdd9668e9980ea9afbb5e93697d4dc3bf4f837b7fa00c44214ab8bb0b"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4581,9 +4942,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f24.json",
-        "certificate_sha256": "263aba551f6a3f1d36826d90ba5ee09d19c645ede3f8d4ea88122db966c2008a"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f24.json",
+        "certificate_sha256": "597e3ebbb6e066d097a4be49bdd9f48033d193c8e14e177b0b6fd6e75207579a"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4608,9 +4970,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f2c.json",
-        "certificate_sha256": "5176176c2d12695d81d3a4087ee8c24c7bbe8436316ff9cb7c975bc50c01db9b"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f2c.json",
+        "certificate_sha256": "4154abc4c4e2da259abc21ae3d511c8e8f6915f4ef35abcd1e345c29326fa2df"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4635,9 +4998,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f34.json",
-        "certificate_sha256": "cba6f29c4d510362376ae6316ac44dbe2a6f9e158b411e54e7d2c033653aeba3"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f34.json",
+        "certificate_sha256": "40296d2dd399cf747c27c68a07939e39509046963bc2c041c01d4cc0ce4183ea"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4662,9 +5026,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f3c.json",
-        "certificate_sha256": "5224642bb11570294bc2b3a57395afab3f9123d7986dc43d7debb7ceda60373e"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f3c.json",
+        "certificate_sha256": "2e4cfdf09b12f00cee33d490de224214a57ddb5171f1e94317e152dfcdc8f7b3"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4689,9 +5054,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f44.json",
-        "certificate_sha256": "eababad3194f3a6c66c13b57d72131a25a4bcbee9fab8702bb11a63f239ff605"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f44.json",
+        "certificate_sha256": "f2be80ea5ada12d09494696b774e8bdbcef9fcc47a689f35b1f3f7196097be60"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4716,9 +5082,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f4c.json",
-        "certificate_sha256": "af7219d92c668d41b4ba998aa99a8992ebacaa375ff362e432d97bf61ea90016"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f4c.json",
+        "certificate_sha256": "6d2e0e48e822cf2e9ab16e34b1aefa2ba9bf5dedb647e23320463c4153420c97"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4743,9 +5110,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f54.json",
-        "certificate_sha256": "98ed45db01f4c6666b8e02b1a2e75545596673a40e2132045b341e0e7e882922"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f54.json",
+        "certificate_sha256": "142d2ee5dd3d6710848cd88f6b478e360af229aeb48b566a9491631c32b33c6f"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libhtml_view.prx",
@@ -4770,9 +5138,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00002f5c.json",
-        "certificate_sha256": "1f89246eeade09b8f9655e966c2bf24fe36d74f9f24ec2914da169a026346395"
-      }
+        "certificate_path": "decomp/evidence/internal/libhtml_view-prx-00002f5c.json",
+        "certificate_sha256": "89f83811b0443ccfea2cb54f01e488b20e8968794e05a650df490da708f7a28f"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4797,9 +5166,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000025d0.json",
-        "certificate_sha256": "837e31c6fe8a644f64868ae547f8e3a59ae93f45eecfad24f0ca4cd2f0e8e3ab"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000025d0.json",
+        "certificate_sha256": "61ecaea0e7f760b47d1db67be554564aa8c36975a897462f39987c98a4872949"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4824,9 +5194,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002610.json",
-        "certificate_sha256": "c4c16e3d8625a968aafd180a82a904a1a70e692c5ffcb12eb7bbb774a41935bd"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002610.json",
+        "certificate_sha256": "ea9dc685bdddb87a9c1b77b5bccb05a27b29a5c2f4016f7d4c43106da0eeb991"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4851,9 +5222,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002638.json",
-        "certificate_sha256": "58db8986d634245d7c1a68b4e742d4fb692fdce0264525afea1b1f3a0d07503d"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002638.json",
+        "certificate_sha256": "d16ca3d4f18dd95f890071b6839d2acfcd88e532da060dd8564d48d9a911804d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4878,9 +5250,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002720.json",
-        "certificate_sha256": "594e6af5166e6659826c3a602b569e4136d5c9c234232b9072d40d57ea58a935"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002720.json",
+        "certificate_sha256": "6ba9705a6f63fa13ab6c8278492602f6ec31d48e97cc6d7842811a60b37edf93"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4905,9 +5278,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002738.json",
-        "certificate_sha256": "6c8a7f85075d21f807c33673c2653efa9de13c7af16b48e827059c94aa24da4e"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002738.json",
+        "certificate_sha256": "4d486f4280c45555cb176e769df0fe38822eb54304edf4573629d6e60b575e97"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4932,9 +5306,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002740.json",
-        "certificate_sha256": "372bf929d4025dc77fe942f5dedc855601e5ae9a7e6280de0b05ddbda984aee9"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002740.json",
+        "certificate_sha256": "3d5971a18a968c0c38a32603c20ee74b276f85a0ba8fcb01400471f0f425b361"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4959,9 +5334,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002748.json",
-        "certificate_sha256": "f4387c391075e5180fbfb6fbeb9b7d355d65e40452626a805496f888fc8ae842"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002748.json",
+        "certificate_sha256": "f4bcf57952cf317fb26f0a2a4b941616599a048592746bd96c3a33461c9ad847"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -4986,9 +5362,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00002750.json",
-        "certificate_sha256": "80c0cc51c5674238a50cd0c5ab66f31a25ba14b2bd95efc2f89e8a9db88b7e55"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00002750.json",
+        "certificate_sha256": "b556d7c500b2df5ea26cee9b759bac487fe404e3a04b307b97c52afa742a3186"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5013,9 +5390,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003668.json",
-        "certificate_sha256": "3d7c278aba527f12ef8660d8e676543205fc5b3ed39ff9f53f8eecbbe4575c96"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003668.json",
+        "certificate_sha256": "9336a522eff29037f9e3a27b5371ebf2f518bf9696b0379d4ffd8c6990cbade6"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5040,9 +5418,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000036a0.json",
-        "certificate_sha256": "98538a8483a26ab41a448a8532f9cd355a53467ad1e6af5b4212cdddcaffb444"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000036a0.json",
+        "certificate_sha256": "ddebec69c4f9572aa944f26d1cc2699a539291de15ceff3512c21d18c6d8b837"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5067,9 +5446,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003758.json",
-        "certificate_sha256": "94d169a869e47441f82a5e4342c61f387d7095197eb6a606787f93d79bdd879e"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003758.json",
+        "certificate_sha256": "84c8a1c4aa299c5fc83d0daa9adf8a94c8b4b9920d277aac16f173bedddfc07a"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5094,9 +5474,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003768.json",
-        "certificate_sha256": "fc4f30678eca71edf6091bea0cbbf99d3f3e1ceb1fb824bc4a659990c17359ed"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003768.json",
+        "certificate_sha256": "4774f9a843141307320fb8c526662de8eed99f231c3b57a84b33b31158fa2a57"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5121,9 +5502,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003770.json",
-        "certificate_sha256": "f48e7d2dfa8524fbe9b6645cf3e4e6252eced7a521a304d373dba91a6c4efa49"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003770.json",
+        "certificate_sha256": "bece56fd509a5c420fc69642c6fe0dc51cd6318a9bbd3b0d3bbaf1de606667e6"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5148,9 +5530,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003780.json",
-        "certificate_sha256": "3cde87cf0ace27ab6b27c7e4034924b272fb64255bc5aba239d6982325599103"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003780.json",
+        "certificate_sha256": "4a3d466ac41bc87fae26542147c159698f2933ba29e260f5bf2f08112f900531"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5175,9 +5558,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003790.json",
-        "certificate_sha256": "d47950059b48e08d68134d89b8e86144b7b18773da8eec7abe76599bd93f9f38"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003790.json",
+        "certificate_sha256": "a9210a81d3ca52ab82209f1fee9bb365b09dc19acc7aa916e564e3ebdf801cd0"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5202,9 +5586,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000037e0.json",
-        "certificate_sha256": "698b31d5c1ed3af52d0b83898e128bbbfe78a0205fe85769d899aa298877637a"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000037e0.json",
+        "certificate_sha256": "c55b18265f1c058a5bddcb52f3201aee4f9ff00d9b8e23a006614e155142234c"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5229,9 +5614,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003850.json",
-        "certificate_sha256": "df4bbe60d740ca30de86118875bc8942d67c14139b385ff1f36f6b610d19c181"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003850.json",
+        "certificate_sha256": "57d4d2941957be3a3b16927d831407a64f8be3ae39d19e941532b190e1e51dde"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5256,9 +5642,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000039f0.json",
-        "certificate_sha256": "59694d84c8ab7d6ab7775cd8668ddd49be0fe9aa6de9e4d4f535b6e64187bd69"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000039f0.json",
+        "certificate_sha256": "5862e0cf8ee7bc007b459a0083b90f83449b5b31bc7b43493b47b5b810828d45"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5283,9 +5670,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003a00.json",
-        "certificate_sha256": "2c34a7f0f5f1c226d02bd295c345990878a27f788879791b56d3f1c72ba2a231"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003a00.json",
+        "certificate_sha256": "fa6e62a11a3af2edc4fc7603695def7f83452e617fe65ad04b928b451a7d06d9"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5310,9 +5698,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003a08.json",
-        "certificate_sha256": "fdf53bd9be751086f6d27be9af5419f161001cdcc09d4bdf2e1b99ebb3821eae"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003a08.json",
+        "certificate_sha256": "212fe95582773f29a290b6320b9783c197c999fe48539f3b4fcf19255e103d75"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5337,9 +5726,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003a38.json",
-        "certificate_sha256": "ad6e3cdf50b2b1462735844128b1c26ffe58cb42338a114138a86cb5e5abd029"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003a38.json",
+        "certificate_sha256": "1b9d0e9a0af5d2d9b1db24b9daec83441e7c83bd9063ca8189f22c7469e5609b"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5364,9 +5754,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003a68.json",
-        "certificate_sha256": "8d6663292a533762bb755b5039e6f9fef65de45a7d5bf25a5a6d4e3c3117344e"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003a68.json",
+        "certificate_sha256": "39c2f36eaaa4be78b647b21b07c8d8b2cd8ada4a02f5f00bd7dc2b1600ee6fa0"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5391,9 +5782,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003a70.json",
-        "certificate_sha256": "71d453ebb7664edb563ec0d5c3dac7bb72307171718239ead2f5972b365a6bdf"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003a70.json",
+        "certificate_sha256": "e3aba6b98f6ed4603652a133f6cdce0818db94b09273c532b18232d4c20ff05d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5418,9 +5810,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003aa8.json",
-        "certificate_sha256": "86bdb5ae3bae7dc021c047fbe308e624cbc3d258d7406f79a1e78f48d0af9cf5"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003aa8.json",
+        "certificate_sha256": "dd4bdca0715900118d083e494d5b8a78e0c164ff0d9f31cfb50c6a6b38bcf132"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5445,9 +5838,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003ab0.json",
-        "certificate_sha256": "e1c341407b536534edc9f6577ca7ab74b3d06f1ecc7e8a393ae3bbdb9975dd70"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003ab0.json",
+        "certificate_sha256": "308526a3feb396f5b46ab58b4e16ec2c67f5b21123f2b916f98351d7b58ffcdb"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5472,9 +5866,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003ae8.json",
-        "certificate_sha256": "cd0857bd6828b0edb080cb031def52a3dec3271f9e1e539aa2839ffd204f8b7e"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003ae8.json",
+        "certificate_sha256": "893dde37eb258513eca10c04ba1e6277e42d4321bd2ca183c9483214feed8c05"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5499,9 +5894,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003af0.json",
-        "certificate_sha256": "4f390b1b89d087ccd5ac80b68f5811128a2d62717365a4aa84e7d81bac31fc32"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003af0.json",
+        "certificate_sha256": "9122ec31cb5514ed9de83bd6e418d090155802f52bee305ca2b192882f6e080c"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5526,9 +5922,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003b78.json",
-        "certificate_sha256": "9452511f70ab2746d3d30f7b67280a2c2db7f8f64ce3a30ed2348e3112cabe9a"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003b78.json",
+        "certificate_sha256": "168635291faa1540040511a53133525bc9895f7fbd6fd422b41af976f11eef4d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5553,9 +5950,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003bc0.json",
-        "certificate_sha256": "e2347a89fee4cdc4ef59cda9d37305533ede297076010bccc045f58d2838b262"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003bc0.json",
+        "certificate_sha256": "704597851119bce9e28a5fad49850cf3284f23bd459ebbcd5799c0cf4e08a2a7"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5580,9 +5978,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003bc8.json",
-        "certificate_sha256": "e421a7b7c3bf9909e19d45dc3d368ed2d2df4d10a3caabc595a02b3e1cbd281e"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003bc8.json",
+        "certificate_sha256": "89ef15ce69452f57912a4b486a3b853095dc4b39be15008352288654223976bf"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5607,9 +6006,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003c38.json",
-        "certificate_sha256": "c8bedb15be99279598ede2ad593523e0ba8f255446a16d02e25be87f3f476243"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003c38.json",
+        "certificate_sha256": "adcc96eb99f43ca61bb334a76787a7b4749cba380a2129846443c738fbf6deea"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5634,9 +6034,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003c70.json",
-        "certificate_sha256": "4833c65bdb889db50a99340f97912605b4b6a4cba3feafa0196780c33ba1673f"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003c70.json",
+        "certificate_sha256": "b57fcf39b8bea78df72acba583828d82855eda53c9ed0a32386ea634878cfc78"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5661,9 +6062,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003c90.json",
-        "certificate_sha256": "267642bbed4241b08760e15fa37665d2b77f7105b67328fd485dcb16fc83449c"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003c90.json",
+        "certificate_sha256": "5f64f290b0cb2dee61ab5283ee6d9ceeb53784965c86ab17c503f5e8f29cd604"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5688,9 +6090,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003c98.json",
-        "certificate_sha256": "ea7e4a793bd6f54b62518e5da0c4d28eab57c6c1e8da46518003bba0a10e0904"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003c98.json",
+        "certificate_sha256": "d0fb7baf98bc1fefd085721ff0648e352b6fc9fa0681870496295bec8c7a236d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5715,9 +6118,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003ca0.json",
-        "certificate_sha256": "447dd97355135472f964b93066236f8c2d63a65ecdeafe83c0830777bbb301e0"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003ca0.json",
+        "certificate_sha256": "05d913579fb912e7f10bff449cf9a1149fadd592ca52a37f9fd157c41a0cb5f8"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5742,9 +6146,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003ca8.json",
-        "certificate_sha256": "8b8c6286507f6ba9c3754fb64c36ac473f314c6a4f4c3a2c4618b0c29d483ea6"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003ca8.json",
+        "certificate_sha256": "15d894c89db737a7df2c0911b6cf6340ec283a37322a4be7d6a4971c9495fed8"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5769,9 +6174,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003d90.json",
-        "certificate_sha256": "8ec280ef65893e874d5be89651080b693e30223d1235f4f8df27b2c614268d4c"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00003d90.json",
+        "certificate_sha256": "fa200ef9fc1fbe0d3dd2e8670df8064adc3ddd20ac02d225d183b552d5195bf8"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5796,9 +6202,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000040f8.json",
-        "certificate_sha256": "f64ebc54e4906557f71a7fc8c2b19e3a656fece338d6ca0c88561ab3b7e64f92"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000040f8.json",
+        "certificate_sha256": "107970a58cbce8f08e5c02c06caa7e3eec3678cd56e967c48674c1ee94ed35dd"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5823,9 +6230,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004118.json",
-        "certificate_sha256": "29d9ce4f4ed859f2f21b3dd02a57ec22dece3f5ea1d4483c995544a8841472c0"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004118.json",
+        "certificate_sha256": "5ddfd2e03f3e9c6c083eb0edc11c1f72da8bfe8636f17db798866861cf14aa56"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5850,9 +6258,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004120.json",
-        "certificate_sha256": "1210075f57d75ba910fa2fb55396202d5618213b4a9bf02a1f910ce85bab2623"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004120.json",
+        "certificate_sha256": "4a04122318792245190a647607701346b1a1dfe7d1f9de46e50e2d41ca9598d4"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5877,9 +6286,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000041d8.json",
-        "certificate_sha256": "bd1f05caaccfd9e1599fd2ed5109c521e93d7b0fe25d1ee699289af06b8b0714"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000041d8.json",
+        "certificate_sha256": "2ce61265e98438e1ff984f9557349ff092ac66dc2b0d9ded053824d92fe2658d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5904,9 +6314,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004270.json",
-        "certificate_sha256": "26a1d42f32f10e717f1e1e53f1b874875a89849a194925a041384fce6e7f1c55"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004270.json",
+        "certificate_sha256": "eac6d58376857510acdab3b8d1cfd1b23f4fbeaede6ede65ebf1081f1b644acb"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5931,9 +6342,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004280.json",
-        "certificate_sha256": "d845498814290d67d6bca7c7f8ea73df084052fbb97a9c0bad1d90746fcc1e42"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004280.json",
+        "certificate_sha256": "c136b38711dfe69c05b536264d3b591ecd58adc2b588ac51d64335d3be2388ea"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5958,9 +6370,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004298.json",
-        "certificate_sha256": "a1831255fd528de96ee6885faf9ff621decfe2ae327dbd1ec4b5d4250dd5222f"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004298.json",
+        "certificate_sha256": "fbeaab7117ecac955fd87593e610c80861189b81d4c13c26800b28c3aadc2723"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -5985,9 +6398,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000042a0.json",
-        "certificate_sha256": "85c06f985aef6b600f07a85a487639ad4d5f26f25295ff5a833a3045e8bd6f89"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000042a0.json",
+        "certificate_sha256": "3f5dc731259f908611bf3fdd1119b543cfbc24374ccaabaa7c5c4fe68703e37d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6012,9 +6426,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000042a8.json",
-        "certificate_sha256": "79c9fe604bd504530ece79b2b37377ebe7b0eef4259f4a2d55e11044cb439c81"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000042a8.json",
+        "certificate_sha256": "c6eafe850126593134c93eb0f2f027f9e5fe8a7a07fe3e2c8db7b576c0e2911a"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6039,9 +6454,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000042c8.json",
-        "certificate_sha256": "08d4fdbb7eaa08672d18217c6d89565a8194d314f340713661daa7234834aaf0"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000042c8.json",
+        "certificate_sha256": "2d1c879ff0af424c3b98bf5cee95f17de37c1812730d28e53fa931d17ae60adc"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6066,9 +6482,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000042e0.json",
-        "certificate_sha256": "f19a699ff1e09127d8828fa2e598ac1ff58dda34b19846cb619b0005f158b233"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000042e0.json",
+        "certificate_sha256": "c583c55492fbcb8d162443df8ac8fe774e1ad49f3d2343a25821ff213bb7c931"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6093,9 +6510,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000042f0.json",
-        "certificate_sha256": "f55afd799e7e1074d313b767a4f014e00528e30cfae4e772bcba78748575083d"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000042f0.json",
+        "certificate_sha256": "a1ad6e1a6a2f8eee9347db069ce7eec40eca496df2b88328cd5c1d2c30c88f40"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6120,9 +6538,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004300.json",
-        "certificate_sha256": "94d3a47870d8ef9c9add8f432f1eaa70cb5d4d0a32c6c49fb2cd90a7f80c444a"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004300.json",
+        "certificate_sha256": "d48a0381ea9392ff8a529fd7be28ca8535da5eec7e183f1437c7be97d7a14fc3"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6147,9 +6566,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004310.json",
-        "certificate_sha256": "fba04adb383d662e1d47a9ffd066e3664a86290ae9332fe4dcb96004b57fe108"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004310.json",
+        "certificate_sha256": "5c5eaf367673c5d3e8f653de33d5ec98a1679f1e74f9411ab3631b6c128eb685"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6174,9 +6594,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004340.json",
-        "certificate_sha256": "75e0baabbb77def5b0e18eff23365c24e000185c0459321d6f92a93cac933e26"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004340.json",
+        "certificate_sha256": "58268478b690fd53ba4c75df5dca4fab136471f6127c48ac7208a692819cfc84"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6201,9 +6622,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004350.json",
-        "certificate_sha256": "16fd3e320376ea203521e40191dc025d70d3c1ef5b50c360894a7d3432a4ee2a"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004350.json",
+        "certificate_sha256": "2210c24384b390911aa871b96f87e5676ee3fcec21875cae50ae63e62143fe2d"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6228,9 +6650,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004358.json",
-        "certificate_sha256": "048aedb6a6f9617d8cda2945bd7b0d4aa5c2c735f22b72a1f9e8287e586a87d9"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004358.json",
+        "certificate_sha256": "db8530fbcd424304ecf9f980eabdb83b38a0293132e214ee0ab5d490cd9804f8"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6255,9 +6678,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000048e8.json",
-        "certificate_sha256": "dda137f544c2fcfe3a0158ecf7e581932d402fd241dcb3375c9a82261d4b9f8d"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000048e8.json",
+        "certificate_sha256": "f37f72d125f023a71d7746dc469a71c3a21053f11a635601d71d2e94ce540d8e"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6282,9 +6706,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000048f0.json",
-        "certificate_sha256": "08ba2e02b21ba5d9235532dd2671ab7ed9ffeacb72522a73e93f2b045668106b"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000048f0.json",
+        "certificate_sha256": "734a4a20b40e6f3aa9823476d4940c6e9b82f164cfc1443248ad9bd2c6d57043"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6309,9 +6734,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000048f8.json",
-        "certificate_sha256": "f7a9b8a9dbbbdaf222fb51c8197cd36093be54a18896e59d0a478545c8b8e58d"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000048f8.json",
+        "certificate_sha256": "f4a986ddff784a5d03741e4a9e165046b0a008c7531dbe08847ac95486939189"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6336,9 +6762,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004908.json",
-        "certificate_sha256": "cd2939578d843fa52f38c342ffe0b66d92cb44f72a5879ee880570b0fff76784"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004908.json",
+        "certificate_sha256": "85beb2f5557b5fa71981344e8b9f624eff214cce65a3eb3e19c0aec62a2a62ce"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6363,9 +6790,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004990.json",
-        "certificate_sha256": "64157d4c77fa7d5dd4b37a12c05cf3d4994f9053dfbe16bd2d3a927bb1a6ca84"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004990.json",
+        "certificate_sha256": "9e14c63310594a1e16155c381ad7cf448d422e4269ed55fc59fedbaa7f9718b2"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6390,9 +6818,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000049a0.json",
-        "certificate_sha256": "8f86b935995bd945e215096376ec3a596acaf6c742dfa65041bf93d411ca6336"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000049a0.json",
+        "certificate_sha256": "208accef01ce3f13dad2adcb8f60716f38b1049eb1ba22621218a94fef59726f"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6417,9 +6846,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000049b0.json",
-        "certificate_sha256": "535fde0aac07fc559e557a34a935d3e3c22fb15998d0cf7ebea1888e480137f0"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000049b0.json",
+        "certificate_sha256": "af95b939c9c4c102d6006dba6b1b3e30f6a05c973c1ad904fc9471819586040a"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6444,9 +6874,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000049c0.json",
-        "certificate_sha256": "09b542566267c71c3ffc699c527848960b50a4dd4e3ffea8a2d113faf1b7f40e"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-000049c0.json",
+        "certificate_sha256": "b30527bd81a570d4d07a3c3a1c02e88a4cc4a5fedc2b3a14d3874a7dd95fe2ff"
+      },
+      "kind": "import_stub"
     },
     {
       "module": "libtutoriallist.prx",
@@ -6471,9 +6902,10 @@
         "data_reference_count": 0,
         "section": ".sceStub.text",
         "candidate_section": ".text",
-        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004a00.json",
-        "certificate_sha256": "1dc2546aa2bd6976097874d1a04bb0a22cf42df644b0a7d533e07847775dc549"
-      }
+        "certificate_path": "decomp/evidence/internal/libtutoriallist-prx-00004a00.json",
+        "certificate_sha256": "b59f98322ca5f1eaa47f05a15b106aed96c5f50d0a2a905ca478226893c90bcb"
+      },
+      "kind": "import_stub"
     }
   ]
 }

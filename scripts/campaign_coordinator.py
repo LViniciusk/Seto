@@ -44,6 +44,7 @@ class ContinuousCampaignCoordinator:
         segments: list[dict[str, Any]] = []
         discoveries: list[dict[str, Any]] = []
         stop_reason = "discovery_exhausted"
+        segment_external_work_remains = False
 
         while self.monotonic() < deadline:
             current_attempts = self.attempts_used()
@@ -58,6 +59,9 @@ class ContinuousCampaignCoordinator:
             # no second runner or SQLite connection owner is started here.
             segment = dict(self.run_segment(deadline, self.max_tasks))
             segments.append(segment)
+            segment_external_work_remains = bool(
+                segment.get("external_work_remains")
+            )
             if self.stop_requested():
                 stop_reason = "stop_requested"
                 break
@@ -101,7 +105,9 @@ class ContinuousCampaignCoordinator:
                 stop_reason = "deadline"
             else:
                 stop_reason = (
-                    "discovery_exhausted"
+                    "external_work_remains"
+                    if segment_external_work_remains
+                    else "discovery_exhausted"
                     if all(
                         result.get("eligible_work") or result.get("exhausted_reason")
                         for result in discoveries
