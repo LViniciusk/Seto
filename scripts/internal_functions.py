@@ -12,7 +12,8 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -45,6 +46,7 @@ class InternalFunction:
     evidence_path: str
     kind: str = "code"
     section: str = ".text"
+    priority: int = 0
 
 
 @dataclass(frozen=True)
@@ -484,7 +486,11 @@ def select_internal_discoveries(
             )
         )
     selected.sort(key=lambda item: item[0])
-    return tuple(function for _, function in selected[:limit])
+    ranked = selected[:limit]
+    return tuple(
+        replace(function, priority=len(ranked) - index)
+        for index, (_, function) in enumerate(ranked)
+    )
 
 
 def load_internal_catalog(path: Path) -> tuple[InternalFunction, ...]:
@@ -785,11 +791,28 @@ def write_internal_certificate(
         if not path.is_file() or path.read_text(encoding="utf-8") != content:
             raise ValueError("refusing to overwrite a different internal certificate")
     else:
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        if temporary.exists() or temporary.is_symlink():
+            raise ValueError("internal certificate temporary path already exists")
         try:
-            with path.open("x", encoding="utf-8", newline="\n") as stream:
-                stream.write(content)
-        except FileExistsError as exc:
-            raise ValueError("internal certificate appeared during persistence") from exc
+            with temporary.open("xb") as stream:
+                payload = content.encode("utf-8")
+                stream.write(payload)
+                stream.flush()
+                import os
+
+                os.fsync(stream.fileno())
+            if hashlib.sha256(temporary.read_bytes()).hexdigest() != hashlib.sha256(payload).hexdigest():
+                raise ValueError("internal certificate temporary failed its digest check")
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                if not path.is_file() or path.read_text(encoding="utf-8") != content:
+                    raise ValueError("refusing to overwrite a different internal certificate")
+        except OSError as exc:
+            raise ValueError("could not atomically create internal certificate") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 

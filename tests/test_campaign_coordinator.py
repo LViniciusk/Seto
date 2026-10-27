@@ -5,7 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from campaign_coordinator import ContinuousCampaignCoordinator, DiscoveryResult
+from campaign_coordinator import (
+    ContinuousCampaignCoordinator,
+    DiscoveryResult,
+    run_fair_segments,
+)
 
 
 class FakeClock:
@@ -178,3 +182,66 @@ def test_queued_work_without_new_discovery_reports_external_work_remains() -> No
     assert runs == 2
     assert discoveries == 2
     assert result["stop_reason"] == "external_work_remains"
+
+
+def test_fair_segments_alternate_when_both_queues_remain_busy() -> None:
+    attempts = 0
+    calls: list[str] = []
+    deadline = 150.0
+
+    def segment(lane: str):
+        def run(received_deadline: float, ceiling: int, attempt_limit: int):
+            nonlocal attempts
+            assert received_deadline == deadline
+            assert ceiling == 6
+            assert attempt_limit == 1
+            calls.append(lane)
+            attempts += 1
+            return {
+                "attempted": 1,
+                "outcomes": {"matched": 1},
+                "external_work_remains": True,
+            }
+
+        return run
+
+    result = run_fair_segments(
+        run_exports=segment("exports"),
+        run_internal=segment("internal"),
+        attempts_used=lambda: attempts,
+        stop_requested=lambda: False,
+        deadline=deadline,
+        max_tasks=6,
+        monotonic=lambda: 100.0,
+    )
+
+    assert len(calls) == 6
+    assert calls[:2] == ["exports", "internal"]
+    assert calls[2:4] == ["internal", "exports"]
+    assert calls.count("exports") == calls.count("internal") == 3
+    assert result["attempted"] == result["attempts_cumulative"] == 6
+    assert result["stop_reason"] == "attempt_ceiling"
+
+
+def test_attempt_ceiling_allows_one_zero_attempt_internal_recovery_pass() -> None:
+    calls = 0
+
+    def run_segment(_deadline: float, ceiling: int) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        assert ceiling == 3
+        return {"attempted": 0, "internal_reconciled": 1}
+
+    result = ContinuousCampaignCoordinator(
+        run_segment=run_segment,
+        discovery_steps=[],
+        attempts_used=lambda: 3,
+        stop_requested=lambda: False,
+        max_tasks=3,
+        duration_seconds=30,
+        monotonic=FakeClock(),
+    ).run()
+
+    assert calls == 1
+    assert result["segments"][0]["internal_reconciled"] == 1
+    assert result["stop_reason"] == "attempt_ceiling"

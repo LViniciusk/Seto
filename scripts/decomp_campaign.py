@@ -33,7 +33,11 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
-from campaign_coordinator import ContinuousCampaignCoordinator, DiscoveryResult
+from campaign_coordinator import (
+    ContinuousCampaignCoordinator,
+    DiscoveryResult,
+    run_fair_segments,
+)
 from decomp_ssh import (
     MAX_PROMPT_BYTES,
     MAX_RESPONSE_BYTES,
@@ -558,6 +562,10 @@ def _sanitize_checkpoint(
             "last_diagnostic",
             "last_diagnostic_detail",
             "recovery_reason",
+            "last_local_match_source_sha256",
+            "promotion_pending",
+            "promotion_recovery",
+            "recovery_state",
         }
     result: dict[str, Any] = {}
     for key in allowed:
@@ -570,6 +578,7 @@ def _sanitize_checkpoint(
             "source_sha256",
             "best_source_sha256",
             "ghidra_log_sha256",
+            "last_local_match_source_sha256",
         }:
             if HEX_SHA256.fullmatch(str(value)):
                 result[key] = str(value)
@@ -579,6 +588,70 @@ def _sanitize_checkpoint(
                 value.replace("\\", "/"),
             ):
                 result[key] = value
+        elif key == "promotion_pending" and isinstance(value, bool):
+            result[key] = value
+        elif key == "promotion_recovery" and isinstance(value, dict):
+            address = value.get("address")
+            size_bytes = value.get("size_bytes")
+            source_hash = value.get("source_sha256")
+            builds = value.get("build_sha256")
+            reports = value.get("report_files")
+            valid_reports = isinstance(reports, list) and len(reports) == 2
+            sanitized_reports = []
+            if valid_reports:
+                for item in reports:
+                    if not isinstance(item, dict):
+                        valid_reports = False
+                        break
+                    path = item.get("path")
+                    digest = item.get("sha256")
+                    if (
+                        not isinstance(path, str)
+                        or not re.fullmatch(
+                            r"build/seto049/internal-audit/eboot/[0-9a-f]{1,8}/"
+                            r"[0-9a-f]{64}/attempt-[1-9][0-9]*/journal-[0-9a-f]{32}/"
+                            r"verify-[12]\.json",
+                            path,
+                        )
+                        or not isinstance(digest, str)
+                        or not HEX_SHA256.fullmatch(digest)
+                    ):
+                        valid_reports = False
+                        break
+                    sanitized_reports.append({"path": path, "sha256": digest})
+            if (
+                value.get("version") == 1
+                and value.get("module") == "EBOOT"
+                and isinstance(address, str)
+                and re.fullmatch(r"0x[0-9a-f]{1,8}", address)
+                and isinstance(size_bytes, int)
+                and not isinstance(size_bytes, bool)
+                and size_bytes > 0
+                and size_bytes % 4 == 0
+                and value.get("section") == ".text"
+                and isinstance(source_hash, str)
+                and HEX_SHA256.fullmatch(source_hash)
+                and isinstance(builds, list)
+                and len(builds) == 2
+                and builds[0] == builds[1]
+                and all(isinstance(item, str) and HEX_SHA256.fullmatch(item) for item in builds)
+                and valid_reports
+            ):
+                result[key] = {
+                    "version": 1,
+                    "module": "EBOOT",
+                    "address": address,
+                    "size_bytes": size_bytes,
+                    "section": ".text",
+                    "source_path": f"decomp/src/eboot/func_{int(address, 0):08X}.c",
+                    "source_sha256": source_hash,
+                    "build_sha256": list(builds),
+                    "worker_id": _safe_text(value.get("worker_id", ""), 64),
+                    "attempt_number": max(1, int(value.get("attempt_number", 1))),
+                    "report_files": sanitized_reports,
+                }
+        elif key == "recovery_state" and value in {"source_pending", "promotion_pending"}:
+            result[key] = value
         elif key == "limitations" and isinstance(value, list):
             result[key] = [_safe_text(item, 1000) for item in value[:40]]
         elif key == "evidence_paths" and isinstance(value, list):
@@ -904,6 +977,7 @@ class CampaignStore:
                     size_bytes INTEGER NOT NULL DEFAULT 0,
                     boundary_status TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
                     owner TEXT,
                     provider TEXT,
                     session_id TEXT,
@@ -945,6 +1019,18 @@ class CampaignStore:
                 );
                 INSERT OR IGNORE INTO metadata(key, value) VALUES ('stop_requested', '0');
                 """
+            )
+            internal_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(internal_candidates)")
+            }
+            if "priority" not in internal_columns:
+                db.execute(
+                    "ALTER TABLE internal_candidates ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
+                )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS internal_candidates_claim_order "
+                "ON internal_candidates(status,available_at,priority DESC,attempt_count,module,address)"
             )
 
     def seed(
@@ -3580,6 +3666,15 @@ def _extract_checkpoint(output: str) -> dict[str, Any]:
     raise ValueError("OpenCode did not return the required JSON checkpoint")
 
 
+def _matcher_attempt_label(claim: Claim | InternalClaim) -> str:
+    if not getattr(claim, "is_internal", False):
+        return f"attempt-{claim.attempt_number}"
+    run_id = claim.checkpoint.get("matcher_run_id")
+    if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise ValueError("internal matcher run id is missing or malformed")
+    return f"attempt-{claim.attempt_number}-internal-{run_id}"
+
+
 def _prompt(
     claim: Claim,
     checkpoint: dict[str, Any],
@@ -5030,10 +5125,11 @@ class CampaignRunner:
         reports: list[dict[str, Any]] = []
         if not verification_numbers or any(number not in {1, 2} for number in verification_numbers):
             raise ValueError("matcher verification numbers must be selected from 1 and 2")
+        attempt_label = _matcher_attempt_label(claim)
         for number in verification_numbers:
             relative_out = (
                 f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
-                f"/attempt-{claim.attempt_number}/verify-{number}"
+                f"/{attempt_label}/verify-{number}"
             )
             out = campaign_build_path(
                 worktree, relative_out
@@ -5103,10 +5199,11 @@ class CampaignRunner:
         reports: list[dict[str, Any]] = []
         if not verification_numbers or any(number not in {1, 2} for number in verification_numbers):
             raise ValueError("matcher verification numbers must be selected from 1 and 2")
+        attempt_label = _matcher_attempt_label(claim)
         for number in verification_numbers:
             relative_out = (
                 f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
-                f"/attempt-{claim.attempt_number}/verify-{number}"
+                f"/{attempt_label}/verify-{number}"
             )
             out = campaign_build_path(worktree, relative_out)
             out.mkdir(parents=True, exist_ok=True)
@@ -5848,9 +5945,18 @@ class CampaignRunner:
         *,
         max_tasks: int,
         deadline: float | None = None,
+        max_attempts_this_segment: int | None = None,
+        max_boundary_tasks_this_segment: int | None = None,
+        max_idle_wait_seconds: float | None = None,
     ) -> dict[str, Any]:
         if max_tasks <= 0:
             raise ValueError("max_tasks must be positive")
+        if max_attempts_this_segment is not None and max_attempts_this_segment <= 0:
+            raise ValueError("segment attempt limit must be positive")
+        if max_boundary_tasks_this_segment is not None and max_boundary_tasks_this_segment <= 0:
+            raise ValueError("segment Ghidra boundary limit must be positive")
+        if max_idle_wait_seconds is not None and max_idle_wait_seconds <= 0:
+            raise ValueError("segment idle wait limit must be positive")
         if len({worker.worker_id for worker in workers}) != len(workers):
             raise ValueError("worker identifiers must be unique")
         if not workers:
@@ -5883,6 +5989,11 @@ class CampaignRunner:
             deadline = segment_deadline
         elif segment_deadline is not None:
             deadline = min(deadline, segment_deadline)
+        idle_deadline = (
+            None
+            if max_idle_wait_seconds is None
+            else time.monotonic() + max_idle_wait_seconds
+        )
         outcomes: list[str] = []
         condition = threading.Condition()
         boundary_claim_lock = threading.Lock()
@@ -5894,6 +6005,7 @@ class CampaignRunner:
         boundary_active = 0
         boundary_threads_remaining = 1
         boundary_outcomes: list[str] = []
+        boundary_claimed = 0
         promotions: list[str] = []
         promotion_failures: list[str] = []
         promotion_results_lock = threading.Lock()
@@ -5933,6 +6045,7 @@ class CampaignRunner:
 
         def boundary_coordinator() -> None:
             nonlocal boundary_active, boundary_threads_remaining, completion_generation
+            nonlocal boundary_claimed
             available_workers = [
                 worker.worker_id
                 for worker in workers[: min(self.ghidra_parallelism, len(workers))]
@@ -5947,11 +6060,19 @@ class CampaignRunner:
                         while available_workers and not stop_or_expired():
                             worker_id = available_workers[-1]
                             with boundary_claim_lock:
-                                claim = self.store.claim_boundary(
-                                    worker_id,
-                                    lease_seconds=self.lease_seconds,
-                                    excluded_addresses=self.excluded_addresses,
-                                )
+                                if (
+                                    max_boundary_tasks_this_segment is not None
+                                    and boundary_claimed >= max_boundary_tasks_this_segment
+                                ):
+                                    claim = None
+                                else:
+                                    claim = self.store.claim_boundary(
+                                        worker_id,
+                                        lease_seconds=self.lease_seconds,
+                                        excluded_addresses=self.excluded_addresses,
+                                    )
+                                    if claim is not None:
+                                        boundary_claimed += 1
                             if claim is None:
                                 break
                             available_workers.pop()
@@ -5995,6 +6116,11 @@ class CampaignRunner:
                     while True:
                         if stop_or_expired() or self.store.total_attempt_count() >= max_tasks:
                             return
+                        if (
+                            max_attempts_this_segment is not None
+                            and attempts_started >= max_attempts_this_segment
+                        ):
+                            return
                         if not self._provider_gate_open(worker):
                             has_campaign_work = bool(
                                 attempts_active
@@ -6017,11 +6143,19 @@ class CampaignRunner:
                                 if next_eligible is None:
                                     return
                             remaining = float(self.luna_release_at) - self.clock()
+                            if idle_deadline is not None:
+                                idle_remaining = idle_deadline - time.monotonic()
+                                if idle_remaining <= 0:
+                                    return
+                                remaining = min(remaining, idle_remaining)
                             # Bounded, event-driven wait: stop/deadline and the
                             # operator clock are re-checked without busy-looping.
                             condition.wait(timeout=min(max(remaining, 0.05), 0.5))
                             continue
-                        if attempts_started + attempts_claiming + attempts_preparing < max_tasks:
+                        segment_ceiling = max_tasks
+                        if max_attempts_this_segment is not None:
+                            segment_ceiling = min(segment_ceiling, max_attempts_this_segment)
+                        if attempts_started + attempts_claiming + attempts_preparing < segment_ceiling:
                             attempts_claiming += 1
                             break
                         condition.wait(timeout=0.5)
@@ -6083,6 +6217,11 @@ class CampaignRunner:
                         delay = max(0.0, next_eligible - time.time())
                         if deadline is not None:
                             delay = min(delay, max(0.0, deadline - time.monotonic()))
+                        if idle_deadline is not None:
+                            idle_remaining = idle_deadline - time.monotonic()
+                            if idle_remaining <= 0:
+                                return
+                            delay = min(delay, idle_remaining)
                         if delay <= 0:
                             continue
                         # Backoff waits are event-driven and bounded so stop/deadline
@@ -10578,44 +10717,55 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
                 def run_segment(global_deadline: float, cumulative_ceiling: int) -> dict[str, Any]:
-                    export_segment = runner.run(
-                        workers,
-                        max_tasks=cumulative_ceiling,
-                        deadline=global_deadline,
-                    )
-                    internal_segment = internal_runner.run_segment(
-                        [
-                            (worker.worker_id, worker.execution_scope, worker.provider)
-                            for worker in workers
-                        ],
-                        max_total_attempts=cumulative_ceiling,
-                        deadline=global_deadline,
-                    )
-                    with store._connect() as db:
-                        export_work_remains = bool(
-                            db.execute(
-                                "SELECT 1 FROM candidates WHERE status IN "
-                                "('pending','needs_boundary','boundary_checking','preparing','running') LIMIT 1"
-                            ).fetchone()
+                    def export_work_remains() -> bool:
+                        with store._connect() as db:
+                            return bool(
+                                db.execute(
+                                    "SELECT 1 FROM candidates WHERE status IN "
+                                    "('pending','needs_boundary','boundary_checking','preparing','running') LIMIT 1"
+                                ).fetchone()
+                            )
+
+                    def run_export_slice(
+                        deadline: float, ceiling: int, attempt_limit: int
+                    ) -> Mapping[str, Any]:
+                        segment = runner.run(
+                            workers,
+                            max_tasks=ceiling,
+                            deadline=deadline,
+                            max_attempts_this_segment=attempt_limit,
+                            max_boundary_tasks_this_segment=1,
+                            max_idle_wait_seconds=5.0,
                         )
-                    combined_outcomes = dict(export_segment.get("outcomes", {}))
-                    for status, count in internal_segment.get("outcomes", {}).items():
-                        combined_outcomes[f"internal_{status}"] = count
-                    return {
-                        **export_segment,
-                        "attempted": int(export_segment.get("attempted", 0))
-                        + int(internal_segment.get("attempted", 0)),
-                        "outcomes": combined_outcomes,
-                        "internal_attempted": int(internal_segment.get("attempted", 0)),
-                        "internal_outcomes": internal_segment.get("outcomes", {}),
-                        "internal_boundary_outcomes": internal_segment.get("boundary_outcomes", {}),
-                        "internal_stages": internal_segment.get("stages", {}),
-                        "internal_external_work_remains": internal_segment.get(
-                            "external_work_remains", False
-                        ),
-                        "external_work_remains": export_work_remains
-                        or bool(internal_segment.get("external_work_remains", False)),
-                    }
+                        return {
+                            **segment,
+                            "external_work_remains": export_work_remains(),
+                        }
+
+                    def run_internal_slice(
+                        deadline: float, ceiling: int, attempt_limit: int
+                    ) -> Mapping[str, Any]:
+                        return internal_runner.run_segment(
+                            [
+                                (worker.worker_id, worker.execution_scope, worker.provider)
+                                for worker in workers
+                            ],
+                            max_total_attempts=ceiling,
+                            deadline=deadline,
+                            max_attempts_this_segment=attempt_limit,
+                            max_boundary_tasks_this_segment=1,
+                        )
+
+                    return run_fair_segments(
+                        run_exports=run_export_slice,
+                        run_internal=run_internal_slice,
+                        attempts_used=store.total_attempt_count,
+                        stop_requested=store.stop_requested,
+                        deadline=global_deadline,
+                        max_tasks=cumulative_ceiling,
+                        attempts_per_turn=1,
+                        exports_work_remains=export_work_remains,
+                    )
 
                 def discover_eboot_exports(global_deadline: float) -> DiscoveryResult:
                     nonlocal candidates, inventory

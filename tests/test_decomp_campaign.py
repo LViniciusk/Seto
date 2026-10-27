@@ -145,8 +145,11 @@ def test_internal_discovery_to_certificate_end_to_end_without_nid(
     runner._provider_gate_open = lambda _worker: True  # type: ignore[method-assign]
     runner._ensure_session = ensure_session  # type: ignore[method-assign]
     runner._argv = lambda _worker, _claim, _prompt: ["synthetic-worker"]  # type: ignore[method-assign]
+    worker_calls = 0
 
     def simulated_worker(_argv: object, *, cwd: Path, **_kwargs: object):
+        nonlocal worker_calls
+        worker_calls += 1
         source = cwd / "decomp/src/eboot/func_00001000.c"
         source.write_text("int func_00001000(void) { return 7; }\n", encoding="utf-8")
         return decomp_campaign_module.WorkResult(
@@ -239,6 +242,93 @@ def test_internal_discovery_to_certificate_end_to_end_without_nid(
         check_export_overlaps=False,
     ) == ()
 
+    # Simulate a crash after source/report checkpointing, with one of the two
+    # journaled reports still present. Recovery rematches locally, reuses the
+    # identical report, and must not start another provider attempt.
+    certificate_path = tmp_path / function["result"]["certificate_path"]
+    certificate_path.unlink()
+    with campaign_store._connect() as db:
+        row = db.execute(
+            "SELECT checkpoint_json FROM internal_candidates WHERE module='EBOOT' AND address='0x1000'"
+        ).fetchone()
+    journal = json.loads(row["checkpoint_json"])
+    promotion = journal.pop("promotion_recovery")
+    journal.pop("promotion_pending", None)
+    second_report = tmp_path / promotion["report_files"][1]["path"]
+    second_report.unlink()
+    catalog_path.write_text(json.dumps({"schema_version": 2, "functions": []}), encoding="utf-8")
+    with campaign_store._connect() as db:
+        db.execute(
+            """UPDATE internal_candidates SET status='source_pending',owner=NULL,provider=NULL,
+               lease_until=NULL,checkpoint_json=? WHERE module='EBOOT' AND address='0x1000'""",
+            (json.dumps(journal, sort_keys=True),),
+        )
+    recovered_source = internal_runner.run_segment(
+        [(worker.worker_id, worker.execution_scope, worker.provider)],
+        max_total_attempts=1,
+        max_attempts_this_segment=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert recovered_source["attempted"] == 0
+    assert worker_calls == 1
+    assert campaign_store.total_attempt_count() == 1
+    assert json.loads(catalog_path.read_text(encoding="utf-8"))["functions"][0]["result"]["status"] == "MATCHED"
+
+    # Simulate an interruption after the durable matcher journal but before the
+    # certificate write. Recovery rebuilds the certificate without a worker.
+    certificate_path.unlink()
+    catalog_path.write_text(json.dumps({"schema_version": 2, "functions": []}), encoding="utf-8")
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET status='promotion_pending',owner=NULL,provider=NULL,"
+            "lease_until=NULL WHERE module='EBOOT' AND address='0x1000'"
+        )
+    recovered_journal = internal_runner.run_segment(
+        [(worker.worker_id, worker.execution_scope, worker.provider)],
+        max_total_attempts=1,
+        max_attempts_this_segment=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert recovered_journal["attempted"] == 0
+    assert worker_calls == 1
+    assert campaign_store.total_attempt_count() == 1
+    assert len(json.loads(catalog_path.read_text(encoding="utf-8"))["functions"]) == 1
+
+    # Simulate a crash after atomic catalog replacement but before SQLite task
+    # completion. The valid catalog/certificate is reconciled without inference.
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET status='promotion_pending',owner=NULL,provider=NULL,"
+            "lease_until=NULL WHERE module='EBOOT' AND address='0x1000'"
+        )
+    recovered_catalog = internal_runner.run_segment(
+        [(worker.worker_id, worker.execution_scope, worker.provider)],
+        max_total_attempts=1,
+        max_attempts_this_segment=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert recovered_catalog["attempted"] == 0
+    assert worker_calls == 1
+    assert campaign_store.total_attempt_count() == 1
+
+    # Simulate a crash after certificate write but before catalog replacement.
+    catalog_path.write_text(json.dumps({"schema_version": 2, "functions": []}), encoding="utf-8")
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET status='promotion_pending',owner=NULL,provider=NULL,"
+            "lease_until=NULL WHERE module='EBOOT' AND address='0x1000'"
+        )
+    recovered_certificate = internal_runner.run_segment(
+        [(worker.worker_id, worker.execution_scope, worker.provider)],
+        max_total_attempts=1,
+        max_attempts_this_segment=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert recovered_certificate["attempted"] == 0
+    assert worker_calls == 1
+    assert campaign_store.total_attempt_count() == 1
+    assert len(json.loads(catalog_path.read_text(encoding="utf-8"))["functions"]) == 1
+
 
 def test_internal_boundary_failures_are_bounded_and_never_start_worker(tmp_path: Path) -> None:
     import time
@@ -295,7 +385,6 @@ def test_internal_tasks_share_export_attempt_ceiling_and_recover_stale_leases(
     )
     assert export_claim is not None
     assert campaign_store.total_attempt_count() == 1
-
     internal_store = InternalCampaignStore(campaign_store)
     hint = InternalFunction("EBOOT", 0x4000, 0, "UNVERIFIED", "build/manifest.json")
     assert internal_store.seed([hint]) == 1
@@ -322,6 +411,183 @@ def test_internal_tasks_share_export_attempt_ceiling_and_recover_stale_leases(
         max_attempts_per_candidate=2,
     ) is None
     assert campaign_store.total_attempt_count() == 1
+
+
+def test_internal_queue_persists_rank_priority_across_database_reopen(tmp_path: Path) -> None:
+    database = tmp_path / "campaign.sqlite3"
+    first_store = CampaignStore(database)
+    first_internal = InternalCampaignStore(first_store)
+    first_internal.seed(
+        [
+            InternalFunction(
+                "EBOOT", 0x5000, 8, "UNVERIFIED", "build/manifest.json", priority=2
+            ),
+            InternalFunction(
+                "EBOOT", 0x4000, 8, "UNVERIFIED", "build/manifest.json", priority=9
+            ),
+        ]
+    )
+    with first_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET boundary_status='EXACT',status='pending',size_bytes=8"
+        )
+
+    reopened_store = CampaignStore(database)
+    reopened_internal = InternalCampaignStore(reopened_store)
+    claim = reopened_internal.claim_next(
+        "worker",
+        "openai",
+        model_provider="openai",
+        lease_seconds=60,
+        max_total_attempts=10,
+        max_attempts_per_candidate=3,
+    )
+    assert claim is not None
+    assert claim.address == "0x4000"
+    assert claim.priority == 9
+    with reopened_store._connect() as db:
+        stored = db.execute(
+            "SELECT priority FROM internal_candidates WHERE address='0x5000'"
+        ).fetchone()
+    assert stored["priority"] == 2
+
+
+def test_internal_worker_failure_releases_task_for_another_worker_without_attempt(
+    tmp_path: Path,
+) -> None:
+    from internal_campaign import InternalCampaignRunner, InternalWorkerUnavailable
+
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [InternalFunction("EBOOT", 0x6000, 0, "UNVERIFIED", "build/manifest.json")]
+    )
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET boundary_status='EXACT',status='pending',size_bytes=8"
+        )
+    worker_calls: list[str] = []
+
+    def worker(claim: InternalClaim, start_attempt, _deadline):
+        worker_calls.append(claim.worker_id)
+        if claim.worker_id == "unavailable":
+            raise InternalWorkerUnavailable("synthetic session failure")
+        start_attempt(claim)
+        return {"status": "SOURCE_READY", "source_sha256": "a" * 64}
+
+    campaign = InternalCampaignRunner(
+        internal_store,
+        boundary=lambda *_args: pytest.fail("an EXACT queued task needs no boundary retry"),
+        worker=worker,
+        matcher=lambda *_args: {"status": "NONMATCHING"},
+        certifier=lambda *_args: pytest.fail("NONMATCHING must never be certified"),
+        lease_seconds=60,
+        max_attempts_per_candidate=3,
+    )
+    outcome = campaign.run_segment(
+        [("unavailable", "provider-a", "provider-a"), ("available", "provider-b", "provider-b")],
+        max_total_attempts=3,
+        deadline=time.monotonic() + 5,
+    )
+    assert worker_calls == ["unavailable", "available"]
+    assert outcome["attempted"] == 1
+    assert campaign_store.total_attempt_count() == 1
+    with campaign_store._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM internal_attempts").fetchone()[0] == 1
+
+
+def test_internal_queue_adds_priority_column_to_existing_sqlite_schema(tmp_path: Path) -> None:
+    import sqlite3
+
+    database = tmp_path / "campaign.sqlite3"
+    with sqlite3.connect(database) as db:
+        db.execute(
+            """CREATE TABLE internal_candidates (
+                module TEXT NOT NULL,address TEXT NOT NULL,section TEXT NOT NULL,kind TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,boundary_status TEXT NOT NULL,status TEXT NOT NULL,
+                owner TEXT,provider TEXT,session_id TEXT,lease_until REAL,available_at REAL NOT NULL DEFAULT 0,
+                attempt_count INTEGER NOT NULL DEFAULT 0,boundary_attempts INTEGER NOT NULL DEFAULT 0,
+                checkpoint_json TEXT NOT NULL DEFAULT '{}',evidence_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',updated_at REAL NOT NULL,PRIMARY KEY(module,address)
+            )"""
+        )
+        db.execute(
+            "INSERT INTO internal_candidates(module,address,section,kind,boundary_status,status,updated_at) "
+            "VALUES ('EBOOT','0x7000','.text','code','UNVERIFIED','needs_boundary',1)"
+        )
+
+    store = CampaignStore(database)
+    with store._connect() as db:
+        column = next(
+            row for row in db.execute("PRAGMA table_info(internal_candidates)")
+            if row["name"] == "priority"
+        )
+        task = db.execute(
+            "SELECT priority,status FROM internal_candidates WHERE address='0x7000'"
+        ).fetchone()
+    assert column["notnull"] == 1
+    assert task["priority"] == 0 and task["status"] == "needs_boundary"
+
+
+def test_campaign_runner_attempt_segment_limit_leaves_remaining_exports_queued(
+    tmp_path: Path,
+) -> None:
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    campaign_store.seed([candidate("0x1000"), candidate("0x2000")])
+    simulator = tmp_path / "one_export.py"
+    simulator.write_text(
+        "import json, pathlib, re, sys\n"
+        "prompt = sys.argv[-1]\n"
+        "match = re.search(r'Candidate source path: (decomp/src/eboot/func_[0-9A-F]{8}\\.c)', prompt)\n"
+        "assert match\n"
+        "source = pathlib.Path(match.group(1))\n"
+        "source.parent.mkdir(parents=True, exist_ok=True)\n"
+        "source.write_text('int recovered(void) { return 1; }\\n')\n"
+        "print(json.dumps({'checkpoint': {'next_experiment': 'synthetic segment test'}}))\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+
+    def verifier(path: Path, task: Candidate, _checkpoint: dict[str, object]):
+        source = path / "decomp/src/eboot" / f"func_{task.numeric_address:08X}.c"
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        report = strict_report(task.address, word_count=4)
+        report["provenance"]["source_sha256"] = source_hash
+        return {
+            "status": "MATCHED",
+            "source_sha256": source_hash,
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    runner = CampaignRunner(
+        campaign_store,
+        opencode_command=fake_opencode_command(tmp_path, simulator),
+        worktrees={"openai": worktree},
+        verifier=verifier,
+        checkpoint_repo_root=tmp_path,
+        timeout_seconds=10,
+    )
+    workers = [Worker("openai", "openai", "openai/gpt-6-luna")]
+    first = runner.run(
+        workers,
+        max_tasks=10,
+        max_attempts_this_segment=1,
+        max_boundary_tasks_this_segment=1,
+        max_idle_wait_seconds=2,
+    )
+    assert first["attempted"] == 1
+    assert campaign_store.total_attempt_count() == 1
+    statuses = {task["address"]: task["status"] for task in campaign_store.list_tasks()}
+    assert sorted(statuses.values()).count("matched") == 1
+    assert sorted(statuses.values()).count("pending") == 1
+
+    second = runner.run(workers, max_tasks=10, max_idle_wait_seconds=2)
+    assert second["attempted"] == 1
+    assert campaign_store.total_attempt_count() == 2
 
 
 def operational_config_text(

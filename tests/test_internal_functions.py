@@ -415,6 +415,7 @@ def test_internal_discovery_ranks_matched_export_callees_without_promoting_hints
         ("eboot", 0x1300),
         ("eboot", 0x1200),
     ]
+    assert [item.priority for item in candidates] == [3, 2, 1]
     assert all(item.boundary_status == "UNVERIFIED" for item in candidates)
     assert all(item.evidence_path.endswith("EBOOT.json") for item in candidates)
 
