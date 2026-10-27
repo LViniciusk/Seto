@@ -2482,6 +2482,253 @@ class CampaignStore:
             db.commit()
         return summary
 
+    def certify_deferred_match(
+        self,
+        claim: Claim,
+        verification: dict[str, Any],
+        *,
+        repo_root: Path,
+        worker_worktree_relative: str,
+    ) -> dict[str, Any]:
+        """Persist a fresh deterministic verification of a completed attempt's unchanged source.
+
+        This does not create or rewrite an inference attempt. It is for the narrow
+        case where the campaign worker returned the exact checkpoint source, the
+        normal runner closed that inference as unchanged, and a subsequent full
+        production verification now proves that same source MATCHED.
+        """
+        address = _normalize_eboot_address(claim.address)
+        numeric_address = int(address, 16)
+        expected_function = f"func_{numeric_address:08X}"
+        task = self.get_task(address)
+        if task["boundary_status"] != "EXACT" or int(task["size_bytes"]) <= 0:
+            raise ValueError("deferred certification requires an EXACT candidate boundary")
+        if claim.boundary_status != "EXACT" or claim.size_bytes != int(task["size_bytes"]):
+            raise ValueError("deferred certification claim differs from the exact candidate")
+        if (
+            not re.fullmatch(r"[a-z0-9-]+", claim.worker_id)
+            or claim.session_id is None
+            or not re.fullmatch(r"ses_[A-Za-z0-9_-]+", claim.session_id)
+            or claim.attempt_number <= 0
+        ):
+            raise ValueError("deferred certification requires an existing campaign session")
+
+        source_hash = verification.get("source_sha256")
+        checkpoint = task["checkpoint"]
+        if not isinstance(source_hash, str) or not HEX_SHA256.fullmatch(source_hash):
+            raise ValueError("deferred certification source hash is invalid")
+        expected_snapshot = (
+            f"decomp-campaign/checkpoints/{numeric_address:08x}/{source_hash}.c"
+        )
+        if (
+            checkpoint.get("source_sha256") != source_hash
+            or checkpoint.get("latest_source_snapshot") != expected_snapshot
+        ):
+            raise ValueError("deferred verification is not for the candidate's latest checkpoint source")
+        local_matches = checkpoint.get("local_experiments", [])
+        if not isinstance(local_matches, list) or not any(
+            isinstance(item, dict)
+            and item.get("origin_kind") == "local_experiment"
+            and item.get("status") == "MATCHED"
+            and item.get("source_sha256") == source_hash
+            and isinstance(item.get("object_sha256s"), list)
+            and len(item.get("object_sha256s", [])) == 2
+            and item["object_sha256s"][0] == item["object_sha256s"][1]
+            for item in local_matches
+        ):
+            raise ValueError("deferred certification requires a matching two-build local experiment")
+        source = campaign_build_path(repo_root, expected_snapshot)
+        if (
+            source.is_symlink()
+            or not source.is_file()
+            or hashlib.sha256(source.read_bytes()).hexdigest() != source_hash
+        ):
+            raise ValueError("deferred certification checkpoint is missing or has the wrong hash")
+        if verification.get("source_snapshot_path") not in {None, expected_snapshot}:
+            raise ValueError("deferred matcher result references a different source snapshot")
+
+        worker_worktree = campaign_build_path(repo_root, worker_worktree_relative)
+        if worker_worktree.is_symlink() or not worker_worktree.is_dir():
+            raise ValueError("deferred certification worker worktree is missing or unsafe")
+        evidence_claim = replace(
+            claim,
+            address=address,
+            size_bytes=int(task["size_bytes"]),
+            nid=str(task["nid"]),
+            priority=int(task["priority"]),
+            boundary_status="EXACT",
+            checkpoint=checkpoint,
+            evidence=task["evidence"],
+        )
+        boundary = validated_cached_ghidra_boundary(worker_worktree, evidence_claim)
+        if boundary is None or verification.get("ghidra_boundary") != boundary:
+            raise ValueError("deferred matcher result lacks the current hash-checked Ghidra boundary")
+        ghidra_hash = checkpoint.get("ghidra_log_sha256")
+        if (
+            not isinstance(ghidra_hash, str)
+            or verification.get("ghidra_log_sha256") != ghidra_hash
+        ):
+            raise ValueError("deferred matcher result does not use the checkpointed Ghidra log")
+
+        reports = verification.get("reports")
+        if not isinstance(reports, list) or len(reports) != 2:
+            raise MatcherIncomplete("deferred certification requires two complete matcher reports")
+        object_hashes: list[str] = []
+        expected_report_prefix = (
+            f"decomp-campaign/{claim.worker_id}/{address.removeprefix('0x')}"
+            f"/attempt-{claim.attempt_number}/verify-"
+        )
+        for number, report in enumerate(reports, start=1):
+            if not isinstance(report, dict):
+                raise MatcherIncomplete("deferred matcher report is malformed")
+            report_path = report.get("report_path")
+            if not isinstance(report_path, str) or not report_path.startswith("build/"):
+                raise MatcherIncomplete("deferred matcher report path is absent or unsafe")
+            report_relative = report_path.removeprefix("build/").replace("\\", "/")
+            expected_prefix = f"{expected_report_prefix}{number}/"
+            if not report_relative.startswith(expected_prefix):
+                raise ValueError("deferred matcher report is outside its campaign attempt directory")
+            persisted_path = campaign_build_path(worker_worktree, report_relative)
+            if (
+                persisted_path.is_symlink()
+                or not persisted_path.is_file()
+                or persisted_path.stat().st_size > 2_000_000
+            ):
+                raise ValueError("deferred matcher report is missing or unsafe")
+            persisted_report = json.loads(persisted_path.read_text(encoding="utf-8"))
+            if not isinstance(persisted_report, dict):
+                raise MatcherIncomplete("persisted matcher report is malformed")
+            _validate_complete_matcher_report(
+                persisted_report,
+                expected_address=numeric_address,
+                expected_size=int(task["size_bytes"]),
+                expected_source_sha256=source_hash,
+            )
+            _validate_complete_matcher_report(
+                report,
+                expected_address=numeric_address,
+                expected_size=int(task["size_bytes"]),
+                expected_source_sha256=source_hash,
+            )
+            if not is_strict_match(
+                persisted_report,
+                expected_address=numeric_address,
+                expected_size=int(task["size_bytes"]),
+            ) or not is_strict_match(
+                report,
+                expected_address=numeric_address,
+                expected_size=int(task["size_bytes"]),
+            ):
+                raise MatcherIncomplete("deferred matcher report is not a complete MATCHED result")
+            persisted_provenance = persisted_report.get("provenance", {})
+            provenance = report.get("provenance", {})
+            object_hash = provenance.get("object_sha256")
+            if (
+                not isinstance(object_hash, str)
+                or persisted_provenance.get("object_sha256") != object_hash
+                or persisted_report.get("match") != report.get("match")
+            ):
+                raise ValueError("in-memory and persisted matcher reports disagree")
+            object_hashes.append(object_hash)
+        if object_hashes[0] != object_hashes[1]:
+            raise ValueError("deferred source is not deterministic across two independent builds")
+
+        result = dict(verification)
+        result["source_snapshot_path"] = expected_snapshot
+        result["build_sha256"] = object_hashes
+        result["campaign_origin"] = {
+            "attempt_number": claim.attempt_number,
+            "worker_id": claim.worker_id,
+            "provider": claim.model_provider or claim.provider,
+            **(
+                {"quota_scope": claim.provider}
+                if claim.model_provider is not None
+                and claim.model_provider != claim.provider
+                else {}
+            ),
+            "session_id": claim.session_id,
+        }
+        if not is_deterministic_match(
+            result,
+            expected_address=numeric_address,
+            expected_size=int(task["size_bytes"]),
+        ):
+            raise MatcherIncomplete("deferred result does not satisfy deterministic MATCHED guards")
+
+        now = time.time()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """SELECT status,boundary_status,size_bytes,owner,lease_until,checkpoint_json
+                   FROM candidates WHERE address=?""",
+                (address,),
+            ).fetchone()
+            attempt = db.execute(
+                """SELECT worker_id,provider,session_id,outcome FROM attempts
+                   WHERE address=? AND attempt_number=?""",
+                (address, claim.attempt_number),
+            ).fetchone()
+            if row is None or row["boundary_status"] != "EXACT" or int(row["size_bytes"]) != int(task["size_bytes"]):
+                raise ValueError("candidate boundary changed during deferred certification")
+            if row["status"] == "matched":
+                raise ValueError("candidate has already been certified")
+            if row["owner"] is not None or (
+                row["lease_until"] is not None and float(row["lease_until"]) > now
+            ):
+                raise ValueError("cannot certify while another worker owns the candidate")
+            if (
+                attempt is None
+                or attempt["worker_id"] != claim.worker_id
+                or attempt["provider"] != claim.provider
+                or attempt["session_id"] != claim.session_id
+                or attempt["outcome"] != "source_unchanged"
+            ):
+                raise ValueError("deferred certification is not tied to a completed unchanged-source attempt")
+            current_checkpoint = json.loads(row["checkpoint_json"])
+            if (
+                current_checkpoint.get("source_sha256") != source_hash
+                or current_checkpoint.get("latest_source_snapshot") != expected_snapshot
+                or current_checkpoint.get("ghidra_log_sha256") != ghidra_hash
+            ):
+                raise ValueError("candidate checkpoint changed during deferred certification")
+
+            current_checkpoint["best_source_sha256"] = source_hash
+            current_checkpoint["best_source_snapshot"] = expected_snapshot
+            current_checkpoint["source_path"] = f"decomp/src/eboot/{expected_function}.c"
+            current_checkpoint["source_sha256"] = source_hash
+            current_checkpoint.pop("last_diagnostic", None)
+            current_checkpoint.pop("last_diagnostic_detail", None)
+            current_checkpoint["best_match"] = _match_checkpoint_summary(result)
+            current_checkpoint["last_attempt"] = _match_checkpoint_summary(result)
+            paths = [f"build/{current_checkpoint['ghidra_log_path']}"]
+            paths.extend(
+                report["report_path"]
+                for report in reports
+                if isinstance(report.get("report_path"), str)
+            )
+            current_checkpoint["evidence_paths"] = list(dict.fromkeys(paths))[:40]
+            encoded_checkpoint = _json_dump(
+                _sanitize_checkpoint(current_checkpoint, trusted_evidence=True)
+            )
+            if len(encoded_checkpoint) > 128_000:
+                raise ValueError("deferred match checkpoint exceeds 128 KiB")
+            db.execute(
+                """UPDATE candidates SET status='matched',owner=NULL,provider=NULL,lease_until=NULL,
+                   preferred_provider=NULL,checkpoint_json=?,best_result_json=?,
+                   attempts_without_progress=0,updated_at=? WHERE address=?""",
+                (encoded_checkpoint, _json_dump(result), now, address),
+            )
+            self._event(
+                db,
+                "deferred_local_match_certified",
+                address=address,
+                worker_id=claim.worker_id,
+                provider=claim.provider,
+                session_id=claim.session_id,
+            )
+            db.commit()
+        return result
+
     def record_local_recovery_result(
         self,
         address: str,

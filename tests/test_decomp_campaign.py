@@ -6847,6 +6847,113 @@ def test_local_match_experiment_rejects_report_with_wrong_source_hash(tmp_path: 
     assert store.list_attempts() == []
 
 
+def test_deferred_local_match_certification_preserves_attempt_history(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    store = CampaignStore(repo / "build" / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+
+    worker_id = "openai"
+    worker_relative = "decomp-campaign/worktrees/openai"
+    worker_root = campaign_build_path(repo, worker_relative)
+    log_relative = "decomp-campaign/openai/1000/evidence/ghidra-attempt-1.log"
+    log_path = campaign_build_path(worker_root, log_relative)
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(ghidra_log(), encoding="utf-8")
+    log_hash = hashlib.sha256(log_path.read_bytes()).hexdigest()
+    boundary = validate_ghidra_log(log_path.read_text(encoding="utf-8"), 0x1000)
+    checkpoint = {
+        "ghidra_log_path": log_relative,
+        "ghidra_log_sha256": log_hash,
+        "boundary_status": "EXACT",
+    }
+
+    source_content = b"int func_00001000(void) { return 1; }\n"
+    source_hash = hashlib.sha256(source_content).hexdigest()
+    source_relative = (
+        f"decomp-campaign/experiments/1000/{source_hash}/func_00001000.c"
+    )
+    source_path = campaign_build_path(repo, source_relative)
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(source_content)
+    source_snapshot = store.record_latest_recovered_source(
+        "0x1000", repo_root=repo, source_relative=source_relative
+    )
+
+    experiment_reports = []
+    production_reports = []
+    object_hash = "b" * 64
+    for number in (1, 2):
+        report = strict_report("0x1000", word_count=4)
+        report["function"] = "func_00001000"
+        report["provenance"]["source_sha256"] = source_hash
+        report["provenance"]["object_sha256"] = object_hash
+
+        experiment_relative = (
+            f"decomp-campaign/experiments/1000/{source_hash}/attempt-1/"
+            f"verify-{number}/func_00001000.match.json"
+        )
+        experiment_path = campaign_build_path(repo, experiment_relative)
+        experiment_path.parent.mkdir(parents=True, exist_ok=True)
+        experiment_path.write_text(json.dumps(report), encoding="utf-8")
+        experiment_reports.append(experiment_relative)
+
+        production_relative = (
+            f"decomp-campaign/openai/1000/attempt-1/verify-{number}/"
+            "func_00001000.match.json"
+        )
+        production_path = campaign_build_path(worker_root, production_relative)
+        production_path.parent.mkdir(parents=True, exist_ok=True)
+        production_report = {**report, "report_path": f"build/{production_relative}"}
+        production_path.write_text(json.dumps(production_report), encoding="utf-8")
+        production_reports.append(production_report)
+
+    store.record_local_match_experiment(
+        "0x1000",
+        worker_id="experiments",
+        worktree=repo,
+        source_relative=source_relative,
+        report_relatives=experiment_reports,
+    )
+
+    claim = store.claim_next(worker_id, "openai")
+    assert claim is not None
+    claim = store.bind_session(claim, "ses_test_deferred_match")
+    store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+    store.start_attempt(claim)
+    assert store.complete_unchanged_source(claim) == "stalled"
+
+    verification = {
+        "status": "MATCHED",
+        "source_sha256": source_hash,
+        "source_snapshot_path": source_snapshot["latest_source_snapshot"],
+        "matching_words": 4,
+        "total_words": 4,
+        "build_sha256": [object_hash, object_hash],
+        "reports": production_reports,
+        "ghidra_log_sha256": log_hash,
+        "ghidra_boundary": boundary,
+    }
+
+    store.certify_deferred_match(
+        claim,
+        verification,
+        repo_root=repo,
+        worker_worktree_relative=worker_relative,
+    )
+
+    task = store.get_task("0x1000")
+    assert task["status"] == "matched"
+    assert task["best_result"]["source_sha256"] == source_hash
+    assert task["best_result"]["campaign_origin"]["session_id"] == "ses_test_deferred_match"
+    assert task["checkpoint"]["best_source_snapshot"] == source_snapshot["latest_source_snapshot"]
+    assert len(task["checkpoint"]["local_experiments"]) == 1
+    attempts = store.list_attempts()
+    assert len(attempts) == 1
+    assert attempts[0]["outcome"] == "source_unchanged"
+    assert attempts[0]["session_id"] == "ses_test_deferred_match"
+
+
 def test_two_simulated_sessions_handle_distinct_tasks_and_quota_fallback(
     tmp_path: Path,
 ) -> None:
