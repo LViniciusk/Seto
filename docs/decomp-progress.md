@@ -7512,14 +7512,14 @@ um bloco de prova independente por endereço.
 | Categoria | MATCHED | Instruções | Estado da contagem de exports |
 |---|---:|---:|---|
 | EBOOT exports | 16 | 368 | inalterada: 16/206 |
-| EBOOT internos | 66 | 320 | fora do numerador de exports |
-| `libtutoriallist.prx` internos | 24 | 48 | separados da baseline PRX |
-| `libhtml_view.prx` internos | 15 | 30 | separados da baseline PRX |
+| EBOOT internos | 128 | 1 036 | fora do numerador de exports |
+| `libtutoriallist.prx` internos | 63 | 126 | separados da baseline PRX |
+| `libhtml_view.prx` internos | 29 | 58 | separados da baseline PRX |
 | PRX exports já certificados | 16 | 912 | baseline preservada |
 
 O catálogo `config/decomp_internal_inventory.json` mantém identidade composta
-por módulo e endereço, sem NIDs artificiais. Ele contém 127 entradas (88 EBOOT,
-24 `libtutoriallist.prx`, 15 `libhtml_view.prx`); todas as 105 entradas MATCHED
+por módulo e endereço, sem NIDs artificiais. Ele contém 262 entradas (170 EBOOT,
+63 `libtutoriallist.prx`, 29 `libhtml_view.prx`); todas as 220 entradas MATCHED
 têm boundary EXACT, SHA-256 da fonte, dois SHA-256 de objetos idênticos e
 referência/digest de certificado. Cada certificado local registra os dois
 relatórios completos de `match_function.py`. Esses dados internos não alteram
@@ -7620,8 +7620,8 @@ Sem tocar no SQLite nem gastar inferências, a segunda rodada retomou apenas
 candidatos PRX ainda não catalogados. Os 22 alvos abaixo têm boundary `EXACT`
 individual no Ghidra, são funções de duas instruções (`jr ra; nop`) em
 `.sceStub.text`, não têm calls/data references e passaram duas compilações e
-comparações integrais 2/2. O catálogo agora registra 105 funções internas
-MATCHED (66 EBOOT + 39 PRX), 398 instruções no total.
+comparações integrais 2/2. Naquele ponto, o catálogo passou a registrar 105
+funções internas MATCHED (66 EBOOT + 39 PRX), 398 instruções.
 
 - `libtutoriallist.prx`: `0x25d0`, `0x2610`, `0x2638`, `0x2720`, `0x2738`,
   `0x2740`, `0x2748`, `0x2750`, `0x3758`, `0x3768`, `0x3770`, `0x3780`;
@@ -7660,10 +7660,99 @@ literal candidato `0x41bae8` não tem relocation, ao contrário do par HI16/LO16
 original cuja identidade de dados segue não resolvida. O resultado foi registrado
 no catálogo para impedir repetição da mesma hipótese; não houve promoção.
 
+### Rodada até a meta de 2.500 instruções
+
+Foram acrescentados **115 MATCHED / 822 instruções** sem novas inferências nem
+tentativas SQLite: 62 helpers EBOOT (716 instruções) e 53 leaves PRX
+(`jr ra; nop`, 106 instruções). A soma com as baselines de exports preservadas
+(EBOOT 368 + PRXs 912) chega a **2.500 instruções matched**; exports e internos
+continuam contabilizados separadamente.
+
+Os 62 novos helpers EBOOT estão nas fontes `decomp/src/eboot/func_*.c`; a
+identidade, fronteira Ghidra, instruction count, source SHA-256, os dois object
+SHA-256 e o certificado de cada endereço constam em
+`config/decomp_internal_inventory.json`. Endereços desta rodada:
+
+`0x25154`, `0x29038`, `0x39f94`, `0x3aa60`, `0x3ae0c`, `0x3aec8`, `0x3af80`,
+`0x3b860`, `0x3b8b8`, `0x3ba34`, `0x3ba54`, `0x3ba88`, `0x3babc`, `0x3baf0`,
+`0x3c3bc`, `0x3c3f0`, `0x3c65c`, `0x3c67c`, `0x3c74c`, `0x3ca44`, `0x3cd08`,
+`0x3cd2c`, `0x3cd4c`, `0x3cd78`, `0x3cd9c`, `0x3cec8`, `0x3d1f0`, `0x3d2b8`,
+`0x3d2ec`, `0x3d4c0`, `0x3d76c`, `0x3d834`, `0x3d968`, `0x41870`, `0x49880`,
+`0x498e4`, `0x49a84`, `0x49aac`, `0x49ad4`, `0x49af8`, `0x49b20`, `0x49b44`,
+`0x49b88`, `0x49bcc`, `0x4a44c`, `0x4a4c0`, `0x4a4e4`, `0x4a508`, `0x4a52c`,
+`0x4a550`, `0x4a574`, `0x4cb88`, `0x4e488`, `0x4f648`, `0x4f750`, `0x54c58`,
+`0x5a4ec`, `0x6a874`, `0x6a89c`, `0x6a8c4`, `0x6a90c`, `0x6a92c`.
+
+Os 53 PRX stubs novos também têm fontes, manifests de descoberta, prova Ghidra
+independente por endereço e certificados de dois builds no catálogo:
+
+- `libtutoriallist.prx` (39): `0x3790`, `0x37e0`, `0x3850`, `0x3a08`, `0x3a38`,
+  `0x3a68`, `0x3a70`, `0x3aa8`, `0x3ab0`, `0x3ae8`, `0x3af0`, `0x3b78`,
+  `0x3bc0`, `0x3bc8`, `0x3c38`, `0x3c70`, `0x3c90`, `0x3c98`, `0x3ca0`,
+  `0x3ca8`, `0x3d90`, `0x4120`, `0x41d8`, `0x4270`, `0x4280`, `0x4298`,
+  `0x42a8`, `0x42c8`, `0x42e0`, `0x42f0`, `0x4300`, `0x4310`, `0x4358`,
+  `0x48f0`, `0x48f8`, `0x49a0`, `0x49b0`, `0x49c0`, `0x4a00`;
+- `libhtml_view.prx` (14): `0x2ef4`, `0x2efc`, `0x2f04`, `0x2f0c`, `0x2f14`,
+  `0x2f1c`, `0x2f24`, `0x2f2c`, `0x2f34`, `0x2f3c`, `0x2f44`, `0x2f4c`,
+  `0x2f54`, `0x2f5c`.
+
+O SQLite permanece em 217 tentativas cumulativas (teto 725), `integrity_check`
+`ok` e zero leases; os baselines export EBOOT 16/368 e PRX 16/912 não mudaram.
+
+### Terceira rodada — meta de 2.500 instruções
+
+Foram certificados mais **115 MATCHED / 822 instruções**: 62 helpers EBOOT
+(716 instruções) e 53 leaves PRX de duas instruções cada (106 instruções). Com
+as baselines export preservadas (EBOOT 368 + PRXs 912), o total agregado chegou
+a **2.500 instruções matched**. Os indicadores permanecem separados:
+
+| Categoria | MATCHED | Instruções |
+|---|---:|---:|
+| EBOOT exports | 16 | 368 |
+| EBOOT internos | 128 | 1 036 |
+| `libtutoriallist.prx` internos | 63 | 126 |
+| `libhtml_view.prx` internos | 29 | 58 |
+| PRX exports | 16 | 912 |
+
+Os 62 novos endereços EBOOT são: `0x25154`, `0x29038`, `0x39f94`, `0x3aa60`,
+`0x3ae0c`, `0x3aec8`, `0x3af80`, `0x3b860`, `0x3b8b8`, `0x3ba34`, `0x3ba54`,
+`0x3ba88`, `0x3babc`, `0x3baf0`, `0x3c3bc`, `0x3c3f0`, `0x3c65c`, `0x3c67c`,
+`0x3c74c`, `0x3ca44`, `0x3cd08`, `0x3cd2c`, `0x3cd4c`, `0x3cd78`, `0x3cd9c`,
+`0x3cec8`, `0x3d1f0`, `0x3d2b8`, `0x3d2ec`, `0x3d4c0`, `0x3d76c`, `0x3d834`,
+`0x3d968`, `0x41870`, `0x49880`, `0x498e4`, `0x49a84`, `0x49aac`, `0x49ad4`,
+`0x49af8`, `0x49b20`, `0x49b44`, `0x49b88`, `0x49bcc`, `0x4a44c`, `0x4a4c0`,
+`0x4a4e4`, `0x4a508`, `0x4a52c`, `0x4a550`, `0x4a574`, `0x4cb88`, `0x4e488`,
+`0x4f648`, `0x4f750`, `0x54c58`, `0x5a4ec`, `0x6a874`, `0x6a89c`, `0x6a8c4`,
+`0x6a90c`, `0x6a92c`.
+
+Os 53 novos stubs PRX são as 39 entradas `libtutoriallist.prx` e 14 entradas
+`libhtml_view.prx` do manifesto de descoberta ainda não certificadas na rodada
+anterior. Cada uma recebeu boundary Ghidra `EXACT` individual, C vazio,
+comparação integral 2/2 em dois builds e identidade módulo/endereço sem NID.
+O catálogo de 262 entradas registra por endereço SHA-256 da fonte, hashes dos
+dois objetos e digest/caminho do certificado; assim ficam auditáveis também as
+funções cujos hashes não foram repetidos em uma tabela de Markdown.
+
+- `libtutoriallist.prx`: `0x3790`, `0x37e0`, `0x3850`, `0x3a08`, `0x3a38`,
+  `0x3a68`, `0x3a70`, `0x3aa8`, `0x3ab0`, `0x3ae8`, `0x3af0`, `0x3b78`,
+  `0x3bc0`, `0x3bc8`, `0x3c38`, `0x3c70`, `0x3c90`, `0x3c98`, `0x3ca0`,
+  `0x3ca8`, `0x3d90`, `0x4120`, `0x41d8`, `0x4270`, `0x4280`, `0x4298`,
+  `0x42a8`, `0x42c8`, `0x42e0`, `0x42f0`, `0x4300`, `0x4310`, `0x4358`,
+  `0x48f0`, `0x48f8`, `0x49a0`, `0x49b0`, `0x49c0`;
+- `libhtml_view.prx`: `0x2ef4`, `0x2efc`, `0x2f04`, `0x2f0c`, `0x2f14`,
+  `0x2f1c`, `0x2f24`, `0x2f2c`, `0x2f34`, `0x2f3c`, `0x2f44`, `0x2f4c`,
+  `0x2f54`, `0x2f5c`.
+
+O ciclo usou apenas Ghidra/MWCC/matcher locais: não consumiu inferências nem
+tentativas e não alterou o SQLite (217/725; 508 tentativas de teto ainda livres,
+integridade `ok`, zero leases). Tempo agregado da rodada de ferramenta não foi
+medido separadamente; os processos Ghidra e builds foram executados
+sequencialmente.
+
 ### Hipóteses ainda abertas
 
-O catálogo preserva os resultados não MATCHED sem promovê-los: 10 NONMATCHING,
-5 UNMATCHED, 4 INCOMPLETE, 1 BLOCKED_CALLING_CONVENTION, 1
+O catálogo preserva os resultados não MATCHED sem promovê-los: 25 NONMATCHING,
+9 INCOMPLETE, 5 UNMATCHED, 1 BLOCKED_CALLING_CONVENTION, 1
 BOUNDARY_VERIFIED_NO_SOURCE e 1 INCONCLUSIVE_IDENTITY entre os candidatos EBOOT
 originais. Permanecem, entre outros, o alvo de dados sem identidade `0x3a90c`,
 os limites/relocations complexos `0x3129c`, `0x84d0`, `0x8dd4` e `0x92fc`, e os
