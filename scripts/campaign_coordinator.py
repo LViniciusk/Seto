@@ -28,12 +28,15 @@ def run_fair_segments(
     monotonic: Callable[[], float] = time.monotonic,
     attempts_per_turn: int = 1,
     exports_work_remains: Callable[[], bool] | None = None,
+    first_lane: str = "exports",
 ) -> dict[str, Any]:
     """Alternate bounded export/internal slices under the caller's shared limits."""
     if max_tasks <= 0 or attempts_per_turn <= 0:
         raise ValueError("fair segment attempt limits must be positive")
+    if first_lane not in {"exports", "internal"}:
+        raise ValueError("first fair segment lane must be exports or internal")
     callbacks = {"exports": run_exports, "internal": run_internal}
-    order = ("exports", "internal")
+    order = (first_lane, "internal" if first_lane == "exports" else "exports")
     segments: list[dict[str, Any]] = []
     outcomes: dict[str, int] = {}
     export_boundary_outcomes: dict[str, int] = {}
@@ -141,6 +144,49 @@ def run_fair_segments(
     }
 
 
+def prepare_internal_lane_before_inference(
+    *,
+    discover_internal: Callable[[float], DiscoveryResult],
+    prepare_boundary: Callable[[float, int], Mapping[str, Any]],
+    exact_pending_count: Callable[[], int],
+    deadline: float,
+    max_boundary_tasks: int = 8,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Discover and prove an EXACT internal task before any campaign inference."""
+    if max_boundary_tasks <= 0:
+        raise ValueError("initial internal boundary limit must be positive")
+    exact_before = exact_pending_count()
+    discovery: DiscoveryResult | None = None
+    boundary: dict[str, Any] = {}
+    if exact_before <= 0 and monotonic() < deadline:
+        discovery = discover_internal(deadline)
+        if not isinstance(discovery, DiscoveryResult):
+            raise TypeError("initial internal discovery must return DiscoveryResult")
+        if exact_pending_count() <= 0 and monotonic() < deadline:
+            boundary = dict(prepare_boundary(deadline, max_boundary_tasks))
+            if int(boundary.get("attempted", 0)) != 0:
+                raise RuntimeError("initial internal boundary preparation consumed an inference attempt")
+    exact_after = exact_pending_count()
+    return {
+        "ready": exact_after > 0,
+        "exact_pending_before": exact_before,
+        "exact_pending_after": exact_after,
+        "discovery": None
+        if discovery is None
+        else {
+            "scope": discovery.scope,
+            "evidence_fingerprint": discovery.evidence_fingerprint,
+            "candidates_added": discovery.candidates_added,
+            "eligible_work": discovery.eligible_work,
+            "exhausted_reason": discovery.exhausted_reason,
+            "details": dict(discovery.details),
+        },
+        "boundary": boundary,
+        "deadline_reached": monotonic() >= deadline,
+    }
+
+
 @dataclass
 class ContinuousCampaignCoordinator:
     """Run one campaign runner at a time under one deadline and attempt ceiling.
@@ -159,12 +205,16 @@ class ContinuousCampaignCoordinator:
     monotonic: Callable[[], float] = time.monotonic
     _examined: set[tuple[str, str]] = field(default_factory=set, init=False)
 
-    def run(self) -> dict[str, Any]:
+    def run(self, *, deadline: float | None = None) -> dict[str, Any]:
         if self.max_tasks <= 0:
             raise ValueError("continuous campaign max_tasks must be positive")
         if self.duration_seconds <= 0:
             raise ValueError("continuous campaign duration_seconds must be positive")
-        deadline = self.monotonic() + self.duration_seconds
+        local_deadline = self.monotonic() + self.duration_seconds
+        if deadline is None:
+            deadline = local_deadline
+        else:
+            deadline = min(deadline, local_deadline)
         segments: list[dict[str, Any]] = []
         discoveries: list[dict[str, Any]] = []
         stop_reason = "discovery_exhausted"

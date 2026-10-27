@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from campaign_coordinator import (
     ContinuousCampaignCoordinator,
     DiscoveryResult,
+    prepare_internal_lane_before_inference,
     run_fair_segments,
 )
 
@@ -221,6 +222,77 @@ def test_fair_segments_alternate_when_both_queues_remain_busy() -> None:
     assert calls.count("exports") == calls.count("internal") == 3
     assert result["attempted"] == result["attempts_cumulative"] == 6
     assert result["stop_reason"] == "attempt_ceiling"
+
+
+def test_empty_internal_queue_is_discovered_and_bounded_before_first_inference() -> None:
+    events: list[str] = []
+    attempts = 0
+    exact_pending = 0
+    deadline = 200.0
+
+    def discover(received_deadline: float) -> DiscoveryResult:
+        nonlocal exact_pending
+        assert received_deadline == deadline
+        assert attempts == 0
+        events.append("discover")
+        return DiscoveryResult(
+            scope="eboot-internal",
+            evidence_fingerprint="manifest-hash",
+            candidates_added=1,
+            eligible_work=True,
+        )
+
+    def prepare_boundary(received_deadline: float, limit: int) -> dict[str, object]:
+        nonlocal exact_pending
+        assert received_deadline == deadline
+        assert limit == 8
+        assert attempts == 0
+        events.append("boundary")
+        exact_pending = 1
+        return {
+            "attempted": 0,
+            "boundary_outcomes": {"exact": 1},
+            "external_work_remains": True,
+        }
+
+    prepared = prepare_internal_lane_before_inference(
+        discover_internal=discover,
+        prepare_boundary=prepare_boundary,
+        exact_pending_count=lambda: exact_pending,
+        deadline=deadline,
+        monotonic=lambda: 100.0,
+    )
+    assert prepared["ready"] is True
+    assert prepared["exact_pending_before"] == 0
+    assert prepared["exact_pending_after"] == 1
+    assert events == ["discover", "boundary"]
+
+    def inference(lane: str):
+        def run(_deadline: float, _ceiling: int, _slice: int) -> dict[str, object]:
+            nonlocal attempts
+            events.append(f"inference:{lane}")
+            attempts += 1
+            return {"attempted": 1, "external_work_remains": True}
+
+        return run
+
+    run_fair_segments(
+        run_exports=inference("exports"),
+        run_internal=inference("internal"),
+        attempts_used=lambda: attempts,
+        stop_requested=lambda: False,
+        deadline=deadline,
+        max_tasks=2,
+        first_lane="internal",
+        monotonic=lambda: 150.0,
+    )
+    assert events == [
+        "discover",
+        "boundary",
+        "inference:internal",
+        "inference:exports",
+    ]
+    assert attempts == 2
 
 
 def test_attempt_ceiling_allows_one_zero_attempt_internal_recovery_pass() -> None:

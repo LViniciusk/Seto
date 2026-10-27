@@ -674,6 +674,16 @@ class InternalCampaignStore:
                 "'source_pending','promotion_pending')"
             ).fetchone()[0])
 
+    def exact_pending_count(self) -> int:
+        with self.campaign_store._connect() as db:
+            return int(
+                db.execute(
+                    """SELECT COUNT(*) FROM internal_candidates
+                    WHERE status='pending' AND boundary_status='EXACT'
+                    AND section='.text' AND kind='code'"""
+                ).fetchone()[0]
+            )
+
     def recovery_count(self) -> int:
         with self.campaign_store._connect() as db:
             return int(
@@ -718,6 +728,7 @@ class InternalCampaignRunner:
         deadline: float,
         max_attempts_this_segment: int | None = None,
         max_boundary_tasks_this_segment: int | None = None,
+        boundary_only: bool = False,
     ) -> dict[str, Any]:
         if max_attempts_this_segment is not None and max_attempts_this_segment <= 0:
             raise ValueError("internal segment attempt limit must be positive")
@@ -749,6 +760,12 @@ class InternalCampaignRunner:
         index = 0
         failed_workers: set[str] = set()
         while time.monotonic() < deadline and not self.store.campaign_store.stop_requested():
+            if (
+                boundary_only
+                and max_boundary_tasks_this_segment is not None
+                and boundary_tasks >= max_boundary_tasks_this_segment
+            ):
+                break
             budget_full = self.store.campaign_store.total_attempt_count() >= max_total_attempts
             if budget_full and self.store.recovery_count() == 0:
                 break
@@ -790,6 +807,9 @@ class InternalCampaignRunner:
                     if isinstance(exc, InternalWorkerUnavailable):
                         failed_workers.add(worker_id)
                 continue
+
+            if boundary_only:
+                break
 
             claim = self.store.claim_next(
                 worker_id,

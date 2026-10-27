@@ -496,6 +496,75 @@ def test_internal_worker_failure_releases_task_for_another_worker_without_attemp
         assert db.execute("SELECT COUNT(*) FROM internal_attempts").fetchone()[0] == 1
 
 
+def test_internal_boundary_only_preparation_never_reaches_worker_or_consumes_quota(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    from dataclasses import replace
+    from internal_campaign import InternalCampaignRunner
+
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [InternalFunction("EBOOT", 0x6800, 0, "UNVERIFIED", "build/manifest.json")]
+    )
+
+    def exact_boundary(claim: InternalClaim, _deadline: float) -> InternalClaim:
+        evidence = {
+            "status": "EXACT",
+            "size_bytes": 8,
+            "log_path": "decomp-campaign/worker/6800/evidence.log",
+            "log_sha256": "a" * 64,
+        }
+        campaign_store.update_boundary(claim, 8, evidence)
+        prepared = replace(
+            claim,
+            size_bytes=8,
+            boundary_status="EXACT",
+            checkpoint={
+                **claim.checkpoint,
+                "boundary_status": "EXACT",
+                "ghidra_log_path": evidence["log_path"],
+                "ghidra_log_sha256": evidence["log_sha256"],
+            },
+        )
+        campaign_store.save_checkpoint(
+            prepared,
+            {
+                "boundary_status": "EXACT",
+                "ghidra_log_path": evidence["log_path"],
+                "ghidra_log_sha256": evidence["log_sha256"],
+            },
+            trusted_evidence=True,
+        )
+        return prepared
+
+    runner = InternalCampaignRunner(
+        internal_store,
+        boundary=exact_boundary,
+        worker=lambda *_args: pytest.fail("boundary-only preparation must not invoke inference"),
+        matcher=lambda *_args: pytest.fail("boundary-only preparation must not invoke matcher"),
+        certifier=lambda *_args: pytest.fail("boundary-only preparation must not certify"),
+        lease_seconds=60,
+    )
+
+    result = runner.run_segment(
+        [("worker", "openai", "openai")],
+        max_total_attempts=2,
+        deadline=time.monotonic() + 5,
+        max_boundary_tasks_this_segment=1,
+        boundary_only=True,
+    )
+
+    assert result["attempted"] == 0
+    assert result["boundary_outcomes"] == {"exact": 1}
+    assert internal_store.exact_pending_count() == 1
+    assert campaign_store.total_attempt_count() == 0
+    with campaign_store._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM internal_attempts").fetchone()[0] == 0
+
+
 def test_internal_queue_adds_priority_column_to_existing_sqlite_schema(tmp_path: Path) -> None:
     import sqlite3
 

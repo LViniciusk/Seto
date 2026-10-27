@@ -36,6 +36,7 @@ from urllib.parse import urlsplit
 from campaign_coordinator import (
     ContinuousCampaignCoordinator,
     DiscoveryResult,
+    prepare_internal_lane_before_inference,
     run_fair_segments,
 )
 from decomp_ssh import (
@@ -10715,6 +10716,7 @@ def main(argv: list[str] | None = None) -> int:
                     lease_seconds=float(limits["lease_seconds"]),
                     max_attempts_per_candidate=int(limits["max_attempts_per_candidate"]),
                 )
+                next_fair_lane = ["internal"]
 
                 def run_segment(global_deadline: float, cumulative_ceiling: int) -> dict[str, Any]:
                     def export_work_remains() -> bool:
@@ -10756,6 +10758,8 @@ def main(argv: list[str] | None = None) -> int:
                             max_boundary_tasks_this_segment=1,
                         )
 
+                    first_lane = next_fair_lane[0]
+                    next_fair_lane[0] = "exports" if first_lane == "internal" else "internal"
                     return run_fair_segments(
                         run_exports=run_export_slice,
                         run_internal=run_internal_slice,
@@ -10765,6 +10769,7 @@ def main(argv: list[str] | None = None) -> int:
                         max_tasks=cumulative_ceiling,
                         attempts_per_turn=1,
                         exports_work_remains=export_work_remains,
+                        first_lane=first_lane,
                     )
 
                 def discover_eboot_exports(global_deadline: float) -> DiscoveryResult:
@@ -10812,14 +10817,6 @@ def main(argv: list[str] | None = None) -> int:
                     eboot_hash = hashlib.sha256(eboot_path.read_bytes()).hexdigest()
                     manifest_directory = REPO_ROOT / "build/seto049/function-manifests"
                     manifest_path = manifest_directory / f"EBOOT-{eboot_hash[:16]}.json"
-                    legacy_manifest = manifest_directory / "EBOOT-bd9cc98e94c7eae0.json"
-                    if (
-                        not manifest_path.is_file()
-                        and not manifest_path.is_symlink()
-                        and legacy_manifest.is_file()
-                        and not legacy_manifest.is_symlink()
-                    ):
-                        manifest_path = legacy_manifest
                     fingerprint = hashlib.sha256()
                     fingerprint.update(eboot_hash.encode("ascii"))
                     for evidence_path in (manifest_path, catalog_path):
@@ -10954,6 +10951,42 @@ def main(argv: list[str] | None = None) -> int:
                         },
                     )
 
+                global_deadline = time.monotonic() + phase_duration
+
+                def prepare_initial_internal_boundary(
+                    deadline: float, max_boundary_tasks: int
+                ) -> Mapping[str, Any]:
+                    return internal_runner.run_segment(
+                        [
+                            (worker.worker_id, worker.execution_scope, worker.provider)
+                            for worker in workers
+                        ],
+                        max_total_attempts=max_tasks,
+                        deadline=deadline,
+                        max_boundary_tasks_this_segment=max_boundary_tasks,
+                        boundary_only=True,
+                    )
+
+                initial_internal_preparation = prepare_internal_lane_before_inference(
+                    discover_internal=discover_internal_hints,
+                    prepare_boundary=prepare_initial_internal_boundary,
+                    exact_pending_count=internal_store.exact_pending_count,
+                    deadline=global_deadline,
+                    max_boundary_tasks=8,
+                )
+                if not initial_internal_preparation["ready"]:
+                    _print_json(
+                        {
+                            "attempted": 0,
+                            "attempts_existing": attempts_used,
+                            "attempts_cumulative": store.total_attempt_count(),
+                            "attempt_budget_new": max(0, max_tasks - attempts_used),
+                            "initial_internal_preparation": initial_internal_preparation,
+                            "stop_reason": "internal_not_ready_before_first_inference",
+                        }
+                    )
+                    return 2
+
                 coordinator = ContinuousCampaignCoordinator(
                     run_segment=run_segment,
                     discovery_steps=(
@@ -10966,13 +10999,14 @@ def main(argv: list[str] | None = None) -> int:
                     max_tasks=max_tasks,
                     duration_seconds=phase_duration,
                 )
-                outcome = coordinator.run()
+                outcome = coordinator.run(deadline=global_deadline)
                 outcome["attempts_existing"] = attempts_used
                 outcome["attempt_budget_new"] = max(0, max_tasks - attempts_used)
                 outcome["new_candidates_discovered"] = discovered_count + sum(
                     int(item.get("candidates_added", 0)) for item in outcome["discoveries"]
                 )
                 outcome["local_recovery_evidence_copied"] = recovery_evidence_copied
+                outcome["initial_internal_preparation"] = initial_internal_preparation
                 _print_json(outcome)
                 return 0
             if remaining_attempts:
