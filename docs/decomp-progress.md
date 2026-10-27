@@ -7770,7 +7770,7 @@ de campanha durante a certificação manual.
 Validação focada após a integração do catálogo/certificados e do seletor de
 seção candidata: **252 passed** em `test_decomp_campaign.py`,
 `test_campaign_coordinator.py`, `test_internal_functions.py` e
-`test_match_script.py`. Suíte completa: **1068 passed, 44 skipped** em 4m17s;
+`test_match_script.py`. Suíte completa após atingir a meta: **1068 passed, 44 skipped** em 5m53s;
 os skips são integrações opt-in ou ferramentas indisponíveis nesta máquina. Uma
 primeira execução completa teve um timeout isolado no teste stop/resume; o teste
 passou isoladamente e a repetição completa, sem validações concorrentes, passou.
