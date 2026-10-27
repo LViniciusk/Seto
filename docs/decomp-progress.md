@@ -7302,3 +7302,187 @@ versionamento.
 ## SETO-DECOMP-047 — Promoções certificadas
 
 - `0x3f2b0` — 30 instruções, source SHA-256 `a2bd95356aa91dd2b03b620f589137926e08ee47ecece48649da619c22d299b6`; origem `remote-alluka` / sessão `ses_e8539037bffetD0mNoxvrrGZ62`; dois builds MWCC certificados: `e18be26751a086b73f659ba6d4aee9a365e9701d04f51c46da2c987b0ff65834, e18be26751a086b73f659ba6d4aee9a365e9701d04f51c46da2c987b0ff65834`.
+
+## SETO-DECOMP-048 — Campanha noturna
+
+### Preparação e autorização
+
+A branch `feat/seto-decomp-048` parte da `main` pós-PR #48 (`ba157f2`). Baseline
+confirmado no SQLite preservado: EBOOT **13/206 funções, 315 instruções
+MATCHED**; PRXs **16/912**; **204 tentativas**, integridade `ok` e nenhum lease.
+O teto calculado foi **716 tentativas cumulativas** (512 novas) em até 36.000 s.
+Não se reiniciou banco, contadores, sessões ou checkpoints.
+
+A configuração local ignorada pelo Git usa `--execution-target all`, dois
+workers Luna locais com concorrência unitária cada, `remote-alluka` e um único
+CampaignRunner por segmento; Ghidra ficou em 1 slot e matcher em 2. Doctor
+confirmou hashes EBOOT/PRX/triage e MWCC, Ghidra, wibo e os três workers
+selecionados READY. `kita-server` **não** foi incluído: seu `quota_scope`
+`opencode:kita-server` continuava `suspended_quota` no SQLite, sem evidência de
+liberação. Os workers OpenAI usam somente a autenticação de assinatura já
+verificada (`subscription_included`), não uma rota de API paga. O teste existente
+`test_two_simulated_sessions_handle_distinct_tasks_and_quota_fallback` passou:
+simula quota DeepSeek suspensa apenas no respectivo scope e claim subsequente
+OpenAI, sem stop global nem perda de sessão/checkpoint; o runner não precisou de
+alteração para fallback.
+
+### Segmentos e tentativas
+
+Os segmentos foram conduzidos sequencialmente, sem CampaignRunners concorrentes.
+As tentativas novas foram **205–213**: 9/512 usadas; teto final
+**213/716**. Do primeiro início ao último fim, a janela observada cobre
+**2026-10-27 01:51:56–03:18:48 UTC** (**5.211,6 s** de tempo decorrido). A soma
+dos oito `duration_seconds` do runner é **982,8 s**; os tempos acumulados das
+inferências concluídas foram **149,7 s OpenAI** e **617,9 s Alluka**. Não houve
+falha real de quota na janela: Alluka permaneceu ativo; por isso o fallback foi
+exercitado pelo teste simulado, não por suspensão artificial de quota.
+
+| Tentativa | Candidato | Worker / quota scope | Sessão | Resultado |
+|---:|---|---|---|---|
+| 205 | `0x15b58` | `luna-01` / `openai` | `ses_e84f16af6ffepaBSGo6jOPjFjo` | `source_unchanged` |
+| 206 | `0x38b10` | `remote-alluka` / `opencode:alluka` | `ses_e84ea8443ffevDP8tShjqhBYpJ` | `source_unchanged` |
+| 207 | `0x38b10` | `remote-alluka` / `opencode:alluka` | `ses_e84ea8443ffevDP8tShjqhBYpJ` | `source_unchanged` |
+| 208 | `0x33ae0` | `remote-alluka` / `opencode:alluka` | `ses_e84d8124effephg6MLwXUKKOIJ` | `matcher_incomplete` |
+| 209 | `0x5598c` | `luna-01` / `openai` | `ses_e84d03bf0ffe41HVaf0CKTEuTE` | `source_unchanged` |
+| 210 | `0x3857c` | `remote-alluka` / `opencode:alluka` | `ses_e84cfef77ffeM023dtPSKYvoje` | `matcher_incomplete` |
+| 211 | `0x2b0f4` | `remote-alluka` / `opencode:alluka` | `ses_e84c3ed5bffexB01E0ir8H0Mrh` | `source_unchanged` |
+| 212 | `0x53bd4` | `luna-01` / `openai` | `ses_e84bebb13fferjY32UEYKVxzjH` | `source_unchanged` |
+| 213 | `0x6694` | `luna-01` / `openai` | `ses_e84a25edeffefV9NX41tFJnC52` | `source_unchanged` |
+
+Workers used: OpenAI/Luna **4 attempts** (all on `luna-01`) and Alluka/DeepSeek
+Free **5 attempts**; zero on Kita. `source_unchanged` did not count as source
+progress. The two `matcher_incomplete` results were not accepted as partial
+matches.
+
+### Certificação diferida e promoções
+
+Três snapshots locais produziram MATCHED em dois builds MWCC idênticos cada,
+mas o agente retornou o source hash sem edição e o runner preservou um diagnóstico
+matcher anterior em vez de refazer a comparação. Foi acrescentado o método
+estreito `CampaignStore.certify_deferred_match` (RED→GREEN): ele só atualiza o
+candidato quando um attempt/session já concluído está presente, o source hash
+continua sendo o último checkpoint, o log Ghidra hash-checked continua EXACT e
+os dois reports completos persistidos confirmam a mesma função, tamanho e
+object hash. Não cria nem altera linhas de `attempts`; o comando `promote`
+continua executando a recertificação de produção e a integração.
+
+Promoções finais desta campanha: **3 funções / 53 instruções novas**, levando o
+EBOOT a **16/206 funções, 368 instruções MATCHED**; PRXs permanecem **16/912**.
+
+- `0x38b10` — body de 18 instruções/72 bytes. O snapshot antigo usava
+  `FUN_00031308` e omitia o `if (p != 0) do/while` de zero; a relocação agora
+  resolve para o helper interno de endereço comprovado. Dois reports completos
+  no worktree `remote-alluka` e a promoção repetida pelo CLI confirmaram
+  18/18, sem diferenças, limitações ou relocations pendentes. Source SHA-256
+  `5bc9254aa127e95afa258cd7721381fa7f0fca08c5e5318f241bb4880fa1e3d2`; object
+  SHA-256 idêntico nos builds:
+  `055cde2b9b5a5df4222df48482f1f42cb3fb99167bfe3c03433e657b55ab83c7`.
+- `0x2b0f4` — body de 14 instruções/56 bytes. A hipótese anterior era 12/14
+  INCONCLUSIVE porque chamava os alvos como `FUN_...`; nomes de símbolo derivados
+  dos endereços comprovados (`func_0002B02C`, `func_0006AEAC`) resolveram o
+  primeiro call para o módulo em `0x2b02c` e o segundo para
+  `ModuleMgrForUser` NID `0x977DE386`, stub/target `0x6aeac`. Certificação 14/14,
+  sem diferenças, limitations ou data map. Source SHA-256
+  `08f0427ea4d5d391cbf2554aeaebf4f08416984354b174af71e83400cc6ff90e`; object
+  SHA-256 idêntico nos dois builds:
+  `1cef63e05fc670fe3c9aa680e341c577490ebb9db7758484928ebb463427ed30`.
+- `0x53bd4` — body de 21 instruções/84 bytes. A divergência era a chamada a
+  `0x54ee4`: os registradores `$a0–$a2` preservam os três parâmetros de entrada
+  e `$a3=1` está no delay slot. A hipótese C explícita com esses quatro
+  argumentos reproduziu os dois calls diretos (0x54ee4 e 0x54f60) e 21/21,
+  sem relocation issues. Source SHA-256
+  `363ba03e7993747aa47dd66ecc16b66aa18340cb2235d2177634550349df4921`; object
+  SHA-256 idêntico nos dois builds:
+  `d7c6636145c56aed9a6e3284073030cc1468b3b3d15d54d0658cd6b80ba9987d`.
+
+### Helpers internos e hipóteses locais preservadas
+
+`0x31308` foi reconstruída localmente a partir do disassembly exato. A fonte
+`func_00031308_v3.c` reproduziu 23/23 instruções em dois builds independentes,
+source SHA-256 `3edd7e5ce0c25d37c9e8fab3d108a5b7b19cb702b855421122e281766d67b330`
+e object SHA-256 idêntico `0aec5365da723040d316d981c004195701b0c58651d300e1c3cead3ad6d2b74c`.
+O matcher resolveu o `R_MIPS_26` para `0x3129c` canonicamente. Não foi inventado
+NID nem adicionada entrada de export/inventário para este helper interno; a
+integração desse tipo de alvo requer suporte específico além do fluxo export
+atual, então o helper ficou como evidência local e foi usado para resolver calls
+dos exports. `0x3129C` continua não certificado: a primeira hipótese C produziu
+88/108 bytes e a comparação completa foi recusada por seção curta; não se
+promoveu fonte parcial.
+
+As frentes locais restantes foram encerradas sem novo prompt quando a evidência
+apontou uma causa concreta sem identidade de dados ou sem hipótese estrutural
+nova:
+
+- `0x37f38`: scans usam `sllv` e dois índices distintos; as variantes locais
+  com shifts dinâmicos/separação de contadores ficaram em 232–248/264 bytes ou
+  divergiram no packing/registradores. A tentativa 210 terminou incompleta; sem
+  nova fonte de 264 bytes, não reabrir.
+- `0x3857c`: helper `0x31308` agora resolve, mas as formas locais do zero-loop e
+  do packing ficaram em 16–18/24 words; a tentativa 210 não produziu seção
+  completa de 96 bytes. Necessita nova hipótese de scheduling, não outro pedido
+  genérico ao modelo.
+- `0xD28C`: as seis variantes preservadas da 047 têm 104–140/152 bytes. O
+  disassembly exige alinhamento pré-testado, loop de words rotacionado e cauda
+  byte; as variantes booleanizaram/reordenaram o teste de NUL e não preservaram
+  o cursor/branch-delay original. Nenhuma tentativa nova foi gasta na 048.
+- `0x15b58`: recompilação confirma a primeira divergência no frame/prologue;
+  reordenar locais e marcar `Cursor` volatile manteve 3/15 words. Tentativa 205
+  não mudou a hipótese; não reabrir sem novo layout demonstrável.
+- `0x5598c`: fonte local gera 20/24 bytes porque o MWCC reutiliza a base e não
+  rematerializa o `lui`. O EBOOT tem HI16/LO16 nos dois loads; não tratar esses
+  endereços como literais sem identidade independente. Tentativa 209 não mudou
+  a fonte.
+- `0x33ae0`: as duas fontes literais geraram 28–32/36 bytes; o EBOOT contém
+  pares HI16/LO16 nos endereços usados, sem identidade de objeto nomeado. A
+  tentativa 208 permaneceu `matcher_incomplete`; sem prova nova, não reabrir.
+- `0x6694`: o melhor objeto C completo tem 200/208 bytes e ainda diverge na
+  guarda anterior ao prologue e nos ramos de sinal/zero do callback. A tentativa
+  213 retornou sem mudança; quatro formas locais não deram MATCHED.
+- `0x33b28`: o source com o call interno corretamente nomeado ainda gera
+  388/488 bytes; faltam 25 instruções, sem primeira comparação integral que
+  sustente mudança adicional.
+- `0x2f888`: as formas locais literais geraram 56–60/64 bytes. O EBOOT tem
+  HI16/LO16 para o endereço em zero-fill sem seção nomeada; sem um vínculo de
+  identidade comprovado, não foi reaberto nem tratado como simples constante.
+- `0x35f50`: o ELF confirma HI16 em `0x35f50` e LO16 em `0x35f58`, com alvo no
+  zero-fill do load segment e sem seção/objeto nomeado. O source simbólico segue
+  INCONCLUSIVE por identidade; o literal é NONMATCHING pela associação HI/LO.
+- `0x36430`, `0x44f38`, `0x3d8c8`, `0x4b29c`, `0x615fc`, `0x61664`, `0x616fc`,
+  `0x2f420`, `0x3a13c`, `0x428d8`, `0x44d04`, `0x61634` e `0x6164c` continuam
+  sem fronteira EXACT: os logs guardados dizem `NOT_FOUND`; `0x55518` e
+  `0x3a13c` deram `BOUNDARY_MISMATCH`/ranges múltiplos. Sem novo boundary
+  comprovado, não compilar nem reabrir. `0x55644`, `0x38bb8` e `0x38bc8` continuam bloqueados por
+  identidade HI16/LO16; `0x4217c`, `0x8040`, `0x302c4`, `0x44eb4` e os candidatos
+  com alvo `0xea900` não foram desbloqueados por suposição ou `--data-map`.
+
+Essa triagem esgotou as hipóteses locais seguras que tinham fronteira EXACT e
+identidade suficiente: as restantes exigem novas fronteiras, resolução
+independente de dados/calls ou uma reconstrução estrutural diferente das já
+testadas. Não se iniciou um lote amplo de todos os 58 exports nem se consumiu
+inference budget repetindo fontes sem mudança mensurável.
+
+### Estado e validação
+
+SQLite ao fechar a execução: **213 tentativas** (204 → 213), integridade `ok`,
+0 leases ativos; OpenAI e `opencode:alluka` ativos; `opencode:kita-server` e o
+scope legado `opencode` permanecem `suspended_quota`. Nenhuma sessão foi
+reiniciada e nenhum registro de tentativa foi reescrito durante a certificação
+diferida. Baseline final: EBOOT **16/368**, PRXs **16/912**. A janela usou 9 de
+512 novas inferências (**213 ≤ 716**), respeitando o teto de 10 horas, sem
+construir um segundo scheduler.
+
+Os três novos sources estão em `decomp/src/eboot/`; SQLite, backup, worktrees,
+configs `.local.toml`, sessões, logs, objetos, relatórios e experimentos locais
+continuam fora do Git. A branch `feat/seto-decomp-048` permanece sem merge.
+
+`tests/test_decomp_campaign.py`: **202 passed**, incluindo o caso RED→GREEN para
+certificação diferida sem alterar attempts e o teste simulado de fallback de
+quota. Suíte completa: **1044 passed, 44 skipped** (integrações proprietárias/
+Linux não habilitadas nesta máquina). `compileall` e `git diff --check` foram
+executados ao fechamento; CI será registrado no PR único da tarefa.
+
+### Promoções certificadas
+
+- `0x38b10` — 18 instruções, source SHA-256 `5bc9254aa127e95afa258cd7721381fa7f0fca08c5e5318f241bb4880fa1e3d2`; origem `remote-alluka` / sessão `ses_e84ea8443ffevDP8tShjqhBYpJ`; dois builds MWCC certificados: `055cde2b9b5a5df4222df48482f1f42cb3fb99167bfe3c03433e657b55ab83c7, 055cde2b9b5a5df4222df48482f1f42cb3fb99167bfe3c03433e657b55ab83c7`.
+- `0x2b0f4` — 14 instruções, source SHA-256 `08f0427ea4d5d391cbf2554aeaebf4f08416984354b174af71e83400cc6ff90e`; origem `remote-alluka` / sessão `ses_e84c3ed5bffexB01E0ir8H0Mrh`; dois builds MWCC certificados: `1cef63e05fc670fe3c9aa680e341c577490ebb9db7758484928ebb463427ed30, 1cef63e05fc670fe3c9aa680e341c577490ebb9db7758484928ebb463427ed30`.
+- `0x53bd4` — 21 instruções, source SHA-256 `363ba03e7993747aa47dd66ecc16b66aa18340cb2235d2177634550349df4921`; origem `luna-01` / sessão `ses_e84bebb13fferjY32UEYKVxzjH`; dois builds MWCC certificados: `d7c6636145c56aed9a6e3284073030cc1468b3b3d15d54d0658cd6b80ba9987d, d7c6636145c56aed9a6e3284073030cc1468b3b3d15d54d0658cd6b80ba9987d`.
