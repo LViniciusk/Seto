@@ -3357,6 +3357,8 @@ class CampaignRunner:
             "openai/gpt-6-luna",
             "opencode/deepseek-v4.1-flash-free",
         ),
+        luna_release_at: float | None = None,
+        clock: Callable[[], float] = time.time,
     ):
         self.store = store
         self.command = list(opencode_command)
@@ -3372,6 +3374,10 @@ class CampaignRunner:
             key: Path(path) for key, path in (context_worktrees or {}).items()
         }
         self.allowed_models = frozenset(allowed_models)
+        self.luna_release_at = (
+            None if luna_release_at is None else float(luna_release_at)
+        )
+        self.clock = clock
         self.worktrees = {key: Path(value) for key, value in worktrees.items()}
         self.verifier = verifier or self._verify_with_matcher_twice
         self.auto_preflight = verifier is None
@@ -5162,6 +5168,12 @@ class CampaignRunner:
             max_attempts_per_candidate=self.max_attempts_per_candidate,
         )
 
+    def _provider_gate_open(self, worker: Worker) -> bool:
+        """OpenAI stays closed until the operator's release instant."""
+        if worker.provider != "openai" or self.luna_release_at is None:
+            return True
+        return self.clock() >= self.luna_release_at
+
     def run(self, workers: Sequence[Worker], *, max_tasks: int) -> dict[str, Any]:
         if max_tasks <= 0:
             raise ValueError("max_tasks must be positive")
@@ -5305,6 +5317,32 @@ class CampaignRunner:
                     while True:
                         if stop_or_expired() or self.store.total_attempt_count() >= max_tasks:
                             return
+                        if not self._provider_gate_open(worker):
+                            has_campaign_work = bool(
+                                attempts_active
+                                or attempts_claiming
+                                or attempts_preparing
+                                or boundary_threads_remaining
+                            )
+                            if not has_campaign_work:
+                                next_eligible = self.store.next_eligible_time(
+                                    worker.execution_scope,
+                                    model_provider=worker.provider,
+                                    max_attempts_per_candidate=self.max_attempts_per_candidate,
+                                    eligible_addresses=(
+                                        None
+                                        if self.candidate_addresses is None
+                                        else sorted(self.candidate_addresses)
+                                    ),
+                                    excluded_addresses=self.excluded_addresses,
+                                )
+                                if next_eligible is None:
+                                    return
+                            remaining = float(self.luna_release_at) - self.clock()
+                            # Bounded, event-driven wait: stop/deadline and the
+                            # operator clock are re-checked without busy-looping.
+                            condition.wait(timeout=min(max(remaining, 0.05), 0.5))
+                            continue
                         if attempts_started + attempts_claiming + attempts_preparing < max_tasks:
                             attempts_claiming += 1
                             break
@@ -7015,6 +7053,21 @@ def record_inventory_promotion(path: Path, store: CampaignStore, address: str) -
     return True
 
 
+def _luna_release_timestamp(value: object) -> float | None:
+    """Parse the operator-supplied Luna release instant with an explicit offset."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("luna_release_at must be an ISO-8601 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("luna_release_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("luna_release_at must include an explicit timezone offset")
+    return parsed.timestamp()
+
+
 def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     with path.open("rb") as stream:
         value = tomllib.load(stream)
@@ -7070,6 +7123,10 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
         "max_retry_after_seconds",
     ):
         positive_number(limits, key)
+    execution = value.get("execution", {})
+    if not isinstance(execution, dict):
+        raise ValueError("campaign execution config must be an object")
+    _luna_release_timestamp(execution.get("luna_release_at"))
     refinement = value.get("refinement", {})
     if not isinstance(refinement, dict):
         raise ValueError("campaign refinement config must be an object")
@@ -9717,6 +9774,9 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 context_worktrees=recovery_source_worktrees,
                 allowed_models=config["models"]["allowlist"],
+                luna_release_at=_luna_release_timestamp(
+                    config.get("execution", {}).get("luna_release_at")
+                ),
             )
             if args.max_tasks is None:
                 max_tasks = phase_max_tasks

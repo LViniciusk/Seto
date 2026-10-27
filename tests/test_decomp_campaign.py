@@ -3303,6 +3303,123 @@ def test_pilot_candidate_filter_does_not_drain_the_rest_of_inventory(tmp_path: P
     assert store.get_task("0x3000")["status"] == "pending"
 
 
+def test_luna_gate_blocks_openai_claims_before_release(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000")])
+    free_tree = tmp_path / "free"
+    luna_tree = tmp_path / "luna"
+    free_tree.mkdir()
+    luna_tree.mkdir()
+
+    def verifier(_worktree: Path, task: Candidate, _checkpoint: dict[str, object]):
+        report = strict_report(task.address)
+        return {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    now = [1000.0]
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"free": free_tree, "luna": luna_tree},
+        verifier=verifier,
+        luna_release_at=2000.0,
+        clock=lambda: now[0],
+    )
+    result = runner.run(
+        [
+            Worker("free", "opencode", "opencode/deepseek-v4.1-flash-free"),
+            Worker("luna", "openai", "openai/gpt-6-luna"),
+        ],
+        max_tasks=1,
+    )
+
+    assert result["attempted"] == 1
+    assert [attempt["provider"] for attempt in store.list_attempts()] == ["opencode"]
+    assert not (luna_tree / ".fake-opencode-sessions.json").exists()
+
+
+def test_luna_gate_activates_openai_after_release(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    luna_tree = tmp_path / "luna"
+    luna_tree.mkdir()
+
+    def verifier(_worktree: Path, task: Candidate, _checkpoint: dict[str, object]):
+        report = strict_report(task.address)
+        return {
+            "status": "MATCHED",
+            "source_sha256": report["provenance"]["source_sha256"],
+            "matching_words": 4,
+            "total_words": 4,
+            "build_sha256": [report["provenance"]["object_sha256"]] * 2,
+            "reports": [report, report],
+        }
+
+    now = [1000.0]
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"luna": luna_tree},
+        verifier=verifier,
+        luna_release_at=1000.2,
+        clock=lambda: now[0],
+        max_duration_seconds=10,
+    )
+    result: dict[str, object] = {}
+    thread = threading.Thread(
+        target=lambda: result.update(
+            runner.run([Worker("luna", "openai", "openai/gpt-6-luna")], max_tasks=1)
+        )
+    )
+    thread.start()
+    time.sleep(0.1)
+    assert store.list_attempts() == []
+    now[0] = 1000.3
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert result["attempted"] == 1
+    assert [attempt["provider"] for attempt in store.list_attempts()] == ["openai"]
+
+
+def test_luna_gate_honors_deadline_without_openai_attempt(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    luna_tree = tmp_path / "luna"
+    luna_tree.mkdir()
+    runner = CampaignRunner(
+        store,
+        opencode_command=fake_opencode_command(tmp_path),
+        worktrees={"luna": luna_tree},
+        luna_release_at=time.time() + 3600,
+        max_duration_seconds=0.4,
+    )
+
+    result = runner.run(
+        [Worker("luna", "openai", "openai/gpt-6-luna")], max_tasks=1
+    )
+
+    assert result["attempted"] == 0
+    assert store.list_attempts() == []
+    assert not (luna_tree / ".fake-opencode-sessions.json").exists()
+
+
+def test_luna_release_timestamp_requires_an_explicit_offset() -> None:
+    parsed = decomp_campaign_module._luna_release_timestamp(
+        "2026-10-26T21:41:00-03:00"
+    )
+    assert parsed == 1793061660.0
+    assert decomp_campaign_module._luna_release_timestamp(None) is None
+    with pytest.raises(ValueError, match="timezone"):
+        decomp_campaign_module._luna_release_timestamp("2026-10-26T21:41:00")
+
+
 def test_campaign_attempt_limit_is_atomic_across_joining_runners(tmp_path: Path) -> None:
     database = tmp_path / "campaign.sqlite3"
     store = CampaignStore(database)

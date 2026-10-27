@@ -7201,3 +7201,104 @@ SQLite com **199** tentativas e integridade `ok`.
 
 - `0x3d868` — 24 instruções, source SHA-256 `1d232ac72f77ed74124612db8ae0863ad25042c4edc6967e109d71c0c04f404d`; origem `remote-alluka` / sessão `ses_e85edf733ffeJ0d7AuVhhXKAfM`; dois builds MWCC certificados: `af6b71a909cbbe3f51434bc839aaf3532f03462347c5abe103983b6d3f9adb24, af6b71a909cbbe3f51434bc839aaf3532f03462347c5abe103983b6d3f9adb24`.
 - `0x38b58` — 24 instruções, source SHA-256 `5b3bd2c8a6dbcb89fa6dc436fe9f805d159898da7c4289f9af80f6d6d2424c01`; origem `remote-alluka` / sessão `ses_e8570f94bffeNoeZBp9Aicaz2o`; dois builds MWCC certificados: `d1771b55dec3262e3e23bdc19e36f5bf50545835a46f4de14e0d7a0551255fd0, d1771b55dec3262e3e23bdc19e36f5bf50545835a46f4de14e0d7a0551255fd0`.
+
+## SETO-DECOMP-047 — Gate temporal de Luna e campanha de recuperação
+
+### Escopo e baseline
+
+A branch `feat/seto-decomp-047` parte do `main` em `946f27d` (PR #47 já
+merged). O baseline verificado é EBOOT **12/285** funções/instruções MATCHED,
+PRXs **16/912**, SQLite com **199** tentativas, integridade `ok` e nenhum lease
+ativo. O backup pré-047 foi gravado em
+`build/decomp-campaign/campaign.sqlite3.pre-047-backup`. A janela produtiva foi
+limitada a 2 h, 12 inferências novas (teto cumulativo **211**), um slot de
+Ghidra e concorrência moderada do matcher.
+
+### Gate temporal de Luna
+
+Antes de **26/10/2026 21:41 America/Fortaleza** apenas modelos gratuitos podiam
+inferir; `openai/gpt-6-luna` só poderia ser ativado automaticamente se a
+campanha ainda estivesse em execução depois desse instante, sem criar uma nova
+campanha. A menor implementação compatível foi adicionada ao `CampaignRunner`:
+
+- `execution.luna_release_at` aceita um timestamp ISO-8601 com offset explícito
+  e é convertido para epoch; timestamps sem timezone são rejeitados.
+- `_provider_gate_open` libera qualquer worker que não seja `openai` e mantém o
+  worker OpenAI esperando na condição já existente, reavaliando clock, deadline
+  e stop sem busy-loop e sem consumir tentativa.
+- O `clock` é injetável para testes e o CLI encaminha o valor do config. Nenhum
+  novo orquestrador, scheduler ou daemon foi introduzido.
+
+Quatro testes com relógio simulado cobrem bloqueio antes da liberação, ativação
+depois dela, respeito ao deadline sem tentativa OpenAI e exigência de offset
+explícito. `tests/test_decomp_campaign.py` passou com **201 testes**.
+
+### Relocações de dados e seleção de candidatos
+
+`0x55644`, `0x38BB8` e `0x38BC8` foram reabertos com motivo documentado e
+redirecionados sem consumir tentativas: seus corpos originais contêm relocações
+HI16/LO16 de dados cuja identidade não pode ser certificada sem um resolvedor
+verificado de identidade do candidato. `--data-map` é apenas consultivo e não
+substitui essa prova. Para manter o ciclo certificável, a campanha foi
+direcionada a candidatos EXACT sem relocações de dados: `0x3F2B0`, `0xD28C` e
+`0x37F38`.
+
+### Campanha 200–204
+
+A campanha rodou de **21:20:33** a **21:34:55 -03** (**884,5 s**), consumiu
+**5 de 12** tentativas novas (200–204) e encerrou sozinha (`stopped: false`)
+**6 min 05 s antes** da liberação de Luna. Todas as inferências usaram o worker
+gratuito `opencode:alluka` (`opencode/deepseek-v4.1-flash-free`); não houve
+inferência, sessão ou tentativa `openai`, e nenhuma nova campanha foi criada.
+
+| Tentativa | Função | Sessão | Resultado |
+|---:|---|---|---|
+| 200 | `0xD28C` | `ses_e854517b5ffe2L779SWp0SybSD` | `matcher_incomplete` |
+| 201 | `0xD28C` | `ses_e854517b5ffe2L779SWp0SybSD` | `matcher_incomplete` |
+| 202 | `0x37F38` | `ses_e853eccd8ffewKwQh85nEM36L8` | `matcher_incomplete` |
+| 203 | `0x37F38` | `ses_e853eccd8ffewKwQh85nEM36L8` | `matcher_incomplete` |
+| 204 | `0x3F2B0` | `ses_e8539037bffetD0mNoxvrrGZ62` | **MATCHED 30/30** |
+
+### `0x3F2B0` certificado
+
+O corpo exato de 30 instruções (120 bytes) aceita `0x61..0x7A`, `0xE0..0xFE` e
+valores ímpares em `0x100..0x17F`, retornando zero para todo o resto. A fonte
+determinística local foi compilada duas vezes pelo MWCC e comparada 30/30 words
+pelo matcher; source SHA-256
+`a2bd95356aa91dd2b03b620f589137926e08ee47ecece48649da619c22d299b6` e object
+SHA-256 `e18be26751a086b73f659ba6d4aee9a365e9701d04f51c46da2c987b0ff65834`,
+idêntico nos dois builds.
+
+O experimento local foi registrado no SQLite pelo mecanismo existente sem
+consumir tentativa. A tentativa 204 adotou a fonte registrada, foi certificada
+pelos dois builds locais e promoveu `0x3F2B0` automaticamente
+(`integrations_promoted: ["0x3f2b0"]`). A fonte integrada está em
+`decomp/src/eboot/func_0003F2B0.c`, com o mesmo SHA-256, e o inventário passou
+a **13 funções / 315 instruções**, com uma única entrada de 120 bytes para
+`0x3f2b0`.
+
+### `0xD28C` e `0x37F38`
+
+Ambos permaneceram `stalled` com `matcher_incomplete` e **nenhum score
+verificado** registrado. `0xD28C` (strcpy alinhado com pré-teste de word,
+loop rotacionado e cauda byte a byte) foi reescrito localmente em seis
+variantes; os objetos gerados ficaram entre 124 e 140 bytes, abaixo dos 152
+bytes originais, e nenhuma variante foi certificada. `0x37F38` manteve o
+diagnóstico de corpo incompleto nas duas tentativas da janela. Nenhum
+resultado parcial foi promovido.
+
+### Totais e validação
+
+SQLite final: **204 tentativas** (199 → 204), integridade `ok`, 0 leases
+ativos; `0x3f2b0` `matched` (7 tentativas, melhor 30/30), `0xd28c` `stalled`
+(5 tentativas) e `0x37f38` `stalled` (6 tentativas). EBOOT **13/315**; PRXs
+permanecem **16/912**. O teto cumulativo foi respeitado (**204 ≤ 211**) e
+apenas 5 das 12 inferências novas foram usadas. `compileall` e
+`git diff --check` estão limpos. A branch `feat/seto-decomp-047` contém apenas
+os arquivos de código, teste, inventário, documentação e a fonte certificada;
+SQLite, worktrees, configs locais, logs e checkpoints permanecem fora do
+versionamento.
+
+## SETO-DECOMP-047 — Promoções certificadas
+
+- `0x3f2b0` — 30 instruções, source SHA-256 `a2bd95356aa91dd2b03b620f589137926e08ee47ecece48649da619c22d299b6`; origem `remote-alluka` / sessão `ses_e8539037bffetD0mNoxvrrGZ62`; dois builds MWCC certificados: `e18be26751a086b73f659ba6d4aee9a365e9701d04f51c46da2c987b0ff65834, e18be26751a086b73f659ba6d4aee9a365e9701d04f51c46da2c987b0ff65834`.
