@@ -7513,13 +7513,13 @@ um bloco de prova independente por endereço.
 |---|---:|---:|---|
 | EBOOT exports | 16 | 368 | inalterada: 16/206 |
 | EBOOT internos | 66 | 320 | fora do numerador de exports |
-| `libtutoriallist.prx` internos | 12 | 24 | separados da baseline PRX |
-| `libhtml_view.prx` internos | 5 | 10 | separados da baseline PRX |
+| `libtutoriallist.prx` internos | 24 | 48 | separados da baseline PRX |
+| `libhtml_view.prx` internos | 15 | 30 | separados da baseline PRX |
 | PRX exports já certificados | 16 | 912 | baseline preservada |
 
 O catálogo `config/decomp_internal_inventory.json` mantém identidade composta
-por módulo e endereço, sem NIDs artificiais. Ele contém 104 entradas (87 EBOOT,
-12 `libtutoriallist.prx`, 5 `libhtml_view.prx`); todas as 83 entradas MATCHED
+por módulo e endereço, sem NIDs artificiais. Ele contém 127 entradas (88 EBOOT,
+24 `libtutoriallist.prx`, 15 `libhtml_view.prx`); todas as 105 entradas MATCHED
 têm boundary EXACT, SHA-256 da fonte, dois SHA-256 de objetos idênticos e
 referência/digest de certificado. Cada certificado local registra os dois
 relatórios completos de `match_function.py`. Esses dados internos não alteram
@@ -7614,9 +7614,55 @@ Para comparar funções de `.sceStub.text` com objetos relocáveis produzidos em
 separadamente ao comparador e anotado na proveniência. Isso preserva a seção
 original como autoridade de endereço e não relaxa o gate de match.
 
+### Segunda rodada — mais funções internas PRX
+
+Sem tocar no SQLite nem gastar inferências, a segunda rodada retomou apenas
+candidatos PRX ainda não catalogados. Os 22 alvos abaixo têm boundary `EXACT`
+individual no Ghidra, são funções de duas instruções (`jr ra; nop`) em
+`.sceStub.text`, não têm calls/data references e passaram duas compilações e
+comparações integrais 2/2. O catálogo agora registra 105 funções internas
+MATCHED (66 EBOOT + 39 PRX), 398 instruções no total.
+
+- `libtutoriallist.prx`: `0x25d0`, `0x2610`, `0x2638`, `0x2720`, `0x2738`,
+  `0x2740`, `0x2748`, `0x2750`, `0x3758`, `0x3768`, `0x3770`, `0x3780`;
+- `libhtml_view.prx`: `0x1f04`, `0x2354`, `0x235c`, `0x2364`, `0x295c`,
+  `0x2adc`, `0x2d0c`, `0x2edc`, `0x2ee4`, `0x2eec`.
+
+Hashes da fonte e do objeto (o último é igual nos dois builds independentes):
+
+| Módulo@endereço | SHA-256 da fonte | SHA-256 do objeto |
+|---|---|---|
+| `libhtml_view.prx@0x1f04` | `e9940318caf4d6847f3b9cb26361a5714b9d0965d46611e3af132b47f7db81ae` | `5e2328f0153bd5fc08dce6ca1c2dc8b90ce158d28e00697e1efa03401ef7e676` |
+| `libhtml_view.prx@0x2354` | `ba40e679edd0581c02560470a85f96e3f01ab8d108f3b0ac47dbb845299cca95` | `3387d6eb87568d2408ea740dd2a7a585b2dbc6811e6b92a8a543eca81fc807cd` |
+| `libhtml_view.prx@0x235c` | `49eed1d523d74dc67e2f7d43d3aff081b7f1e20d82ef0b19837c1eb62656130c` | `1bb3f21cd3800223fbd21ca1c5fc1f18319b7d9723157e9b1c5b82776cb55be2` |
+| `libhtml_view.prx@0x2364` | `efc63d0d7a8b223ae5a633ada00c4c0ed40b59195f381f2f432595c7c617b014` | `81ab85fd5fd9254c6e938050f8cac09eeb9915459bd269e5d97b16293df1e5f8` |
+| `libhtml_view.prx@0x295c` | `6111c6f3267d3ba4185d1889bd72d07b518f2af2b719faa7d9827517ad6c69bf` | `e744dc2925daafaa0d477dceb08745f3cd5c38da3d2af0578b62f5221f29e889` |
+| `libhtml_view.prx@0x2adc` | `2f34191aebf3c8979f05d9ea55b024173ba1fe44b9aa25b03d558aad6c5bf435` | `35eade700ad1e44ee3a66bafb0ec779e7bb25ea39f1659d5c522761fd3231a71` |
+| `libhtml_view.prx@0x2d0c` | `40c92b9ed707035a85b45ccba68de252d1f68187315d393c1263cf70ec9bfcf9` | `34fe5d1b8e44b42e4fa4334500666a0b549a160b92f7ca5905f3da2d806bb134` |
+| `libhtml_view.prx@0x2edc` | `2a7f31b5e54a98ec068b5e6cf5ff55b29aeb8223539a84c65a374495e3058238` | `d4b40d6bdca69773f2221dc9cfab05d7b359c02fceb14f6530bb7db36b9e0de7` |
+| `libhtml_view.prx@0x2ee4` | `2fedebc3668b7717079f2df62a0a8dfed401a2460b79344c4d574ed27cbb0032` | `febc3b45bbad65507163b9a04fdffc8067418dedef74c0cf823c9b9a842663e3` |
+| `libhtml_view.prx@0x2eec` | `a83eacda7573db42f32c38e7a4e3f9dd3832bb9a9b0386f818176017b21a5a84` | `dc319bad7c0ff61f922a6597e09974e12e22c62b094708f9dd0b27f3ebdc0428` |
+| `libtutoriallist.prx@0x25d0` | `e7ea07628214ab73c9931a918c587e7a73a94419e418391f4405c97fe9df25cb` | `27f8dbd05cf87ad410cebab1336684a2ecab1297e52011ab1eaebb637adc7558` |
+| `libtutoriallist.prx@0x2610` | `dc2bf50e007ec0d0ee55b09d84ceb5e86731555402d7cd5d05f86abdd73a90b3` | `251db4a9160df0b4d20fc4e78bae74c392694f1f821c49628ce5dfea1f076599` |
+| `libtutoriallist.prx@0x2638` | `d245d8602b43edb3814484abbd0be82b9c89be920e8d2355871aa606ffebf051` | `a4bdd1bb29bff5475e7e63f1ab0ae57a3039012b9082d55e20755651e8093093` |
+| `libtutoriallist.prx@0x2720` | `12871209fe0375aa42c96d62aac62c5c6e501f8c9b207e79907088d82815d7ad` | `012e17e47504c638ebf0b489eccbdb186c5d88f8c38f90e9aef046ebf6af79f2` |
+| `libtutoriallist.prx@0x2738` | `816bd1c118385068f751704247fed7516cc70d42aa13597ea586f0ca2f1dfca5` | `4d68a1185144f4ed1d1c56f1d63d90d5808a2456068f2e6ee09a6f5e79cf4ac5` |
+| `libtutoriallist.prx@0x2740` | `380f28946a1944c3a5e39afabc44d2180df96f1cdfe998707e03db9f2ce200d1` | `46cbe8439e095a6b43cd21fb0d36a93104e1f711ec5dbf6cbbbe8f4d3a81346c` |
+| `libtutoriallist.prx@0x2748` | `7b052e281904b330a71b2714279b841a9cb23507155fbae38107a803928b673f` | `c356bcf2802fd608a20b72bf1a2964f942b4ea8c774a6198c60caf1c33993f2c` |
+| `libtutoriallist.prx@0x2750` | `6f625c843c2b611cc8719a797efce54bfefd47217e1776246b11f21714e70b1d` | `f4a282ffaf6fc5e7ef8982e0db31ce3d79b40bd107b3afca5b9d51b769f3814b` |
+| `libtutoriallist.prx@0x3758` | `147d645e591301c8e6ef32d34499f510194c461335dafe35a36a8e534cac992b` | `fb13461b6fe44b1b39100c7f6a527ee9eec6e22c3edc50b6838f5d423d571bd2` |
+| `libtutoriallist.prx@0x3768` | `a37cebf822cc592bcdc285e1752814639d6156e604503093d78a075e28e24e54` | `e7eb8d9bcc59c264515ac4785ed3a77399f1b3765c5075c6e0e724d5f4a03e1c` |
+| `libtutoriallist.prx@0x3770` | `c9662a9290a4caf13e725ee3aa3673677ba590200c719a38bec23ecd80e1e022` | `d6e0d6a236d9b0ab8bd591e171e1c37d4172a665a190c40b502925a50738545e` |
+| `libtutoriallist.prx@0x3780` | `0c45066a4fe175d4cbab7758c6fd7ef74e844b8d5828b976b31fef6072201aa0` | `cbab3ac7671ee10a0165eb84c0907688352afeff4cd0ad2d978dd141a5255db4` |
+
+A tentativa exploratória em EBOOT `0x61a3c` permaneceu `NONMATCHING` (3/5): o
+literal candidato `0x41bae8` não tem relocation, ao contrário do par HI16/LO16
+original cuja identidade de dados segue não resolvida. O resultado foi registrado
+no catálogo para impedir repetição da mesma hipótese; não houve promoção.
+
 ### Hipóteses ainda abertas
 
-O catálogo preserva os resultados não MATCHED sem promovê-los: 9 NONMATCHING,
+O catálogo preserva os resultados não MATCHED sem promovê-los: 10 NONMATCHING,
 5 UNMATCHED, 4 INCOMPLETE, 1 BLOCKED_CALLING_CONVENTION, 1
 BOUNDARY_VERIFIED_NO_SOURCE e 1 INCONCLUSIVE_IDENTITY entre os candidatos EBOOT
 originais. Permanecem, entre outros, o alvo de dados sem identidade `0x3a90c`,
