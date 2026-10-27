@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from campaign_coordinator import ContinuousCampaignCoordinator, DiscoveryResult
 from decomp_ssh import (
     MAX_PROMPT_BYTES,
     MAX_RESPONSE_BYTES,
@@ -5421,7 +5422,13 @@ class CampaignRunner:
             return True
         return self.clock() >= self.luna_release_at
 
-    def run(self, workers: Sequence[Worker], *, max_tasks: int) -> dict[str, Any]:
+    def run(
+        self,
+        workers: Sequence[Worker],
+        *,
+        max_tasks: int,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
         if max_tasks <= 0:
             raise ValueError("max_tasks must be positive")
         if len({worker.worker_id for worker in workers}) != len(workers):
@@ -5447,11 +5454,15 @@ class CampaignRunner:
         self.store.recover_expired()
         if self.store.stop_requested():
             return {"attempted": 0, "outcomes": {}, "stopped": True}
-        deadline = (
+        segment_deadline = (
             None
             if self.max_duration_seconds is None
             else time.monotonic() + self.max_duration_seconds
         )
+        if deadline is None:
+            deadline = segment_deadline
+        elif segment_deadline is not None:
+            deadline = min(deadline, segment_deadline)
         outcomes: list[str] = []
         condition = threading.Condition()
         boundary_claim_lock = threading.Lock()
@@ -9468,6 +9479,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="restrict productive execution to explicit inventory addresses; repeatable",
     )
     run.add_argument("--max-tasks", type=int, default=None, help="cumulative SQLite attempt ceiling")
+    night = subparsers.add_parser(
+        "night-run",
+        help="run sequential bounded segments with queue-empty EBOOT rediscovery",
+    )
+    night.add_argument("--confirm", action="store_true", help="confirm this model execution campaign")
+    night.add_argument("--productive", action="store_true", help="expand beyond the pilot after verified authorization")
+    night.add_argument("--allow-openai-usage", action="store_true", help="confirm use of the configured OpenAI account")
+    night.add_argument("--allow-free-model-usage", action="store_true", help="confirm requests to the exact allowlisted free model")
+    night.add_argument(
+        "--execution-target",
+        choices=("local", "remote", "all"),
+        default="local",
+        help="select configured local, SSH, or both worker transports (default: local)",
+    )
+    night.add_argument(
+        "--all-eligible",
+        action="store_true",
+        help="select every non-MATCHED, non-blocked candidate with an exact boundary",
+    )
+    night.add_argument(
+        "--candidate-address",
+        action="append",
+        default=None,
+        help="restrict productive execution to explicit inventory addresses; repeatable",
+    )
+    night.add_argument("--max-tasks", type=int, default=None, help="cumulative SQLite attempt ceiling")
+    night.add_argument(
+        "--duration-seconds",
+        type=int,
+        default=None,
+        help="global wall-clock deadline for every segment (defaults to configured maximum)",
+    )
     return parser
 
 
@@ -9708,7 +9751,8 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             return 0
-        if args.command == "run":
+        if args.command in {"run", "night-run"}:
+            night_run = args.command == "night-run"
             if not args.confirm:
                 raise ValueError("run requires --confirm; preparation commands never start model sessions")
             productive_candidate_addresses = productive_candidate_selection(
@@ -9722,10 +9766,16 @@ def main(argv: list[str] | None = None) -> int:
                 for address in productive_candidate_addresses
             ):
                 raise ValueError("certified baseline addresses cannot be selected for productive retry")
-            if args.continuous and not config.get("execution", {}).get("continuous", False):
+            if getattr(args, "continuous", False) and not config.get("execution", {}).get("continuous", False):
                 raise ValueError("continuous mode is disabled in config")
-            if args.continuous and not args.productive:
+            if getattr(args, "continuous", False) and not args.productive:
                 raise ValueError("--continuous is reserved for the separately authorized productive campaign")
+            if night_run and not config.get("execution", {}).get("continuous", False):
+                raise ValueError("night-run requires continuous mode to be enabled in config")
+            if night_run and (not args.productive or not args.all_eligible):
+                raise ValueError("night-run requires --productive --all-eligible so new exports can join discovery")
+            if night_run and args.duration_seconds is not None and args.duration_seconds <= 0:
+                raise ValueError("--duration-seconds must be positive")
             if args.productive and not (
                 config.get("execution", {}).get("pilot_verified", False)
                 and config.get("execution", {}).get("productive_expansion_authorized", False)
@@ -9886,6 +9936,12 @@ def main(argv: list[str] | None = None) -> int:
                     max(1, len(workers)) * 2,
                 )
                 phase_duration = float(pilot["max_duration_seconds"])
+            if night_run:
+                configured_duration = float(limits["max_duration_seconds"])
+                requested_duration = float(args.duration_seconds or configured_duration)
+                if requested_duration > configured_duration:
+                    raise ValueError("--duration-seconds cannot exceed the configured campaign duration")
+                phase_duration = requested_duration
             local_ghidra = tomllib.loads(
                 (REPO_ROOT / config["toolchain"]["ghidra_local_config"]).read_text(encoding="utf-8")
             )["ghidra"]
@@ -10041,6 +10097,200 @@ def main(argv: list[str] | None = None) -> int:
                     f"cumulative attempt ceiling {max_tasks} is below the SQLite total {attempts_used}"
                 )
             remaining_attempts = max_tasks - attempts_used
+            if night_run:
+                from internal_functions import (
+                    load_function_manifest,
+                    load_internal_catalog,
+                    select_internal_discoveries,
+                )
+
+                def run_segment(global_deadline: float, cumulative_ceiling: int) -> dict[str, Any]:
+                    return runner.run(
+                        workers,
+                        max_tasks=cumulative_ceiling,
+                        deadline=global_deadline,
+                    )
+
+                def discover_eboot_exports(global_deadline: float) -> DiscoveryResult:
+                    nonlocal candidates, inventory
+                    triage_path = REPO_ROOT / str(config["inputs"]["triage_report"])
+                    inventory_digest = hashlib.sha256(
+                        triage_path.read_bytes() + inventory_path.read_bytes()
+                    ).hexdigest()
+                    if time.monotonic() >= global_deadline:
+                        return DiscoveryResult(
+                            "eboot-exports",
+                            inventory_digest,
+                            exhausted_reason="global deadline reached before export discovery",
+                        )
+                    matched_addresses = list(certified_addresses)
+                    matched_addresses.extend(
+                        task["address"]
+                        for task in store.list_tasks()
+                        if task["status"] == "matched"
+                    )
+                    discovered = discover_proven_exports(
+                        triage_path,
+                        candidates,
+                        matched_addresses=matched_addresses,
+                    )
+                    inserted = append_inventory_candidates(inventory_path, discovered)
+                    if inserted:
+                        candidates, inventory = load_inventory(inventory_path)
+                        store.seed(candidates, excluded_addresses=certified_addresses)
+                    return DiscoveryResult(
+                        "eboot-exports",
+                        inventory_digest,
+                        candidates_added=inserted,
+                        eligible_work=inserted > 0,
+                        exhausted_reason=(
+                            None
+                            if inserted
+                            else "triage contains no additional unique, relocation-proven EBOOT exports"
+                        ),
+                    )
+
+                def discover_internal_hints(global_deadline: float) -> DiscoveryResult:
+                    manifest_path = REPO_ROOT / "build/seto049/function-manifests/EBOOT-bd9cc98e94c7eae0.json"
+                    catalog_path = REPO_ROOT / "config/decomp_internal_inventory.json"
+                    fingerprint = hashlib.sha256()
+                    for evidence_path in (manifest_path, catalog_path):
+                        if evidence_path.is_file() and not evidence_path.is_symlink():
+                            fingerprint.update(evidence_path.read_bytes())
+                    if time.monotonic() >= global_deadline:
+                        return DiscoveryResult(
+                            "eboot-internal",
+                            fingerprint.hexdigest(),
+                            exhausted_reason="global deadline reached before internal discovery",
+                        )
+                    if not manifest_path.is_file() or manifest_path.is_symlink():
+                        return DiscoveryResult(
+                            "eboot-internal",
+                            fingerprint.hexdigest(),
+                            details={"manifest": "missing_or_unsafe"},
+                        )
+                    manifest = load_function_manifest(manifest_path)
+                    internal_catalog = load_internal_catalog(catalog_path)
+                    source_root = str(REPO_ROOT / "src")
+                    if source_root not in sys.path:
+                        sys.path.insert(0, source_root)
+                    from seto import elf as seto_elf
+
+                    eboot_module = seto_elf.parse(
+                        REPO_ROOT / str(config["inputs"]["eboot"])
+                    )
+                    text_section = eboot_module.require_section(".text")
+                    tasks = store.list_tasks()
+                    matched_exports = {
+                        int(address, 0) for address in certified_addresses
+                    }
+                    matched_exports.update(
+                        int(task["address"], 0)
+                        for task in tasks
+                        if task["status"] == "matched"
+                    )
+                    by_address = {item.address: item for item in manifest.functions}
+                    matched_calls = {
+                        ("EBOOT", target)
+                        for address in matched_exports
+                        for item in [by_address.get(address)]
+                        if item is not None
+                        for target in item.calls
+                    }
+                    hints = select_internal_discoveries(
+                        manifest,
+                        known_exports={
+                            ("EBOOT", candidate.numeric_address)
+                            for candidate in candidates
+                        }
+                        | {("EBOOT", address) for address in matched_exports},
+                        known_internal=internal_catalog,
+                        calls_from_matched_exports=matched_calls,
+                        evidence_path=manifest_path.relative_to(REPO_ROOT).as_posix(),
+                        limit=64,
+                        module_address_range=(
+                            text_section.addr,
+                            text_section.addr + text_section.size,
+                        ),
+                        known_exact_ranges=(
+                            [
+                                (
+                                    "EBOOT",
+                                    int(str(item["address"]), 0),
+                                    int(item["size_bytes"]),
+                                )
+                                for item in inventory.get("baseline", {}).get(
+                                    "eboot_matched_ranges", []
+                                )
+                            ]
+                            + [
+                                ("EBOOT", candidate.numeric_address, candidate.size_bytes)
+                                for candidate in candidates
+                                if candidate.boundary_status == "EXACT"
+                                and candidate.size_bytes > 0
+                            ]
+                            + [
+                                ("EBOOT", int(task["address"], 0), int(task["size_bytes"]))
+                                for task in tasks
+                                if task.get("boundary_status") == "EXACT"
+                                and int(task.get("size_bytes", 0)) > 0
+                            ]
+                        ),
+                    )
+                    return DiscoveryResult(
+                        "eboot-internal",
+                        fingerprint.hexdigest(),
+                        details={
+                            "enumerated_functions": len(manifest.functions),
+                            "unverified_hints_remaining": len(hints),
+                            "exact_catalog_entries": sum(
+                                item.boundary_status == "EXACT" for item in internal_catalog
+                            ),
+                            "matched_exports_used_for_call_ranking": len(matched_exports),
+                        },
+                    )
+
+                def inspect_prx_scope(global_deadline: float) -> DiscoveryResult:
+                    fingerprint = hashlib.sha256()
+                    for module_key in ("libtutoriallist", "libhtml_view"):
+                        module_path = REPO_ROOT / str(config["inputs"][module_key])
+                        if module_path.is_file() and not module_path.is_symlink():
+                            fingerprint.update(module_path.name.encode("utf-8"))
+                            fingerprint.update(hashlib.sha256(module_path.read_bytes()).digest())
+                    return DiscoveryResult(
+                        "prx-modules",
+                        fingerprint.hexdigest(),
+                        details={
+                            "modules": ["libtutoriallist.prx", "libhtml_view.prx"],
+                            "baseline_matched_functions": int(
+                                inventory.get("baseline", {}).get("prx_matched_functions", 0)
+                            ),
+                            "action": "PRX matching uses the separate module/address catalog, not EBOOT SQLite",
+                            "deadline_reached": time.monotonic() >= global_deadline,
+                        },
+                    )
+
+                coordinator = ContinuousCampaignCoordinator(
+                    run_segment=run_segment,
+                    discovery_steps=(
+                        discover_eboot_exports,
+                        discover_internal_hints,
+                        inspect_prx_scope,
+                    ),
+                    attempts_used=store.total_attempt_count,
+                    stop_requested=store.stop_requested,
+                    max_tasks=max_tasks,
+                    duration_seconds=phase_duration,
+                )
+                outcome = coordinator.run()
+                outcome["attempts_existing"] = attempts_used
+                outcome["attempt_budget_new"] = max(0, max_tasks - attempts_used)
+                outcome["new_candidates_discovered"] = discovered_count + sum(
+                    int(item.get("candidates_added", 0)) for item in outcome["discoveries"]
+                )
+                outcome["local_recovery_evidence_copied"] = recovery_evidence_copied
+                _print_json(outcome)
+                return 0
             if remaining_attempts:
                 # `CampaignRunner` passes this value to SQLite's atomic
                 # max_total_attempts guard, so it must remain the cumulative

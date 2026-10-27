@@ -116,6 +116,7 @@ class MatchRecord:
     includes: tuple[str, ...]
     defines: tuple[str, ...]
     data_map: str | None = None
+    candidate_section: str | None = None
 
     def summary(self) -> dict:
         return {
@@ -139,6 +140,7 @@ class MatchRecord:
                 "includes": list(self.includes),
                 "defines": list(self.defines),
                 "data_map": self.data_map,
+                "candidate_section": self.candidate_section,
             },
         }
 
@@ -166,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--function", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--section", default=".text")
+    parser.add_argument(
+        "--candidate-section",
+        default=None,
+        help="candidate object section (defaults to the original section)",
+    )
     parser.add_argument(
         "--size",
         type=lambda value: int(value, 0),
@@ -299,6 +306,7 @@ def build_match_argv(
     config: Path | None,
     data_map: Path | None = None,
     size: int | None = None,
+    candidate_section: str | None = None,
 ) -> list[str]:
     """Build the ``python -m seto match ... --json`` command line.
 
@@ -322,6 +330,8 @@ def build_match_argv(
     ]
     if size is not None:
         argv += ["--size", str(size)]
+    if candidate_section is not None:
+        argv += ["--candidate-section", candidate_section]
     if symbol:
         argv += ["--candidate-symbol", symbol]
     if data_map is not None:
@@ -413,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
         config=arguments.config,
         data_map=arguments.data_map,
         size=arguments.size,
+        candidate_section=arguments.candidate_section,
     )
 
     print("comparing:", file=sys.stderr)
@@ -459,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         includes=tuple(includes),
         defines=tuple(arguments.define),
         data_map=None if arguments.data_map is None else str(arguments.data_map),
+        candidate_section=arguments.candidate_section,
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
 

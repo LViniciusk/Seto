@@ -7487,3 +7487,156 @@ executados ao fechamento. CI no push/PR #49 passou nos **8 jobs** Ubuntu/Windows
 - `0x38b10` — 18 instruções, source SHA-256 `5bc9254aa127e95afa258cd7721381fa7f0fca08c5e5318f241bb4880fa1e3d2`; origem `remote-alluka` / sessão `ses_e84ea8443ffevDP8tShjqhBYpJ`; dois builds MWCC certificados: `055cde2b9b5a5df4222df48482f1f42cb3fb99167bfe3c03433e657b55ab83c7, 055cde2b9b5a5df4222df48482f1f42cb3fb99167bfe3c03433e657b55ab83c7`.
 - `0x2b0f4` — 14 instruções, source SHA-256 `08f0427ea4d5d391cbf2554aeaebf4f08416984354b174af71e83400cc6ff90e`; origem `remote-alluka` / sessão `ses_e84c3ed5bffexB01E0ir8H0Mrh`; dois builds MWCC certificados: `1cef63e05fc670fe3c9aa680e341c577490ebb9db7758484928ebb463427ed30, 1cef63e05fc670fe3c9aa680e341c577490ebb9db7758484928ebb463427ed30`.
 - `0x53bd4` — 21 instruções, source SHA-256 `363ba03e7993747aa47dd66ecc16b66aa18340cb2235d2177634550349df4921`; origem `luna-01` / sessão `ses_e84bebb13fferjY32UEYKVxzjH`; dois builds MWCC certificados: `d7c6636145c56aed9a6e3284073030cc1468b3b3d15d54d0658cd6b80ba9987d, d7c6636145c56aed9a6e3284073030cc1468b3b3d15d54d0658cd6b80ba9987d`.
+
+## SETO-DECOMP-049 — descoberta contínua e funções internas
+
+### Resultado do ciclo
+
+O coordenador `night-run` executou um segmento com o SQLite autoritativo já
+existente. O ciclo terminou com `external_work_remains`: 4 tentativas no total
+(1 falha, 3 stalled), sem novo export MATCHED e sem reset de banco, worktrees,
+sessões ou checkpoints. O contador final continuou em 217 tentativas cumulativas
+(213 na entrada + 4); `PRAGMA integrity_check` retornou `ok` e não há leases
+ativos. A janela configurada ficou limitada a 10 horas e o teto global a 725
+tentativas (no máximo 512 novas); a campanha não ficou ociosa artificialmente.
+
+A enumeração read-only do EBOOT no projeto Ghidra existente identificou 1.887
+funções candidatas. O manifesto de descoberta é
+`build/seto049/function-manifests/EBOOT-bd9cc98e94c7eae0.json`, SHA-256
+`bd9cc98e94c7eae07fa52c3cd219a14544cb917d897d93ef7e4eb135eb2abad8`.
+As entradas do manifesto foram usadas somente como pistas: cada endereço
+promovido recebeu prova independente `EXACT` com `SetoAnalyzeEntry.java`. O
+script agora aceita várias entradas em uma única inicialização JVM, preservando
+um bloco de prova independente por endereço.
+
+| Categoria | MATCHED | Instruções | Estado da contagem de exports |
+|---|---:|---:|---|
+| EBOOT exports | 16 | 368 | inalterada: 16/206 |
+| EBOOT internos | 66 | 320 | fora do numerador de exports |
+| `libtutoriallist.prx` internos | 12 | 24 | separados da baseline PRX |
+| `libhtml_view.prx` internos | 5 | 10 | separados da baseline PRX |
+| PRX exports já certificados | 16 | 912 | baseline preservada |
+
+O catálogo `config/decomp_internal_inventory.json` mantém identidade composta
+por módulo e endereço, sem NIDs artificiais. Ele contém 104 entradas (87 EBOOT,
+12 `libtutoriallist.prx`, 5 `libhtml_view.prx`); todas as 83 entradas MATCHED
+têm boundary EXACT, SHA-256 da fonte, dois SHA-256 de objetos idênticos e
+referência/digest de certificado. Cada certificado local registra os dois
+relatórios completos de `match_function.py`. Esses dados internos não alteram
+`config/decomp_campaign_inventory.json` nem o SQLite de exports.
+
+As 13 novas funções EBOOT certificadas neste ciclo são:
+
+| Endereço | Instruções | Endereço | Instruções | Endereço | Instruções |
+|---|---:|---|---:|---|---:|
+| `0x2fc88` | 8 | `0x4e514` | 8 | `0x4f6b4` | 8 |
+| `0x2b424` | 8 | `0x5cfec` | 8 | `0x3aa94` | 8 |
+| `0x3acb8` | 9 | `0x3c6e8` | 9 | `0x6a8ec` | 8 |
+| `0x4dcf0` | 8 | `0x4ebac` | 8 | `0x4ec48` | 8 |
+| `0x29004` | 7 |  |  |  |  |
+
+Mais 13 matches EBOOT anteriormente registrados no catálogo receberam
+certificados reproduzíveis com os dois relatórios completos; os 66/66 resultados
+MATCHED agora têm cobertura de certificado. Suas fontes e objetos podem ser
+auditados pelos campos `source_sha256`, `object_sha256s`, `certificate_path` e
+`certificate_sha256` do catálogo.
+
+Hashes das 43 certificações integradas/fechadas nesta continuação (o hash do
+objeto listado é idêntico nos dois builds independentes):
+
+| Módulo@endereço | SHA-256 da fonte | SHA-256 do objeto |
+|---|---|---|
+| `EBOOT@0x8f0` | `f2d830e102caf5c29502b5a87f9acd51bd9e23a41eb3c56f57ab2e588ac5ad86` | `ebdb27cee9d361d70a7544a3b2f13cd8d7aa7f826a381fb35324d68e3068ae83` |
+| `EBOOT@0x5bac` | `ed0b16b9bd70f92f7d4c9528dd71a4c50d912b83a647b33c5c965115c426fa8f` | `d465adf18f5bd624aff531d317d3bf6e31aadf39ad1da5f0e4f3ee5fed332cf4` |
+| `EBOOT@0x26d88` | `5582d5ef74d82d92e37d9514977b9affea9616dd455fbafe11bda02304d39ca0` | `bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05` |
+| `EBOOT@0x29004` | `c084057f9bbd63a9235513b00dde49e28a765a2cc7428f784a873ef0fb3207dd` | `d79c5e4cf88fef1f206d2955bc4c3f48842ec2953c79c5acd226851508b58bd8` |
+| `EBOOT@0x291b4` | `d60e29477389d5b632dd6a6021b122f9e9da65468605cd5d16bd68ebe115e31c` | `db0b9ab0fb57f3df5045e647d484fea5a09316d578d5fef2294553871a66df56` |
+| `EBOOT@0x2b424` | `e38fc3d493087b17d7c816f7de0301ae6db893c03802e23c9ef84eb29bb0e740` | `0786e8a54d231db6fead99ed96eb167ef72b49a50c9093c45d91af8c616b70b8` |
+| `EBOOT@0x2bc34` | `191e68e2cbc63e3dcc5871e583cf5565b03858bfd4325ac31ff31266409f76a7` | `0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c` |
+| `EBOOT@0x2ce44` | `8b7e4bca1d6294eafaa240a28725f47c12448223836127d4b599c979ba7d2b1b` | `de13f13bf5a89cbb6a1740b8c7e4a65e91347c70c7b8e4419f9c1cd47838ea35` |
+| `EBOOT@0x2fbb8` | `ea42b2010ee1df482135745cb386f19e169054af5df41307c24314c7682646bc` | `c63e294c0281daa4ebc170dbb9223461978ae4b4c611237d4945219da4de44b6` |
+| `EBOOT@0x2fc88` | `3803128b1a8b4a0513f135fbed65ccf71371dc7ffffd495f7d877d1908e3891d` | `bd78f275d4ead61e33c2bf23823f1cf7573ba006e57c1f8b20eb92e20c12d09e` |
+| `EBOOT@0x3aa58` | `64f3e3f98044c1c3251c82bd0ce40d6a4905492834383c5a89a37ba02cfb0b21` | `cc17f5eaa70f2029b0b19efb66a7b781b163a29fe8d41c188d1486f9e77e089c` |
+| `EBOOT@0x3aa94` | `a83c4895d569af255e9149fda819cef2ef56c619f1d82c6d2b09a8ca4e7ba817` | `48f0c68fd9752461bea9825cfb70afa23f725f65309b9caf02b9a109db2b8895` |
+| `EBOOT@0x3acb8` | `08314eca1e11b8dd65dca873ca91d34d0c16c4b0a8440c4e696d1513c7d3a694` | `8ae8abc53a63d5b8f99dfaf95db7560a9f22555a4d4af9b12696cde10331efad` |
+| `EBOOT@0x3c6e8` | `043dd1430ead0baf8853376909888500d34f604d25571dd0bc366c34e81c8e78` | `e7b7df482d7621b97b8f0fbaaec897d84735b1b2b7b2f8e21ee5446258605061` |
+| `EBOOT@0x4ca94` | `0d2dedae1b9444b0fff63fb73f8d797d47c371835b47987fc18497b0581aefc0` | `2d3ed87d17689d27ff79b6f8e89dd38c25dbb80b1a7d37f44281bed73a44d57c` |
+| `EBOOT@0x4ca9c` | `3bcc618ac9d7eaaa1a829e8839324abc3ea3cb3008647129c5e48ed6c7104eec` | `abb73fcf12bf205de71561b92650334a9816b855e5ae08a1fbd047ba3b573551` |
+| `EBOOT@0x4dcf0` | `ceda010365f8146ce706e4ddc9604f7f12aae3f362e6f0a50eebe9f800b6b2a6` | `dc5eab87f16f9a9829b3e82a3b42766e5b3c81cd4dc1da81e7f998facab22909` |
+| `EBOOT@0x4e514` | `0ff9982cff59a6cc301415fe6839c0e160a4679fe8975f4432e636dec598fdd2` | `8fa005dcb3100c197ae3b3f74ecff410be498d88de45fdb65ea05ecdc636af80` |
+| `EBOOT@0x4e5a8` | `cde237cb5635ae676e4a8378f44937f0c08a4057772bc00c90641ba02726f65d` | `bd4ec606efc3c8744bb8f981d6dd723ff17f4c6456798ef1f974971d423a258f` |
+| `EBOOT@0x4ebac` | `7cfe00e69c06a6bba2dc42d211ea6ef20e79bb248e35fd6c84d4f697520c081d` | `993d56b0bf1e446066300436080e2bb41395ff48ec7be1985b1c5748bd605437` |
+| `EBOOT@0x4ec48` | `69d9ca1f263b5493eb688f6e5a47e8841a6e67b4977b236238d2776136575968` | `60f62a7cfabf49f1fe89ea9607527954723aa014971171bb625ec92f8b4458c7` |
+| `EBOOT@0x4f6b4` | `e16dd71a853995c1a035fa1c1056e511bc7e64f0546d538005e9e38bec1bad14` | `b96f5ae8719afc7c861a40086b9ad3df238e6825b51ea9ebb7d722307a1c9668` |
+| `EBOOT@0x4f748` | `e0613d260b099e51375aa3fe428c2d7728a2b9fc3f24d3a30c075d1c9be5d0d3` | `238f7cb969a89eca1f2afa14f563e99fe0d83e8ed32cbeaf26e6cda8f38b503a` |
+| `EBOOT@0x4f7ac` | `ed071ae2ccc2e11b67d4dcd4f26e0d1d1344ed59289d52b4b565473ae34bd7b5` | `1e4d59512e6ba428c216a06c3698829307ab3a2f8911f751a87c0a008b1fc608` |
+| `EBOOT@0x5cfec` | `d5be131fefd171d83b22deedb5b0475d6ab8d9c303329c47600c34b4fcc4da2e` | `a8b2463754b948820671ce7e1d7c08eb249d8d66477a48aadb32b0ebbbbc9956` |
+| `EBOOT@0x6a8ec` | `b2356d88937d75a35e6e89ca032428dc1ef6be23bd86b329200b21a6c5e93ccf` | `e0bbcd25a2012c454e00780fec52f0e2428a4510db4c17e4467efa8a3fb85659` |
+| `libhtml_view.prx@0x854` | `a49894103fd769cfc2e3dfe559355fadf5326ef8cc8dfc153ec7b2582b79222b` | `2d929ec3e62a564e1143368a64add6c77e92220d46df860a5ba6b56709d46407` |
+| `libhtml_view.prx@0x894` | `4f2e5bd4cbfbe43717919e307a0acec58485938df8241e35170ab2be5b4fcd00` | `5ad8dc489061cb65b59987f8db35b7f3f94dc02375b665070f926c0e3a7d7131` |
+| `libhtml_view.prx@0x8a4` | `afd4360f6ea4058af1e752a8f3d40e2a4dc9799469b92c25f632d5d596eb98f8` | `d1861d48fc8e92452e378d063626c4d5006ca439cc83e4a0245ba325bd978b83` |
+| `libhtml_view.prx@0x964` | `24bc100009cf109f9526fc98523787a2051df668674d2c74683ecfb84bb8e6e8` | `5d4092d30237e316f47fdbeec08fd072803705cb363e1c48f1017c952e8fe007` |
+| `libhtml_view.prx@0xb1c` | `a851f192bd9b7550c4e04ad805ad4c5cbcbef3e04da8bcf98f766dc06827a2d2` | `db94a9f44f236c313e0a28cc076528a8baa1a3c79b2748c38f2236b1d30710cd` |
+| `libtutoriallist.prx@0x3668` | `5a7e3996946e1b13b0badcf9d17ea79a7cf50f46750281221af64063084d4815` | `2064e64faa64132d475408125250eeb22a33867c583e213f5481172b64d2e385` |
+| `libtutoriallist.prx@0x36a0` | `d648adea23e38e3b78b3c512a14e4d8b665df466c3c20e20b01a8ff094d29379` | `b1f577a2f093699b4f293474a612312fa403166d0a2b63709993de6cdd615de9` |
+| `libtutoriallist.prx@0x39f0` | `8a0498136d71fe1885dfa263471005104e08798871310cd1a167cec29fa5c867` | `b58bccf53b1dd5b90425baa31a62b4cb5405d5b40fd1591b4a9d037a86d93b77` |
+| `libtutoriallist.prx@0x3a00` | `5da437d74a5971093de984cd82b61d81df82f924a1e18b22b69b9e51e1356607` | `159820952a46053e934420c055e546995ac05467f822b68b7e1d2ddaca60b7fc` |
+| `libtutoriallist.prx@0x40f8` | `d43c735d583a8265d8ca4650c479b6613b2540db09429744e06a652cfb578d1a` | `f9c4e8094ffc3d37c35bc601a63837ab9ad3ab8a462f2f65175ea278a6336c2f` |
+| `libtutoriallist.prx@0x4118` | `08426f01908983b6c1ac21dfe3fddc5334a7f597068d088d4c25c5fee7e43c76` | `f233b8b337c70338d2b797f73235278ce353dc6da78d930cb3a564e9e15f9636` |
+| `libtutoriallist.prx@0x42a0` | `7fbacd8df7cdb8eeac82b374136db1dd04cc58c73df4194da84174c79034d273` | `5fe8bae9806b2f3cd8f31755044f7db6513d4ca95cbe1480db56c7fa2f47d621` |
+| `libtutoriallist.prx@0x4340` | `a60d34b0049538296bbc6e0e4020aee9f444930707d2015e3bc6ece612ca03bd` | `38ae6f9216609c419a9965c55f921f2bf672dc6a70c7c11a6c9eac8cde7f4ef8` |
+| `libtutoriallist.prx@0x4350` | `fd8097738f6be2aa1758bdb20039a8647002f2f4bc2205b19c6802a3b811bcf9` | `ac079c76e8028b88b68d88b7172220efb7564148d71ef40be53dc1bb3438a658` |
+| `libtutoriallist.prx@0x48e8` | `365b230011fb18221139f9182118bd693004c31af177662811c2b64b0ed67e20` | `ebfa64c24967614c05eaf102bf9066190113a72c5c1e5b799ef8b7baa9833dfa` |
+| `libtutoriallist.prx@0x4908` | `5a52d96d4fa87bf89e48245b3653c30df9459007c57cb6a47b08a7373812ba29` | `476295ca3786058a9e39d69acf7a9fca1056f6cd128a2d481f4eeb76a6a334e5` |
+| `libtutoriallist.prx@0x4990` | `a5b4f34a0125a81e54477bd5a0b110e9946af12d0123be0c0ed0b8e505f8e519` | `00a4ee7c8b1377bab6f3f9353bdcad438915245c0afd6b947323a871589655cd` |
+
+Nos dois PRXs, os novos alvos são funções exatas de duas instruções em
+`.sceStub.text`, cada uma `jr ra; nop`, sem chamadas ou relocations de dados. A
+reconstrução C vazia foi compilada duas vezes por endereço e comparada ao PRX
+original integralmente (2/2 words); os endereços não receberam NIDs nem foram
+somados à contagem de exports:
+
+- `libtutoriallist.prx`: `0x3668`, `0x36a0`, `0x39f0`, `0x3a00`, `0x40f8`,
+  `0x4118`, `0x42a0`, `0x4340`, `0x4350`, `0x48e8`, `0x4908`, `0x4990`;
+- `libhtml_view.prx`: `0x854`, `0x894`, `0x8a4`, `0x964`, `0xb1c`.
+
+Hashes dos binários privados conferidos contra a baseline: `libtutoriallist.prx`
+`2d843f46680814ac9e5c918bf523e182f64de1bc7841eb9262fecdc03c268a49`;
+`libhtml_view.prx`
+`319901ff13bc9a44be29596bcb64e4c0c7333dad9fb36bdafceb8c2aed611f26`. O projeto
+Ghidra existente de `libtutoriallist` foi reutilizado. Para `libhtml_view`, uma
+importação/análise única foi preservada sob `build/seto049/experiments/`; os
+logs de boundary por endereço, manifests, objetos e certificados continuam em
+`build/` e não são versionados.
+
+Para comparar funções de `.sceStub.text` com objetos relocáveis produzidos em
+`.text`, `scripts/match_function.py` recebeu `--candidate-section`, encaminhado
+separadamente ao comparador e anotado na proveniência. Isso preserva a seção
+original como autoridade de endereço e não relaxa o gate de match.
+
+### Hipóteses ainda abertas
+
+O catálogo preserva os resultados não MATCHED sem promovê-los: 9 NONMATCHING,
+5 UNMATCHED, 4 INCOMPLETE, 1 BLOCKED_CALLING_CONVENTION, 1
+BOUNDARY_VERIFIED_NO_SOURCE e 1 INCONCLUSIVE_IDENTITY entre os candidatos EBOOT
+originais. Permanecem, entre outros, o alvo de dados sem identidade `0x3a90c`,
+os limites/relocations complexos `0x3129c`, `0x84d0`, `0x8dd4` e `0x92fc`, e os
+desencontros de codegen em `0x16794`, `0x165b8` e `0x5cf34`. As novas hipóteses
+locais para `0x17298`, `0x16d18`, `0xa7b8`, `0x3dfb8`, `0x2bb58` e `0x6a94c`
+também divergiram no comparator; não foram repetidas sem uma mudança de
+hipótese sustentada pelo assembly.
+
+As fontes internas integradas estão em `decomp/src/eboot/`,
+`decomp/src/libtutoriallist/` e `decomp/src/libhtml_view/`. As evidências de
+boundary e os resultados completos de duas compilações estão ligados por hash
+no catálogo. Não houve nova inferência para esses matches, nem escrita no banco
+de campanha durante a certificação manual.
+
+Validação focada após a integração do catálogo/certificados e do seletor de
+seção candidata: **252 passed** em `test_decomp_campaign.py`,
+`test_campaign_coordinator.py`, `test_internal_functions.py` e
+`test_match_script.py`. Suíte completa: **1068 passed, 44 skipped** em 4m17s;
+os skips são integrações opt-in ou ferramentas indisponíveis nesta máquina. Uma
+primeira execução completa teve um timeout isolado no teste stop/resume; o teste
+passou isoladamente e a repetição completa, sem validações concorrentes, passou.
+CI será registrado após o push/abertura da PR.

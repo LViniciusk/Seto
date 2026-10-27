@@ -1,0 +1,2481 @@
+{
+  "schema_version": 1,
+  "functions": [
+    {
+      "module": "EBOOT",
+      "address": "0x8f0",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000008f0-1f06c20943f2.log",
+      "source_path": "decomp/src/eboot/func_000008F0.c",
+      "source_sha256": "f2d830e102caf5c29502b5a87f9acd51bd9e23a41eb3c56f57ab2e588ac5ad86",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "ebdb27cee9d361d70a7544a3b2f13cd8d7aa7f826a381fb35324d68e3068ae83",
+          "ebdb27cee9d361d70a7544a3b2f13cd8d7aa7f826a381fb35324d68e3068ae83"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-000008f0.json",
+        "certificate_sha256": "dfd2f4048cb6188407467254702f0d6848b511fbef174dfa0c8240ea794ee8cc"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x8f8",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000008f8-47b71c8a14fb.log",
+      "result": {
+        "status": "INCOMPLETE",
+        "tail_call_target": "0x6ad8c",
+        "resolved_import": "IoFileMgrForUser/0x779103A0",
+        "tested_source_sha256": "d6a3aacfa7f76c37ef69a52e3ce82a98779d153f5820f5d60316ee455d1f6cbe",
+        "tested_object_sha256": "88548fc6f473e81c1b40a36244785b210272d653b3e76314e3e3bbdceb1a2fe6",
+        "candidate_code_bytes": 8,
+        "required_code_bytes": 28,
+        "reason": "direct forwarding was tail-call optimized; source shape preserving the original link-register frame remains unproven"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x1838",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00001838-5c20c35904d5.log",
+      "result": {
+        "status": "INCOMPLETE",
+        "tested_source_sha256": "d6a3aacfa7f76c37ef69a52e3ce82a98779d153f5820f5d60316ee455d1f6cbe",
+        "tested_object_sha256": "88548fc6f473e81c1b40a36244785b210272d653b3e76314e3e3bbdceb1a2fe6",
+        "candidate_code_bytes": 8,
+        "required_code_bytes": 28,
+        "reason": "direct return forwarding tail-call optimizes away the original call/return frame"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5bac",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00005bac-8f31d097248f.log",
+      "source_path": "decomp/src/eboot/func_00005BAC.c",
+      "source_sha256": "ed0b16b9bd70f92f7d4c9528dd71a4c50d912b83a647b33c5c965115c426fa8f",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "d465adf18f5bd624aff531d317d3bf6e31aadf39ad1da5f0e4f3ee5fed332cf4",
+          "d465adf18f5bd624aff531d317d3bf6e31aadf39ad1da5f0e4f3ee5fed332cf4"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00005bac.json",
+        "certificate_sha256": "c69495964a83de00c0c0baabe130f7580f129db2bdf8a94f6e8425758694710d"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5f38",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00005f38-006d79b0ae1c.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256": "81f883a5497e2b412c461d9964b60acf9b1f638655284eb0f7907455ee4e0188",
+        "tested_object_sha256": "c59dbe2bf4140fdfba90d6940ad10f5483f812e61e5b12db86a4f5a8a509c480",
+        "matching_words": 0,
+        "total_words": 5,
+        "reason": "union-based float sign-bit clearing creates a stack frame rather than using the original FPU/register bit operations"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x6028",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00006028-6fbb54570186.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256": "b044507ad92743c637a8d29a038c744c76cece9e0598acc392048515363d07a8",
+        "tested_object_sha256": "efe7cef4aca1f356f1e003a1b1f83ef0c56b5623a21ca303f65c50194644a04a",
+        "matching_words": 0,
+        "total_words": 5,
+        "reason": "union-based NaN classification spills the input, unlike the original FPU-to-GPR bit extraction sequence"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x65b4",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000065b4-733e326496b6.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256": "54c31606b3d1efbdd9741699caf76ad899cc7b0f10f77da2023199e357c184e3",
+        "tested_object_sha256": "f0ec972617c4e2436eb288a07689cedcfd4d585df5dbd3b0cec6874b13383286",
+        "matching_words": 0,
+        "total_words": 3,
+        "reason": "the signed compare/negation source does not generate the original Allegrex max instruction"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x84d0",
+      "size_bytes": 636,
+      "instruction_count": 159,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000084d0-88d7e6ba04b4.log",
+      "result": {
+        "status": "UNMATCHED",
+        "called_by": [
+          "0x92fc"
+        ],
+        "data_reference_count": 9
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x8dd4",
+      "size_bytes": 40,
+      "instruction_count": 10,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00008dd4-76222fc3d829.log",
+      "result": {
+        "status": "UNMATCHED",
+        "called_by": [
+          "0x92fc"
+        ],
+        "data_reference_count": 2
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x92fc",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000092fc-ab4660ababec.log",
+      "result": {
+        "status": "INCOMPLETE",
+        "called_by": [
+          "0x33d10"
+        ],
+        "candidate_hypotheses": 2,
+        "best_matching_words": 6,
+        "total_words": 12,
+        "tested_source_sha256s": [
+          "66dbc229095bb943860d99e933bbbb2f1a5265cf5a7f922ad99ea7ba96d62685",
+          "c827ba7888f8068a59efd27f87fc2483e399bd7bdef81531479e568a53b6aa9a"
+        ],
+        "limitation": "both hypotheses differ in frame offsets and call-argument delay-slot scheduling"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0xd324",
+      "size_bytes": 24,
+      "instruction_count": 6,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0000d324-335fe17d4c53.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256s": [
+          "28577b0e486221868663edf74e73a1ca5826a514e059a83ea0c0ea3858d1eb36",
+          "bd9119c10a4d36e6b56cf72f18e674fb282767a30c9bf1deb2d9dd09cb282dc9",
+          "e7763d7a6872d9b4619b0952dd2179c99f876cbe4b087a2ad85d245f3cb95cc9"
+        ],
+        "best_tested_object_sha256": "d9a52b73053900cc58a3395d7c06f0422d7154f0baa8ee0fb118e87f2d763fa5",
+        "best_matching_words": 2,
+        "total_words": 6,
+        "reason": "loop scheduling and return-register assignment remain different from the exact string scan body"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x15e7c",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00015e7c-fafdf489438c.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256": "94a1ffc33a48e7f60a8069b28864147daa15c822528dc29a9db87da59529330c",
+        "tested_object_sha256": "38ea7ec6fe8a7bd64c3e5fb611c453f12b053a87d4f7fca8f358d05c3e1ad0c6",
+        "matching_words": 0,
+        "total_words": 4,
+        "reason": "union-based NaN bit construction creates a stack frame and does not materialize the result in FPU return register f0"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x165b8",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000165b8-0b67bbe02d02.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256": "d7fa817dc8189dff4f6c1a4969421d6bbee32a18ae5b895f6e33849c702851ec",
+        "tested_object_sha256": "e94debb2d1c9beb7504ace3e9a56faeed73a432040212b97bc91d2045d43e74e",
+        "matching_words": 1,
+        "total_words": 4,
+        "reason": "the natural clear-and-return hypothesis schedules the result move after the stores, unlike the original entry schedule"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x16794",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00016794-c102644ac048.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256s": [
+          "84469357c6a0477179d8c4cf8a66c6ff8404b43158e7f03f455dc15de2a7d26d",
+          "9d8bb4d73d0fa453676c39c34bab49708e4f86daf94442c1581e52fcd8941395"
+        ],
+        "tested_object_sha256s": [
+          "65ef40418b48de5df935941e6c42e68a9b59db08df65b2c02a5037130b4a1cb1",
+          "90c7c2279207d75f7bcd461aee026c482cec361399a45a644c016c2595b8953d"
+        ],
+        "best_matching_words": 2,
+        "total_words": 8,
+        "reason": "two local float-vector scaling forms leave FPU register assignment and store order mismatched"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x16b50",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00016b50-7176d6ad2077.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256": "7a5bed27415b1a24dacfd220f299370ac767e5ddd346ac9bbacdfd247b52162b",
+        "tested_object_sha256": "404d1355e2a65838d9c181a9c16eabc1c49b97e46680b1c5aabe2a8a8db7e3cb",
+        "matching_words": 1,
+        "total_words": 5,
+        "reason": "clear-and-return hypothesis schedules the result move after the stores, unlike the original entry schedule"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x26d88",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00026d88-36e5e8f5e908.log",
+      "source_path": "decomp/src/eboot/func_00026D88.c",
+      "source_sha256": "5582d5ef74d82d92e37d9514977b9affea9616dd455fbafe11bda02304d39ca0",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05",
+          "bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00026d88.json",
+        "certificate_sha256": "6343635bc089438f751da0c2402900488dcf85de19a8eccbe7434a78894e6ca4"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x28414",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00028414-fecf37174b9d.log",
+      "source_path": "decomp/src/eboot/func_00028414.c",
+      "source_sha256": "7ca433938c10b6f71ba2b46849b8a099a75fd8d7c8429ed24c3a7261dd270429",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "d7e16aacdd8179fdfeb5c627a1ab11a42cb2ee8de41af5c9567f0f793225b7e2",
+          "d7e16aacdd8179fdfeb5c627a1ab11a42cb2ee8de41af5c9567f0f793225b7e2"
+        ],
+        "resolved_calls": [
+          "0x9104"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00028414.json",
+        "certificate_sha256": "3f39010066195dea6910245643a24c123550e0b6509674d3c9eb5fb719c2794e"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x28b3c",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00028b3c-57907d185d4b.log",
+      "source_path": "decomp/src/eboot/func_00028B3C.c",
+      "source_sha256": "aec782d568ba1507fa1010fccba268f1b7ecfd508d15e719ae6d51ff0d25409d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "f41c6d4f8d39c8d3b9371f1c9bed4064a91a2c59c86e35ea2bf5deae86a8c491",
+          "f41c6d4f8d39c8d3b9371f1c9bed4064a91a2c59c86e35ea2bf5deae86a8c491"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00028b3c.json",
+        "certificate_sha256": "df186f40cf5d5ca09060df8170e91e6dc55cbc3c680fe5e236da873b3686b408"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x29004",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00029004-82e5e39336ac.log",
+      "source_path": "decomp/src/eboot/func_00029004.c",
+      "source_sha256": "c084057f9bbd63a9235513b00dde49e28a765a2cc7428f784a873ef0fb3207dd",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "d79c5e4cf88fef1f206d2955bc4c3f48842ec2953c79c5acd226851508b58bd8",
+          "d79c5e4cf88fef1f206d2955bc4c3f48842ec2953c79c5acd226851508b58bd8"
+        ],
+        "resolved_calls": [
+          "word 5 (0x29018): this module @ 0x9d1c <=> this module @ 0x9d1c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00029004.json",
+        "certificate_sha256": "99511a12fcf0cd219a9ade42ccbef5912a1650a9c02617e9792c2b737f3f5ab0"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x291b4",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000291b4-7924b9dde961.log",
+      "source_path": "decomp/src/eboot/func_000291B4.c",
+      "source_sha256": "d60e29477389d5b632dd6a6021b122f9e9da65468605cd5d16bd68ebe115e31c",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "db0b9ab0fb57f3df5045e647d484fea5a09316d578d5fef2294553871a66df56",
+          "db0b9ab0fb57f3df5045e647d484fea5a09316d578d5fef2294553871a66df56"
+        ],
+        "resolved_calls": [
+          "0x33ae0"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-000291b4.json",
+        "certificate_sha256": "e41c897368e20f01ca312bb62f125d4d2c61c4ef821d524a5c4ff7511d6aa280"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x297ec",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/000297ec-1a131d0bfd8d.log",
+      "source_path": "decomp/src/eboot/func_000297EC.c",
+      "source_sha256": "1d03ca99963d130892e41548c5db0e51eb88c32d96a19a8b24ceb3967184ea0c",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "a485e6df8ff52f6582f9e929c6ec0916fd95ff8d8b56113b133b0b8211ed14a2",
+          "a485e6df8ff52f6582f9e929c6ec0916fd95ff8d8b56113b133b0b8211ed14a2"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-000297ec.json",
+        "certificate_sha256": "e6c7d0296f34292f8d8046dc9f807324579ea81cc2053ee3cea72e0019b8bf87"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2add4",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002add4-2efc222b35d8.log",
+      "result": {
+        "status": "BLOCKED_CALLING_CONVENTION",
+        "tail_call_target": "0x2adf8",
+        "reason": "wrapper passes incoming a3 through t0 while forcing a3=0; no C prototype reproducing this fifth-register convention has been demonstrated"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2adf8",
+      "size_bytes": 248,
+      "instruction_count": 62,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002adf8-19913499577a.log",
+      "result": {
+        "status": "BOUNDARY_VERIFIED_NO_SOURCE",
+        "resolved_calls": [
+          "0x2b02c",
+          "0x2b3f0",
+          "0x2b920",
+          "0x6ad7c",
+          "0x6ad94",
+          "0x6ae1c",
+          "0x6ae34"
+        ],
+        "data_reference_count": 0
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2b02c",
+      "size_bytes": 200,
+      "instruction_count": 50,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002b02c-489569e95cdd.log",
+      "result": {
+        "status": "UNMATCHED",
+        "called_by": [
+          "0x2b0f4"
+        ],
+        "data_reference_count": 3
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2b408",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002b408-c46f1b93c80f.log",
+      "source_path": "decomp/src/eboot/func_0002B408.c",
+      "source_sha256": "deedfdb059c7ed7ef277c5b60c612f1c619732f50e797f762599f04a2d011cac",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "e6d8a95261afd1f8b5ea09dc5b8d0b17e3ad2dc245dd06bc5484cfac8e01fedb",
+          "e6d8a95261afd1f8b5ea09dc5b8d0b17e3ad2dc245dd06bc5484cfac8e01fedb"
+        ],
+        "resolved_calls": [
+          "0x1b6e4"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002b408.json",
+        "certificate_sha256": "34054e9e63ef3fe8bed0e99c1d025911fab09208ccde5989605dc8f7c8bb39f1"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2b424",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002b424-a244b376bce1.log",
+      "source_path": "decomp/src/eboot/func_0002B424.c",
+      "source_sha256": "e38fc3d493087b17d7c816f7de0301ae6db893c03802e23c9ef84eb29bb0e740",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "0786e8a54d231db6fead99ed96eb167ef72b49a50c9093c45d91af8c616b70b8",
+          "0786e8a54d231db6fead99ed96eb167ef72b49a50c9093c45d91af8c616b70b8"
+        ],
+        "resolved_calls": [
+          "word 2 (0x2b42c): this module @ 0x1b94c <=> this module @ 0x1b94c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002b424.json",
+        "certificate_sha256": "6b55b8ef42302ca7942646d91a631fbc68f1f5603d969b75e08c602d5ad180bb"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2bc34",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002bc34-7f6e7442d2f7.log",
+      "source_path": "decomp/src/eboot/func_0002BC34.c",
+      "source_sha256": "191e68e2cbc63e3dcc5871e583cf5565b03858bfd4325ac31ff31266409f76a7",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c",
+          "0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c"
+        ],
+        "resolved_calls": [
+          "IoFileMgrForUser/0x810C4BC3@0x6ad94"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002bc34.json",
+        "certificate_sha256": "78ccb5865dc2f6f214a839f14d1bb78a42ce7e0cc996d3e8cb476b5ada7f4b43"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2bd58",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002bd58-bb7f5085322f.log",
+      "source_path": "decomp/src/eboot/func_0002BD58.c",
+      "source_sha256": "39eb28a42d9e9f44a053523a02602c07daa5a28e720ebfa8357706e4af09cfed",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "65a8954693cb1695d679bcf6373146ff9e84ab4e8328e9224170fcaeccac9a20",
+          "65a8954693cb1695d679bcf6373146ff9e84ab4e8328e9224170fcaeccac9a20"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002bd58.json",
+        "certificate_sha256": "8af117515df4995526960aa93f17246ef7cda0c488553db437f7f147e83d46c4"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2c0e8",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002c0e8-054a46291dcb.log",
+      "source_path": "decomp/src/eboot/func_0002C0E8.c",
+      "source_sha256": "20b9cf31ddf0bda7caabed44dea28c647e38c240e64445f08060ee9310fc0469",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "4356cee1e5c45ae96bfa456960a09c944ad82b6e03f1685f311f879f8ff9efef",
+          "4356cee1e5c45ae96bfa456960a09c944ad82b6e03f1685f311f879f8ff9efef"
+        ],
+        "resolved_calls": [
+          "0x2bf10"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002c0e8.json",
+        "certificate_sha256": "a0e1ad89bd2290d6c2acb59c13534409aa07506264d7a705488f8631e40f47d8"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2ce44",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002ce44-467d90dd17e2.log",
+      "source_path": "decomp/src/eboot/func_0002CE44.c",
+      "source_sha256": "8b7e4bca1d6294eafaa240a28725f47c12448223836127d4b599c979ba7d2b1b",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "de13f13bf5a89cbb6a1740b8c7e4a65e91347c70c7b8e4419f9c1cd47838ea35",
+          "de13f13bf5a89cbb6a1740b8c7e4a65e91347c70c7b8e4419f9c1cd47838ea35"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002ce44.json",
+        "certificate_sha256": "bfa93dab327f851d6fac64cb9e4248a9fd63fddeafc08330d56cb4904fc0ff1f"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2fbb8",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002fbb8-81e7755707cc.log",
+      "source_path": "decomp/src/eboot/func_0002FBB8.c",
+      "source_sha256": "ea42b2010ee1df482135745cb386f19e169054af5df41307c24314c7682646bc",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "c63e294c0281daa4ebc170dbb9223461978ae4b4c611237d4945219da4de44b6",
+          "c63e294c0281daa4ebc170dbb9223461978ae4b4c611237d4945219da4de44b6"
+        ],
+        "resolved_calls": [
+          "0x2fac0"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002fbb8.json",
+        "certificate_sha256": "eeed9d7b8d8d6a4e1ecde7938f88b6fd8b4f44d8bc824ae40db0988477fb6e30"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2fc88",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0002fc88-e8b41f6bea2c.log",
+      "source_path": "decomp/src/eboot/func_0002FC88.c",
+      "source_sha256": "3803128b1a8b4a0513f135fbed65ccf71371dc7ffffd495f7d877d1908e3891d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "bd78f275d4ead61e33c2bf23823f1cf7573ba006e57c1f8b20eb92e20c12d09e",
+          "bd78f275d4ead61e33c2bf23823f1cf7573ba006e57c1f8b20eb92e20c12d09e"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0002fc88.json",
+        "certificate_sha256": "e6d83c9b4f3869e15e6734ac141553d09b65ced854fa35e8e1750246b7a1dda5"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3129c",
+      "size_bytes": 108,
+      "instruction_count": 27,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-037",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003129c-5e80ffea7131.log",
+      "result": {
+        "status": "INCOMPLETE",
+        "last_source_sha256": "548e89ad930722c59689975e42e7646b02823de116ebca7a0b932bfe3b3edcb5",
+        "last_object_bytes": 88,
+        "required_object_bytes": 108,
+        "reason": "Initial local hypothesis compiled short; data references and separate address materialization still need resolution."
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x31308",
+      "size_bytes": 92,
+      "instruction_count": 23,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00031308-baf3c22a83a2.log",
+      "source_path": "decomp/src/eboot/func_00031308.c",
+      "source_sha256": "6bcea3d82412902a4c38c7b7bb5f9f7d827042448ba8d8af507c82ba4412c67b",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 23,
+        "total_words": 23,
+        "object_sha256s": [
+          "0aec5365da723040d316d981c004195701b0c58651d300e1c3cead3ad6d2b74c",
+          "0aec5365da723040d316d981c004195701b0c58651d300e1c3cead3ad6d2b74c"
+        ],
+        "resolved_calls": [
+          "0x3129c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00031308.json",
+        "certificate_sha256": "1a08ebd9b9e5eb8a55bff7f09fa62fbf40d58538c74e16452228e242f0063377"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3279c",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003279c-7dd631bb5ae3.log",
+      "source_path": "decomp/src/eboot/func_0003279C.c",
+      "source_sha256": "2a2c514d5d3c6d1ec417257d44e931bc7956852ea3b23bb3076cf5d8e06bde69",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "31c5ecd8ded3b154fb4ac6336e71ba54a95870af57ca7e63c90ae6ef4ba36bfa",
+          "31c5ecd8ded3b154fb4ac6336e71ba54a95870af57ca7e63c90ae6ef4ba36bfa"
+        ],
+        "resolved_calls": [
+          "0x3236c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0003279c.json",
+        "certificate_sha256": "cefb07d4e8ca54050633ace1ffd25d984169053df343ccf4e5ffc4b962f55ac4"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3a90c",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003a90c-4fac6ee95639.log",
+      "result": {
+        "status": "INCONCLUSIVE_IDENTITY",
+        "reference": "R_MIPS_HI16/LO16 to VA 0x00262b98",
+        "load_segment": 0,
+        "segment_offset": "0x262b98",
+        "initialized": false,
+        "named_section": null,
+        "called_by": [
+          "0x3d868"
+        ]
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3aa58",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003aa58-f94c83ae85b1.log",
+      "source_path": "decomp/src/eboot/func_0003AA58.c",
+      "source_sha256": "64f3e3f98044c1c3251c82bd0ce40d6a4905492834383c5a89a37ba02cfb0b21",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "cc17f5eaa70f2029b0b19efb66a7b781b163a29fe8d41c188d1486f9e77e089c",
+          "cc17f5eaa70f2029b0b19efb66a7b781b163a29fe8d41c188d1486f9e77e089c"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0003aa58.json",
+        "certificate_sha256": "cb215ab582ae74ecb17a53c4105b734d57c0afa72f81e23700f3a1d5f4adef73"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3aa94",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003aa94-727d9821ce06.log",
+      "source_path": "decomp/src/eboot/func_0003AA94.c",
+      "source_sha256": "a83c4895d569af255e9149fda819cef2ef56c619f1d82c6d2b09a8ca4e7ba817",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "48f0c68fd9752461bea9825cfb70afa23f725f65309b9caf02b9a109db2b8895",
+          "48f0c68fd9752461bea9825cfb70afa23f725f65309b9caf02b9a109db2b8895"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3aa9c): this module @ 0x3a90c <=> this module @ 0x3a90c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0003aa94.json",
+        "certificate_sha256": "0b43a4a6ac8a14efd605776fd4cfdf6b9a330c984136a39f28dd204345fc066b"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3acb8",
+      "size_bytes": 36,
+      "instruction_count": 9,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003acb8-176dd18c947f.log",
+      "source_path": "decomp/src/eboot/func_0003ACB8.c",
+      "source_sha256": "08314eca1e11b8dd65dca873ca91d34d0c16c4b0a8440c4e696d1513c7d3a694",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 9,
+        "total_words": 9,
+        "object_sha256s": [
+          "8ae8abc53a63d5b8f99dfaf95db7560a9f22555a4d4af9b12696cde10331efad",
+          "8ae8abc53a63d5b8f99dfaf95db7560a9f22555a4d4af9b12696cde10331efad"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3acc0): this module @ 0x3a90c <=> this module @ 0x3a90c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0003acb8.json",
+        "certificate_sha256": "fd27323b2822a2e3e638aa87d88b1c21dbb85c66a8ecc18ef0793df1b30aff3d"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3c6e8",
+      "size_bytes": 36,
+      "instruction_count": 9,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003c6e8-989d0adb98bc.log",
+      "source_path": "decomp/src/eboot/func_0003C6E8.c",
+      "source_sha256": "043dd1430ead0baf8853376909888500d34f604d25571dd0bc366c34e81c8e78",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 9,
+        "total_words": 9,
+        "object_sha256s": [
+          "e7b7df482d7621b97b8f0fbaaec897d84735b1b2b7b2f8e21ee5446258605061",
+          "e7b7df482d7621b97b8f0fbaaec897d84735b1b2b7b2f8e21ee5446258605061"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3c6f0): this module @ 0x3c65c <=> this module @ 0x3c65c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0003c6e8.json",
+        "certificate_sha256": "8135ff1543c0c53abd97ba8e2c622250e21da1d857fe5a28cb9cc9c3de6b979e"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x41ddc",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00041ddc-40906dc734d5.log",
+      "source_path": "decomp/src/eboot/func_00041DDC.c",
+      "source_sha256": "09d99d2bd207e566ee2309e1bd75726598118661a10f7196f45a54d81d689571",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "460d14e76d0da4bb95d3d0768765639f303b3e6cf9ba05836c5c3a57b306048b",
+          "460d14e76d0da4bb95d3d0768765639f303b3e6cf9ba05836c5c3a57b306048b"
+        ],
+        "resolved_calls": [
+          "0x15924"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00041ddc.json",
+        "certificate_sha256": "62e7c8fbc29f8afc9d3b1c4a12b2383a7c34f77399104b46eeaf89126b6e7c26"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x41de8",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00041de8-4f9addb081af.log",
+      "source_path": "decomp/src/eboot/func_00041DE8.c",
+      "source_sha256": "a245ad1aa40efa57f3523caa922dc9786311961005a10c210b19ed02ce101279",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "8fa963b062e7f1420449af16b961296d43a2276706201fe4b927d6bb089ec4b9",
+          "8fa963b062e7f1420449af16b961296d43a2276706201fe4b927d6bb089ec4b9"
+        ],
+        "resolved_calls": [
+          "0x15660"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00041de8.json",
+        "certificate_sha256": "d71051bb1c4871088b3b8168ac5cb04aaf9d64fad54515878635273f81e38eed"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4978c",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004978c-e6e60535ff9d.log",
+      "source_path": "decomp/src/eboot/func_0004978C.c",
+      "source_sha256": "e99ad7e341977b58ee15bcd4b0dcecb06e0bfc1ca6891614e913c0a72efad3f4",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "d735dedc1a58860540ebe37f02b8d5b963d1d8d7f7e8f40cc168855394418692",
+          "d735dedc1a58860540ebe37f02b8d5b963d1d8d7f7e8f40cc168855394418692"
+        ],
+        "resolved_calls": [
+          "0x49794"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004978c.json",
+        "certificate_sha256": "01ff2d88235765b395921b38573b8ceb7d92fbf2f09783ad6d3575ecb5008a1c"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ca70",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ca70-485f3920f3ba.log",
+      "source_path": "decomp/src/eboot/func_0004CA70.c",
+      "source_sha256": "34d540946a6dae030afc87c1aef5edb11f88313fbc43f9246cad5308b82c4086",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "b6e9cb534cd3eaac81f4751c79c055e83a87e51c1dee1aa83791ff57b0d6feb8",
+          "b6e9cb534cd3eaac81f4751c79c055e83a87e51c1dee1aa83791ff57b0d6feb8"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca70.json",
+        "certificate_sha256": "42e57a721c61142255ac0fc1d6e6c0055bb8ba62b3925d3d7c9616ecbdcdadcb"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ca80",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ca80-5f4a4e100d5e.log",
+      "source_path": "decomp/src/eboot/func_0004CA80.c",
+      "source_sha256": "523c4c5fd23a1b1147685215df3709dd61f43a01034fe7818d48622ab09c264d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 5,
+        "total_words": 5,
+        "object_sha256s": [
+          "a9defb879524991e6406300ddceb4c86a5c92bee45576427da094f0b0b5d729b",
+          "a9defb879524991e6406300ddceb4c86a5c92bee45576427da094f0b0b5d729b"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca80.json",
+        "certificate_sha256": "765e4964ce2fbfac008033be223ce4add7068de8217d778f4c8999be6c6d0f5b"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ca94",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ca94-9a4c1ff7394a.log",
+      "source_path": "decomp/src/eboot/func_0004CA94.c",
+      "source_sha256": "0d2dedae1b9444b0fff63fb73f8d797d47c371835b47987fc18497b0581aefc0",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "2d3ed87d17689d27ff79b6f8e89dd38c25dbb80b1a7d37f44281bed73a44d57c",
+          "2d3ed87d17689d27ff79b6f8e89dd38c25dbb80b1a7d37f44281bed73a44d57c"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca94.json",
+        "certificate_sha256": "c6410979ab85ce9093cb0bf0dd650f5ee0ba8fb4c342ca4ec7c7b31cd11acc96"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ca9c",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ca9c-7f80e15f7888.log",
+      "source_path": "decomp/src/eboot/func_0004CA9C.c",
+      "source_sha256": "3bcc618ac9d7eaaa1a829e8839324abc3ea3cb3008647129c5e48ed6c7104eec",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "abb73fcf12bf205de71561b92650334a9816b855e5ae08a1fbd047ba3b573551",
+          "abb73fcf12bf205de71561b92650334a9816b855e5ae08a1fbd047ba3b573551"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ca9c.json",
+        "certificate_sha256": "17a61b50ae9718377b9f25baf3126180885e94a707f740312e135625a096a247"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4caa4",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004caa4-ef34f355d91f.log",
+      "source_path": "decomp/src/eboot/func_0004CAA4.c",
+      "source_sha256": "ffd6d12f8687bb4f3a4eb816fd2e0f3f196a71aaa01c81e3c7530de0697b2dd4",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "be4f818c5782177b28844e9d9712ac0b95612b3c92ffff5c97dee8f1a409ceb7",
+          "be4f818c5782177b28844e9d9712ac0b95612b3c92ffff5c97dee8f1a409ceb7"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004caa4.json",
+        "certificate_sha256": "0bf2321800cad638a0f5a6fcfc578a1d6687559e84c76da2f331de1e0f5b7d7c"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4dcf0",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004dcf0-766e4bf5b80e.log",
+      "source_path": "decomp/src/eboot/func_0004DCF0.c",
+      "source_sha256": "ceda010365f8146ce706e4ddc9604f7f12aae3f362e6f0a50eebe9f800b6b2a6",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "dc5eab87f16f9a9829b3e82a3b42766e5b3c81cd4dc1da81e7f998facab22909",
+          "dc5eab87f16f9a9829b3e82a3b42766e5b3c81cd4dc1da81e7f998facab22909"
+        ],
+        "resolved_calls": [
+          "word 2 (0x4dcf8): this module @ 0x4ef60 <=> this module @ 0x4ef60"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004dcf0.json",
+        "certificate_sha256": "58e82dbda6a24709f241920d316b5bc696a71781a4158e4429147e297c7f977f"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4e514",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004e514-c74f71393768.log",
+      "source_path": "decomp/src/eboot/func_0004E514.c",
+      "source_sha256": "0ff9982cff59a6cc301415fe6839c0e160a4679fe8975f4432e636dec598fdd2",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "8fa005dcb3100c197ae3b3f74ecff410be498d88de45fdb65ea05ecdc636af80",
+          "8fa005dcb3100c197ae3b3f74ecff410be498d88de45fdb65ea05ecdc636af80"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004e514.json",
+        "certificate_sha256": "8e29ed7ffcc8ce8623917c500f175503d255e1eccbfec4456afdb89fe788442e"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4e598",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004e598-48b5f523f6f1.log",
+      "source_path": "decomp/src/eboot/func_0004E598.c",
+      "source_sha256": "2fbd3daf2a77b36bf6387583ecf4b4211f36774077d41baf5f35ad64e8c03042",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "b49acd9b6a0bb35602af95bca233b8d00b98d35cde51f1abd5280676c18c718a",
+          "b49acd9b6a0bb35602af95bca233b8d00b98d35cde51f1abd5280676c18c718a"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004e598.json",
+        "certificate_sha256": "2b67d78db03272091c1b92619c0680114da22ff64a033b3dd3f9d7899d542602"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4e5a8",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004e5a8-155b01902659.log",
+      "source_path": "decomp/src/eboot/func_0004E5A8.c",
+      "source_sha256": "cde237cb5635ae676e4a8378f44937f0c08a4057772bc00c90641ba02726f65d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "bd4ec606efc3c8744bb8f981d6dd723ff17f4c6456798ef1f974971d423a258f",
+          "bd4ec606efc3c8744bb8f981d6dd723ff17f4c6456798ef1f974971d423a258f"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004e5a8.json",
+        "certificate_sha256": "612ef635ac80ea1b7dbc24ab9a7641ab648dcbd0259c7a430ae7c11763825e01"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ebac",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ebac-d277cfce5057.log",
+      "source_path": "decomp/src/eboot/func_0004EBAC.c",
+      "source_sha256": "7cfe00e69c06a6bba2dc42d211ea6ef20e79bb248e35fd6c84d4f697520c081d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "993d56b0bf1e446066300436080e2bb41395ff48ec7be1985b1c5748bd605437",
+          "993d56b0bf1e446066300436080e2bb41395ff48ec7be1985b1c5748bd605437"
+        ],
+        "resolved_calls": [
+          "word 2 (0x4ebb4): this module @ 0x4cd4c <=> this module @ 0x4cd4c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ebac.json",
+        "certificate_sha256": "90a1709ee1019e0fc18b391c692d94d9c7de2240f1439c39895da374f0477e0c"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ec48",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ec48-bca339de5168.log",
+      "source_path": "decomp/src/eboot/func_0004EC48.c",
+      "source_sha256": "69d9ca1f263b5493eb688f6e5a47e8841a6e67b4977b236238d2776136575968",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "60f62a7cfabf49f1fe89ea9607527954723aa014971171bb625ec92f8b4458c7",
+          "60f62a7cfabf49f1fe89ea9607527954723aa014971171bb625ec92f8b4458c7"
+        ],
+        "resolved_calls": [
+          "word 2 (0x4ec50): this module @ 0x4ec84 <=> this module @ 0x4ec84"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ec48.json",
+        "certificate_sha256": "9b0292bba66d93c3e3e064c7806cbee20e820a8ee9a2572073c0bb8176dcd6da"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ec68",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ec68-fbbddbe1b572.log",
+      "source_path": "decomp/src/eboot/func_0004EC68.c",
+      "source_sha256": "3c40652a4c001451c06769a5a33931868944e47f28479d09f8b437ef096f74f2",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "837ac6ee4535f0d3424c27bf15e57ac6d95d329a4697e42f739fb335bb78a067",
+          "837ac6ee4535f0d3424c27bf15e57ac6d95d329a4697e42f739fb335bb78a067"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ec68.json",
+        "certificate_sha256": "2bd745cc8c3482b589e3f7ce29252b9864a2659046b776ab8e0170708fecea1b"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4ec84",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004ec84-2b63a891f00e.log",
+      "source_path": "decomp/src/eboot/func_0004EC84.c",
+      "source_sha256": "7d3f330c5089694d6cbedf1697ebede1680b93bdbb20467278e463c76e7abd84",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 5,
+        "total_words": 5,
+        "object_sha256s": [
+          "1c1c258387ce3bd325f6fc9f3bfcf2e365f49e66a768face9af66f8c6e4d8dcb",
+          "1c1c258387ce3bd325f6fc9f3bfcf2e365f49e66a768face9af66f8c6e4d8dcb"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004ec84.json",
+        "certificate_sha256": "dd2df4ccbb802ebc76f47d1ad44f30332d04e643558958ec4975644c652fbcaa"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f008",
+      "size_bytes": 24,
+      "instruction_count": 6,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f008-42583ac7a869.log",
+      "source_path": "decomp/src/eboot/func_0004F008.c",
+      "source_sha256": "21a21841d33149d2c0fba64ecf8169a8d4a5764267745260861619c18b49a6ea",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 6,
+        "total_words": 6,
+        "object_sha256s": [
+          "13ec7424ee55b55d83bcb3234f83ee8df04284a9ff66d044970e9a8260257968",
+          "13ec7424ee55b55d83bcb3234f83ee8df04284a9ff66d044970e9a8260257968"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f008.json",
+        "certificate_sha256": "4e326aad10f350cfd86418df9563bf7ecc2b13ec3603be5d4968640deff159d2"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f698",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f698-2cff025d76c4.log",
+      "source_path": "decomp/src/eboot/func_0004F698.c",
+      "source_sha256": "df28203b14e85569c66455b205c7cafc0aa249825c27353ce6849e86bd260819",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "aeb6923a5eb6e5d0d02c4f15d31f60f7edde2cc2d27da6e7f5302962cb228512",
+          "aeb6923a5eb6e5d0d02c4f15d31f60f7edde2cc2d27da6e7f5302962cb228512"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f698.json",
+        "certificate_sha256": "02778cd22322590f64fdb8f2e79da4db6c6c54d71aec7ee835b21300094e70ea"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f6b4",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f6b4-fdfa92dae020.log",
+      "source_path": "decomp/src/eboot/func_0004F6B4.c",
+      "source_sha256": "e16dd71a853995c1a035fa1c1056e511bc7e64f0546d538005e9e38bec1bad14",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "b96f5ae8719afc7c861a40086b9ad3df238e6825b51ea9ebb7d722307a1c9668",
+          "b96f5ae8719afc7c861a40086b9ad3df238e6825b51ea9ebb7d722307a1c9668"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f6b4.json",
+        "certificate_sha256": "3d0b93edd75cbbb9779c421ec1aefb8bd714875a05b7c9dd926f0504fe6c073f"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f738",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f738-89e950d74c1a.log",
+      "source_path": "decomp/src/eboot/func_0004F738.c",
+      "source_sha256": "159eb9c7ea2d694dca3b65e53ac38c2f5e74a2efdc847f0104b33f8b12d6cdbb",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "931037100971437922bf0c48f11c46f401e8184dfd01297c31ed17730b40d3e9",
+          "931037100971437922bf0c48f11c46f401e8184dfd01297c31ed17730b40d3e9"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f738.json",
+        "certificate_sha256": "1504a8a80da5745023ea7cc6e65712e0e5d5f7e62ad027f702e62a3af983aec6"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f748",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f748-4227b929ac9b.log",
+      "source_path": "decomp/src/eboot/func_0004F748.c",
+      "source_sha256": "e0613d260b099e51375aa3fe428c2d7728a2b9fc3f24d3a30c075d1c9be5d0d3",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "238f7cb969a89eca1f2afa14f563e99fe0d83e8ed32cbeaf26e6cda8f38b503a",
+          "238f7cb969a89eca1f2afa14f563e99fe0d83e8ed32cbeaf26e6cda8f38b503a"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f748.json",
+        "certificate_sha256": "d81127c50b7b2ec17a97e0174e0fb316d81280e26712684ee4132af09e24eae0"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f7a0",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f7a0-7e6b97d5ee31.log",
+      "source_path": "decomp/src/eboot/func_0004F7A0.c",
+      "source_sha256": "8b32aded5a30e0642476fd01c96289739c2d3b9b9a87e140d52a5aa5caa6052d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "4082e78f2be9ae7c4c71ca2e5b991bf39d88e0d330be2586a4a0dc73cdf027ee",
+          "4082e78f2be9ae7c4c71ca2e5b991bf39d88e0d330be2586a4a0dc73cdf027ee"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f7a0.json",
+        "certificate_sha256": "241c22a82204d5131235555333e79d08888150439a3883ee08d5d0eafe158c90"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f7ac",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f7ac-604adca1d477.log",
+      "source_path": "decomp/src/eboot/func_0004F7AC.c",
+      "source_sha256": "ed071ae2ccc2e11b67d4dcd4f26e0d1d1344ed59289d52b4b565473ae34bd7b5",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "1e4d59512e6ba428c216a06c3698829307ab3a2f8911f751a87c0a008b1fc608",
+          "1e4d59512e6ba428c216a06c3698829307ab3a2f8911f751a87c0a008b1fc608"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f7ac.json",
+        "certificate_sha256": "18251e7650b48b1e00fefa90a35940318d70ffe6e35efdf9f231b855439a904a"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4f7b4",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004f7b4-63f55c956887.log",
+      "source_path": "decomp/src/eboot/func_0004F7B4.c",
+      "source_sha256": "26ba1e6a52b67adf044cf82ebc77d3651a907e3b02bcece8962b70f08fa8a8dd",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "9f4fbf25e56b3ffbddc882d70df54f360d5aed259873b2affbe29ebe832f98c1",
+          "9f4fbf25e56b3ffbddc882d70df54f360d5aed259873b2affbe29ebe832f98c1"
+        ],
+        "resolved_calls": [
+          "ThreadManForUser/0x812346E4@0x6b004"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004f7b4.json",
+        "certificate_sha256": "f8fb18509673ea68c4f918ff152999f0f6136f022697a3ffbb9b2ac139ef7d27"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4fe8c",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0004fe8c-6b82db09d71a.log",
+      "source_path": "decomp/src/eboot/func_0004FE8C.c",
+      "source_sha256": "768f5a58c6ddd077e3fb81e005b117be0dee7399838e8499284a7e2c4bba0c92",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "4bd6591b05b1af35a58229c8c081e9eae66c3cf5c102e39cde7495f57d92fe37",
+          "4bd6591b05b1af35a58229c8c081e9eae66c3cf5c102e39cde7495f57d92fe37"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0004fe8c.json",
+        "certificate_sha256": "9934f7fbd55e712a15a5cbd7b7264c010b5ab4ba8ebb4db0d2b1e647eeffa4d1"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x50678",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00050678-08e5807241ac.log",
+      "source_path": "decomp/src/eboot/func_00050678.c",
+      "source_sha256": "4dade8354b3b59a60e012b33f31cb934b9002a1ac3b07c9facde3442663c2aac",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "50b0195140df16d8a3138b95d5dd405b15a4b83e2100d3e87a48ca2f52440747",
+          "50b0195140df16d8a3138b95d5dd405b15a4b83e2100d3e87a48ca2f52440747"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00050678.json",
+        "certificate_sha256": "c8c2bb4f1dacedf65085ed8560bcb200d35c04aa9aed628444ac87bbaef7296a"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5088c",
+      "size_bytes": 24,
+      "instruction_count": 6,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005088c-6005704e3f54.log",
+      "source_path": "decomp/src/eboot/func_0005088C.c",
+      "source_sha256": "89a423c5cb990821d4ac97001ce4105e341650392ed2446daf0f0f60399a8d42",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 6,
+        "total_words": 6,
+        "object_sha256s": [
+          "8ef988400ab67a51b1f7cfacfa09d8f9c347613432b14e79c69bea267e8591d1",
+          "8ef988400ab67a51b1f7cfacfa09d8f9c347613432b14e79c69bea267e8591d1"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005088c.json",
+        "certificate_sha256": "d10acc433a1f6f0bcb57cfb971cd392854bb4c32a50d174d28fc3c3bdde4b572"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x54ee4",
+      "size_bytes": 124,
+      "instruction_count": 31,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00054ee4-0804d02e84cb.log",
+      "result": {
+        "status": "UNMATCHED",
+        "called_by": [
+          "0x53bd4"
+        ],
+        "data_reference_count": 1
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x54f60",
+      "size_bytes": 228,
+      "instruction_count": 57,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00054f60-4f4899e14790.log",
+      "result": {
+        "status": "UNMATCHED",
+        "called_by": [
+          "0x53bd4"
+        ],
+        "data_reference_count": 4
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x55044",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00055044-c51faa1abb01.log",
+      "source_path": "decomp/src/eboot/func_00055044.c",
+      "source_sha256": "7f76c3bfa191f2eb93ae9e875c3864d4871e45fc51e8c43388b6f5fbd6d52f59",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "edba5bbfc09702bce7d27a95ec90901726b62ffbf40b180f37020f70d3c6b960",
+          "edba5bbfc09702bce7d27a95ec90901726b62ffbf40b180f37020f70d3c6b960"
+        ],
+        "resolved_calls": [
+          "0x391c0"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00055044.json",
+        "certificate_sha256": "38c3020e909ee38e90862dd3076973d69c536a4b618013ca8481cfff0b1ecffa"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x55804",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00055804-7a2bb8566316.log",
+      "source_path": "decomp/src/eboot/func_00055804.c",
+      "source_sha256": "d220d5b2adb2dd95c1d9f675302cece2335cb84970beb5494d8052591ccc3994",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "a0adce4c3bf08ac76750d78d8020a5094ffd20a44beb3bc3875ad59ca87cb927",
+          "a0adce4c3bf08ac76750d78d8020a5094ffd20a44beb3bc3875ad59ca87cb927"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00055804.json",
+        "certificate_sha256": "62220accd393856e1e40489d2ed5d8af8cacc72f1818134e7ec78c4a7242b75d"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x55814",
+      "size_bytes": 16,
+      "instruction_count": 4,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00055814-40055605c3c4.log",
+      "source_path": "decomp/src/eboot/func_00055814.c",
+      "source_sha256": "2f54a4e97241bbaf1656aecdd6a880b007f5516f41079f149955e504f01a4930",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 4,
+        "total_words": 4,
+        "object_sha256s": [
+          "217fd394f81e661e2a189c9f20f2d6ecd4c2dde830dc3237e33f496fc520d299",
+          "217fd394f81e661e2a189c9f20f2d6ecd4c2dde830dc3237e33f496fc520d299"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00055814.json",
+        "certificate_sha256": "06523226cc5a8cc7d2bd52e28ffaae8545ff34a446ea09deffe886f5094f51ab"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5a19c",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005a19c-62a4997b4b40.log",
+      "source_path": "decomp/src/eboot/func_0005A19C.c",
+      "source_sha256": "f4fb54e67c3116ea05a40fa9f04085a1732f0f21d420ab9540540cdbabd8daaf",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "0231f4a15453c4dedb14de42d4cf87c2f468924793d0217734320a6198a14662",
+          "0231f4a15453c4dedb14de42d4cf87c2f468924793d0217734320a6198a14662"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005a19c.json",
+        "certificate_sha256": "3b8f8f5969d5670c50e35fca42682f1360a50d3ac462c0bd2de53c46cfd30988"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5a1b8",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005a1b8-51e85d311fe1.log",
+      "source_path": "decomp/src/eboot/func_0005A1B8.c",
+      "source_sha256": "1608b1dc848a0fc81677352dc21fedd68d2d5b0f0b4b34198b8995599893f042",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 5,
+        "total_words": 5,
+        "object_sha256s": [
+          "361c4e14d1b3424c990c6810fb3e08abdb70a59a64bf00e4a736e5106aac748d",
+          "361c4e14d1b3424c990c6810fb3e08abdb70a59a64bf00e4a736e5106aac748d"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005a1b8.json",
+        "certificate_sha256": "ac0aefb28e568123a5196318331511b5fc95c21b991186761aef8b3a0eb3c9cc"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5a1cc",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005a1cc-e98d15b3806c.log",
+      "source_path": "decomp/src/eboot/func_0005A1CC.c",
+      "source_sha256": "14f0bfb9633d1788be9fea7a77a8b184cdd78dc9fd71491623e3de816152086d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 5,
+        "total_words": 5,
+        "object_sha256s": [
+          "2521f18662ae7d1b1a7ccb775ad4c57e16d9a12ece74945c9957de1fb352ec93",
+          "2521f18662ae7d1b1a7ccb775ad4c57e16d9a12ece74945c9957de1fb352ec93"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005a1cc.json",
+        "certificate_sha256": "92f180a9f5dc179b5ff702789c6d21c2d076ae83aadfdb5988ea44e9d91c27a1"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5a3c8",
+      "size_bytes": 20,
+      "instruction_count": 5,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005a3c8-a005c534fd02.log",
+      "source_path": "decomp/src/eboot/func_0005A3C8.c",
+      "source_sha256": "18ba23b409a4796b19f6473ec552e9485f98ef60dc276f807f1f7bd877d26108",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 5,
+        "total_words": 5,
+        "object_sha256s": [
+          "b08c83f51e3cefa9a4441a78cab1c7c170f8a4233f772897eea83087ca689c04",
+          "b08c83f51e3cefa9a4441a78cab1c7c170f8a4233f772897eea83087ca689c04"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005a3c8.json",
+        "certificate_sha256": "e2de83c3db16e8fc2d38b8c2e9c4f92ef00d41b12c25bfd9e7c8cf0d7d0aac79"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5a50c",
+      "size_bytes": 24,
+      "instruction_count": 6,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005a50c-b7cb797b4071.log",
+      "source_path": "decomp/src/eboot/func_0005A50C.c",
+      "source_sha256": "84f2440f53d7039384cd299d811a832937b28bde91c477f53e94d7b49536cfb2",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 6,
+        "total_words": 6,
+        "object_sha256s": [
+          "4b6fd7f40c891cc68b0ae222d6f710542312384ab15ed28442a9759122da0757",
+          "4b6fd7f40c891cc68b0ae222d6f710542312384ab15ed28442a9759122da0757"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005a50c.json",
+        "certificate_sha256": "c822399eeb6928b29be1f0ad9e4d310e12cd2e5a23cfc5ab3aeacbef5ef0e00e"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5ab88",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005ab88-146fa61b0cc8.log",
+      "source_path": "decomp/src/eboot/func_0005AB88.c",
+      "source_sha256": "634e136759226e2a47ba0b8860c4a81441bbb3b3d1f68a4907abd705295c4f6d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "977b8abe026ceb2ddb04271bef56fdefd1be9b233c75f1fae75beb4d15271089",
+          "977b8abe026ceb2ddb04271bef56fdefd1be9b233c75f1fae75beb4d15271089"
+        ],
+        "resolved_calls": [
+          "0x5a634"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005ab88.json",
+        "certificate_sha256": "af59b938bbc7df21103441230437a7b4aa50329d3e08507935fe5c14d62d00a7"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5cf34",
+      "size_bytes": 24,
+      "instruction_count": 6,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005cf34-1129c9a989d7.log",
+      "result": {
+        "status": "NONMATCHING",
+        "tested_source_sha256s": [
+          "96dfa4f33403606f7c0bacd970bfa3f6934735d9fd88a8ae45c36c108e09a9b1",
+          "79d3ddb5d7b03bba864c0036680bd6ea24c5cab41b3f89e0cfa6ceef0a6d742d"
+        ],
+        "tested_object_sha256": "8950ec4a60e5db14d2f6bff2fdf9622c221c3a87b8ee0421818cae175924409e",
+        "matching_words": 0,
+        "total_words": 6,
+        "reason": "both guard/control-flow forms retain a frame and do not reproduce the original branch-likely tail call"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5cfec",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005cfec-44b9e7504f51.log",
+      "source_path": "decomp/src/eboot/func_0005CFEC.c",
+      "source_sha256": "d5be131fefd171d83b22deedb5b0475d6ab8d9c303329c47600c34b4fcc4da2e",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "a8b2463754b948820671ce7e1d7c08eb249d8d66477a48aadb32b0ebbbbc9956",
+          "a8b2463754b948820671ce7e1d7c08eb249d8d66477a48aadb32b0ebbbbc9956"
+        ],
+        "resolved_calls": [
+          "word 2 (0x5cff4): this module @ 0x5cf7c <=> this module @ 0x5cf7c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005cfec.json",
+        "certificate_sha256": "d402c458158990cc5b776edce29f789cd58f71a66b206b5c7fe8000c3806a73b"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5e4ac",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005e4ac-e690dc87223a.log",
+      "source_path": "decomp/src/eboot/func_0005E4AC.c",
+      "source_sha256": "7a2022482a68368aeee4e7c7be1adc9865ef34eba174b006dd7481f9b60f594f",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "6f8240800a0c7062b33140a8c02ca5d7b26fb42ad22faa1716c23972984d0661",
+          "6f8240800a0c7062b33140a8c02ca5d7b26fb42ad22faa1716c23972984d0661"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005e4ac.json",
+        "certificate_sha256": "5da73c2b6bf226f597a51720564df0df262d1955d0b3d75a13130b2244857f48"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5e4c8",
+      "size_bytes": 28,
+      "instruction_count": 7,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0005e4c8-4af50b3118d2.log",
+      "source_path": "decomp/src/eboot/func_0005E4C8.c",
+      "source_sha256": "98d3dfc6fa11fcbac00ec43db1867669dee8af641819d2e2dcaa1727b049a7f4",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 7,
+        "total_words": 7,
+        "object_sha256s": [
+          "0a1591ac86b28074b508c98f83387514bf7f3f6c45e4b59c88b35eaaad945d09",
+          "0a1591ac86b28074b508c98f83387514bf7f3f6c45e4b59c88b35eaaad945d09"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0005e4c8.json",
+        "certificate_sha256": "6dc3f19de6be5299c68a482affd97446d88213ce604a97a376e7d3fb68d0c453"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x6168c",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0006168c-1516afd3bdd6.log",
+      "source_path": "decomp/src/eboot/func_0006168C.c",
+      "source_sha256": "cb5bcf1a48af2ae2c2a4c9ae23807f2290430fe18e60e81f49005cc2cad570ff",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "7b949bfe32e29fe32732ec36dc195593a557126aa12a591457333c319229766e",
+          "7b949bfe32e29fe32732ec36dc195593a557126aa12a591457333c319229766e"
+        ],
+        "resolved_calls": [
+          "0x5c4b4"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0006168c.json",
+        "certificate_sha256": "184b498396c027ee292b80f6dcc25304a80d0384696e33ce6e88d421960fecf7"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x66318",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00066318-6112d4d165bd.log",
+      "source_path": "decomp/src/eboot/func_00066318.c",
+      "source_sha256": "e5287727e9e8a047014f9ddbd687796bd6f3cb3b9e020f024a0ed96793bc7b49",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "f15b53b1897279daa2292ede92313642c358cb39e3a1ccc0e82d82bd9dcade8c",
+          "f15b53b1897279daa2292ede92313642c358cb39e3a1ccc0e82d82bd9dcade8c"
+        ],
+        "resolved_calls": [
+          "0x661c4"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00066318.json",
+        "certificate_sha256": "c7e08bb12bae065e68a6c2f700ffe16fc43fd4dd325d0cbc8ba0b97e4c197930"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x66324",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00066324-3f4dd39ce179.log",
+      "source_path": "decomp/src/eboot/func_00066324.c",
+      "source_sha256": "7370955f23859792320e4b05961cb39ce2215a62998f2492803660cb6e4a2141",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "d3e071b6707eadff1781779234d2ae2dca6fb043e8a407f45825b0cfe3246a41",
+          "d3e071b6707eadff1781779234d2ae2dca6fb043e8a407f45825b0cfe3246a41"
+        ],
+        "resolved_calls": [
+          "0x661c4"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00066324.json",
+        "certificate_sha256": "2f27e971ec064754d114decad54c58951085609e336d532bba7c781df11312a4"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x66330",
+      "size_bytes": 12,
+      "instruction_count": 3,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/00066330-1ddc38a88fcd.log",
+      "source_path": "decomp/src/eboot/func_00066330.c",
+      "source_sha256": "53203f8191b8a5456c07f4199e85bb8cfcb365d54d995ea6d4c1b6c7d2e29a6f",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 3,
+        "total_words": 3,
+        "object_sha256s": [
+          "fafeb49e21c2c8ff2450a8bc73b8f9439b59a118508a838ae3851d38b7df5350",
+          "fafeb49e21c2c8ff2450a8bc73b8f9439b59a118508a838ae3851d38b7df5350"
+        ],
+        "resolved_calls": [
+          "0x661c4"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-00066330.json",
+        "certificate_sha256": "c75d37cd6bbda8652c2f4b904a0ad6a5cc54c2c928488eff0760376b26568811"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x6a8ec",
+      "size_bytes": 32,
+      "instruction_count": 8,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/internal-boundaries/0006a8ec-3e50fb98bd1d.log",
+      "source_path": "decomp/src/eboot/func_0006A8EC.c",
+      "source_sha256": "b2356d88937d75a35e6e89ca032428dc1ef6be23bd86b329200b21a6c5e93ccf",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 8,
+        "total_words": 8,
+        "object_sha256s": [
+          "e0bbcd25a2012c454e00780fec52f0e2428a4510db4c17e4467efa8a3fb85659",
+          "e0bbcd25a2012c454e00780fec52f0e2428a4510db4c17e4467efa8a3fb85659"
+        ],
+        "resolved_calls": [
+          "word 2 (0x6a8f4): this module @ 0x6a674 <=> this module @ 0x6a674"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "build/seto049/internal-certificates/eboot-0006a8ec.json",
+        "certificate_sha256": "5d99bc14e5ce34294de0261d11bf95f8a7dd68d4f68f55ef010792c88f1d0e9c"
+      }
+    },
+    {
+      "module": "libhtml_view.prx",
+      "address": "0x854",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libhtml_view-00000854-6062ed9fbbbe.log",
+      "source_path": "decomp/src/libhtml_view/func_00000854.c",
+      "source_sha256": "a49894103fd769cfc2e3dfe559355fadf5326ef8cc8dfc153ec7b2582b79222b",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "2d929ec3e62a564e1143368a64add6c77e92220d46df860a5ba6b56709d46407",
+          "2d929ec3e62a564e1143368a64add6c77e92220d46df860a5ba6b56709d46407"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000854.json",
+        "certificate_sha256": "1244b00c051b3f51f3a5e0e131e703e3370a12d3f352bfd68be2f2542cc96411"
+      }
+    },
+    {
+      "module": "libhtml_view.prx",
+      "address": "0x894",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libhtml_view-00000894-1b7479e9601c.log",
+      "source_path": "decomp/src/libhtml_view/func_00000894.c",
+      "source_sha256": "4f2e5bd4cbfbe43717919e307a0acec58485938df8241e35170ab2be5b4fcd00",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "5ad8dc489061cb65b59987f8db35b7f3f94dc02375b665070f926c0e3a7d7131",
+          "5ad8dc489061cb65b59987f8db35b7f3f94dc02375b665070f926c0e3a7d7131"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000894.json",
+        "certificate_sha256": "ad76016ad40d0496ee27200335f9e2826a115e22cb552085e50ee80de341bb9c"
+      }
+    },
+    {
+      "module": "libhtml_view.prx",
+      "address": "0x8a4",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libhtml_view-000008a4-9b6463c70386.log",
+      "source_path": "decomp/src/libhtml_view/func_000008A4.c",
+      "source_sha256": "afd4360f6ea4058af1e752a8f3d40e2a4dc9799469b92c25f632d5d596eb98f8",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "d1861d48fc8e92452e378d063626c4d5006ca439cc83e4a0245ba325bd978b83",
+          "d1861d48fc8e92452e378d063626c4d5006ca439cc83e4a0245ba325bd978b83"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-000008a4.json",
+        "certificate_sha256": "f86be340d201cbab18653e488e5037b5fb8a81072908afaaca4cebf42f138254"
+      }
+    },
+    {
+      "module": "libhtml_view.prx",
+      "address": "0x964",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libhtml_view-00000964-5a847a592001.log",
+      "source_path": "decomp/src/libhtml_view/func_00000964.c",
+      "source_sha256": "24bc100009cf109f9526fc98523787a2051df668674d2c74683ecfb84bb8e6e8",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "5d4092d30237e316f47fdbeec08fd072803705cb363e1c48f1017c952e8fe007",
+          "5d4092d30237e316f47fdbeec08fd072803705cb363e1c48f1017c952e8fe007"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000964.json",
+        "certificate_sha256": "f350527a8cc23c83a62627d8c1e66953f90320455eab660bf7a5738e6d597e9e"
+      }
+    },
+    {
+      "module": "libhtml_view.prx",
+      "address": "0xb1c",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libhtml_view-00000b1c-ce0d3d25e7f9.log",
+      "source_path": "decomp/src/libhtml_view/func_00000B1C.c",
+      "source_sha256": "a851f192bd9b7550c4e04ad805ad4c5cbcbef3e04da8bcf98f766dc06827a2d2",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "db94a9f44f236c313e0a28cc076528a8baa1a3c79b2748c38f2236b1d30710cd",
+          "db94a9f44f236c313e0a28cc076528a8baa1a3c79b2748c38f2236b1d30710cd"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libhtml_view-prx-00000b1c.json",
+        "certificate_sha256": "4b08959005fa8beb916715ff240ee10115f17378004dd6948eae9d8df0bc6ecc"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x3668",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00003668-8e973ba5820a.log",
+      "source_path": "decomp/src/libtutoriallist/func_00003668.c",
+      "source_sha256": "5a7e3996946e1b13b0badcf9d17ea79a7cf50f46750281221af64063084d4815",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "2064e64faa64132d475408125250eeb22a33867c583e213f5481172b64d2e385",
+          "2064e64faa64132d475408125250eeb22a33867c583e213f5481172b64d2e385"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003668.json",
+        "certificate_sha256": "3d7c278aba527f12ef8660d8e676543205fc5b3ed39ff9f53f8eecbbe4575c96"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x36a0",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-000036a0-17cccba009fb.log",
+      "source_path": "decomp/src/libtutoriallist/func_000036A0.c",
+      "source_sha256": "d648adea23e38e3b78b3c512a14e4d8b665df466c3c20e20b01a8ff094d29379",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "b1f577a2f093699b4f293474a612312fa403166d0a2b63709993de6cdd615de9",
+          "b1f577a2f093699b4f293474a612312fa403166d0a2b63709993de6cdd615de9"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000036a0.json",
+        "certificate_sha256": "98538a8483a26ab41a448a8532f9cd355a53467ad1e6af5b4212cdddcaffb444"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x39f0",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-000039f0-02fa5bdc5b1d.log",
+      "source_path": "decomp/src/libtutoriallist/func_000039F0.c",
+      "source_sha256": "8a0498136d71fe1885dfa263471005104e08798871310cd1a167cec29fa5c867",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "b58bccf53b1dd5b90425baa31a62b4cb5405d5b40fd1591b4a9d037a86d93b77",
+          "b58bccf53b1dd5b90425baa31a62b4cb5405d5b40fd1591b4a9d037a86d93b77"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000039f0.json",
+        "certificate_sha256": "59694d84c8ab7d6ab7775cd8668ddd49be0fe9aa6de9e4d4f535b6e64187bd69"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x3a00",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00003a00-a474514cbcd5.log",
+      "source_path": "decomp/src/libtutoriallist/func_00003A00.c",
+      "source_sha256": "5da437d74a5971093de984cd82b61d81df82f924a1e18b22b69b9e51e1356607",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "159820952a46053e934420c055e546995ac05467f822b68b7e1d2ddaca60b7fc",
+          "159820952a46053e934420c055e546995ac05467f822b68b7e1d2ddaca60b7fc"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00003a00.json",
+        "certificate_sha256": "2c34a7f0f5f1c226d02bd295c345990878a27f788879791b56d3f1c72ba2a231"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x40f8",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-000040f8-9d53de678e2a.log",
+      "source_path": "decomp/src/libtutoriallist/func_000040F8.c",
+      "source_sha256": "d43c735d583a8265d8ca4650c479b6613b2540db09429744e06a652cfb578d1a",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "f9c4e8094ffc3d37c35bc601a63837ab9ad3ab8a462f2f65175ea278a6336c2f",
+          "f9c4e8094ffc3d37c35bc601a63837ab9ad3ab8a462f2f65175ea278a6336c2f"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000040f8.json",
+        "certificate_sha256": "f64ebc54e4906557f71a7fc8c2b19e3a656fece338d6ca0c88561ab3b7e64f92"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x4118",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00004118-72f11a020343.log",
+      "source_path": "decomp/src/libtutoriallist/func_00004118.c",
+      "source_sha256": "08426f01908983b6c1ac21dfe3fddc5334a7f597068d088d4c25c5fee7e43c76",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "f233b8b337c70338d2b797f73235278ce353dc6da78d930cb3a564e9e15f9636",
+          "f233b8b337c70338d2b797f73235278ce353dc6da78d930cb3a564e9e15f9636"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004118.json",
+        "certificate_sha256": "29d9ce4f4ed859f2f21b3dd02a57ec22dece3f5ea1d4483c995544a8841472c0"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x42a0",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-000042a0-2d353aeeae87.log",
+      "source_path": "decomp/src/libtutoriallist/func_000042A0.c",
+      "source_sha256": "7fbacd8df7cdb8eeac82b374136db1dd04cc58c73df4194da84174c79034d273",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "5fe8bae9806b2f3cd8f31755044f7db6513d4ca95cbe1480db56c7fa2f47d621",
+          "5fe8bae9806b2f3cd8f31755044f7db6513d4ca95cbe1480db56c7fa2f47d621"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000042a0.json",
+        "certificate_sha256": "85c06f985aef6b600f07a85a487639ad4d5f26f25295ff5a833a3045e8bd6f89"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x4340",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00004340-a1a7c57b945d.log",
+      "source_path": "decomp/src/libtutoriallist/func_00004340.c",
+      "source_sha256": "a60d34b0049538296bbc6e0e4020aee9f444930707d2015e3bc6ece612ca03bd",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "38ae6f9216609c419a9965c55f921f2bf672dc6a70c7c11a6c9eac8cde7f4ef8",
+          "38ae6f9216609c419a9965c55f921f2bf672dc6a70c7c11a6c9eac8cde7f4ef8"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004340.json",
+        "certificate_sha256": "75e0baabbb77def5b0e18eff23365c24e000185c0459321d6f92a93cac933e26"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x4350",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00004350-b34b89bb406b.log",
+      "source_path": "decomp/src/libtutoriallist/func_00004350.c",
+      "source_sha256": "fd8097738f6be2aa1758bdb20039a8647002f2f4bc2205b19c6802a3b811bcf9",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "ac079c76e8028b88b68d88b7172220efb7564148d71ef40be53dc1bb3438a658",
+          "ac079c76e8028b88b68d88b7172220efb7564148d71ef40be53dc1bb3438a658"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004350.json",
+        "certificate_sha256": "16fd3e320376ea203521e40191dc025d70d3c1ef5b50c360894a7d3432a4ee2a"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x48e8",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-000048e8-a4ed1ac74d57.log",
+      "source_path": "decomp/src/libtutoriallist/func_000048E8.c",
+      "source_sha256": "365b230011fb18221139f9182118bd693004c31af177662811c2b64b0ed67e20",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "ebfa64c24967614c05eaf102bf9066190113a72c5c1e5b799ef8b7baa9833dfa",
+          "ebfa64c24967614c05eaf102bf9066190113a72c5c1e5b799ef8b7baa9833dfa"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-000048e8.json",
+        "certificate_sha256": "dda137f544c2fcfe3a0158ecf7e581932d402fd241dcb3375c9a82261d4b9f8d"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x4908",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00004908-123a6c14376a.log",
+      "source_path": "decomp/src/libtutoriallist/func_00004908.c",
+      "source_sha256": "5a52d96d4fa87bf89e48245b3653c30df9459007c57cb6a47b08a7373812ba29",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "476295ca3786058a9e39d69acf7a9fca1056f6cd128a2d481f4eeb76a6a334e5",
+          "476295ca3786058a9e39d69acf7a9fca1056f6cd128a2d481f4eeb76a6a334e5"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004908.json",
+        "certificate_sha256": "cd2939578d843fa52f38c342ffe0b66d92cb44f72a5879ee880570b0fff76784"
+      }
+    },
+    {
+      "module": "libtutoriallist.prx",
+      "address": "0x4990",
+      "section": ".sceStub.text",
+      "size_bytes": 8,
+      "instruction_count": 2,
+      "boundary_status": "EXACT",
+      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "ghidra_log_path": "build/seto049/prx-boundaries/libtutoriallist-00004990-097713d66626.log",
+      "source_path": "decomp/src/libtutoriallist/func_00004990.c",
+      "source_sha256": "a5b4f34a0125a81e54477bd5a0b110e9946af12d0123be0c0ed0b8e505f8e519",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 2,
+        "total_words": 2,
+        "object_sha256s": [
+          "00a4ee7c8b1377bab6f3f9353bdcad438915245c0afd6b947323a871589655cd",
+          "00a4ee7c8b1377bab6f3f9353bdcad438915245c0afd6b947323a871589655cd"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "section": ".sceStub.text",
+        "candidate_section": ".text",
+        "certificate_path": "build/seto049/internal-certificates/libtutoriallist-prx-00004990.json",
+        "certificate_sha256": "64157d4c77fa7d5dd4b37a12c05cf3d4994f9053dfbe16bd2d3a927bb1a6ca84"
+      }
+    }
+  ]
+}
