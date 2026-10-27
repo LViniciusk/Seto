@@ -7479,7 +7479,8 @@ continuam fora do Git. A branch `feat/seto-decomp-048` permanece sem merge.
 certificação diferida sem alterar attempts e o teste simulado de fallback de
 quota. Suíte completa: **1044 passed, 44 skipped** (integrações proprietárias/
 Linux não habilitadas nesta máquina). `compileall` e `git diff --check` foram
-executados ao fechamento; CI será registrado no PR único da tarefa.
+executados ao fechamento. CI no push/PR #49 passou nos **8 jobs** Ubuntu/Windows
+× Python 3.11/3.12. PR #49 permanece aberta, sem merge nem auto-merge.
 
 ### Promoções certificadas
 
