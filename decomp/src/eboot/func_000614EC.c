@@ -1,8 +1,8 @@
-extern int func_0003C65C(unsigned int base);
+extern char *func_0003C65C(void);
 
-unsigned char func_000614EC(unsigned int base)
+unsigned char func_000614EC(unsigned char *base)
 {
-    int offset = func_0003C65C(base);
+    char *offset = func_0003C65C();
 
-    return *(unsigned char *)(base + offset + 3);
+    return *(unsigned char *)(base + (unsigned int)offset + 3);
 }

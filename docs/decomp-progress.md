@@ -7991,3 +7991,22 @@ Em Windows/Python 3.12: **1100 passed, 44 skipped**; `compileall` sem erros;
 `git diff --check` limpo. O piso de `tests/test_internal_functions.py` subiu de
 2.554 para **3.000** instruções reais, mantendo a soma dinâmica do catálogo e o
 piso independente dos import stubs.
+
+### Correção pós-auditoria do PR #54
+
+Os 28 certificados passaram a carregar o bloco `boundary` com `status: EXACT`,
+módulo, endereço, seção, tamanho e `ghidra_log_sha256`, e as 19 entradas que não
+tinham `ghidra_log_path` foram completadas. Cada log Ghidra foi revalidado contra
+o EBOOT revisado antes de ser aceito: intervalo dentro de `.text`, início/fim
+coerentes, contagem de instruções igual ao intervalo, listagem contígua,
+`SETO_BOUNDARY_STATUS=EXACT`, `SETO_DECOMP_STATUS=OK` e SHA-256 recalculado. Nenhum
+hash ou boundary foi inferido; todos os logs já existentes foram confirmados e
+os caminhos ficaram relativos ao repositório.
+
+`func_0003C7F4.c` e `func_000614EC.c` foram corrigidos para a assinatura real do
+callee: `char *func_0003C65C(void)`. O retorno é tratado como deslocamento de
+ponteiro de 32 bits (`base + (unsigned int)offset + 3`), coerente com o `addu`
+observado no original. As duas funções foram recompiladas em dois builds MWCC
+independentes e continuam `MATCHED` com os mesmos objetos (SHA-256
+`11C0301A…` e `2856EAA7…`), confirmando que a correção semântica não alterou o
+codegen.

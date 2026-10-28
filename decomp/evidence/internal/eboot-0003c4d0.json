@@ -1,5 +1,13 @@
 {
   "address": "0x3c4d0",
+  "boundary": {
+    "address": "0x3c4d0",
+    "ghidra_log_sha256": "cc0bd17ee44f75265929b63c9f0e7a40e3ad8eea0d75a733758d29692bba0242",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 72,
+    "status": "EXACT"
+  },
   "build_sha256": [
     "3a750c216e593104ea57e476588218e28a5f2d65f84528201ed56014d1f056e9",
     "3a750c216e593104ea57e476588218e28a5f2d65f84528201ed56014d1f056e9"
@@ -39,7 +47,7 @@
       },
       "provenance": {
         "candidate_section": null,
-        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "compiler": "mwccpsp.exe",
         "data_map": null,
         "defines": [],
         "flags": [
@@ -51,7 +59,7 @@
           "decomp/include"
         ],
         "loader": [
-          "/home/vinicius/.local/bin/wibo"
+          "wibo"
         ],
         "object": "build/seto053/coordinator/3c4d0/verify-1/func_0003C4D0.o",
         "object_sha256": "3a750c216e593104ea57e476588218e28a5f2d65f84528201ed56014d1f056e9",
@@ -94,7 +102,7 @@
       },
       "provenance": {
         "candidate_section": null,
-        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "compiler": "mwccpsp.exe",
         "data_map": null,
         "defines": [],
         "flags": [
@@ -106,7 +114,7 @@
           "decomp/include"
         ],
         "loader": [
-          "/home/vinicius/.local/bin/wibo"
+          "wibo"
         ],
         "object": "build/seto053/coordinator/3c4d0/verify-2/func_0003C4D0.o",
         "object_sha256": "3a750c216e593104ea57e476588218e28a5f2d65f84528201ed56014d1f056e9",

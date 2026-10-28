@@ -1,5 +1,13 @@
 {
   "address": "0x614ec",
+  "boundary": {
+    "address": "0x614ec",
+    "ghidra_log_sha256": "8ea4b798b4c5bdd6b42dc21a162a3e28b86b6c877b9314b2fef7f3994b2b7991",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 44,
+    "status": "EXACT"
+  },
   "build_sha256": [
     "2856eaa75f3fdb422bcc9d8430a408c459b9b7c1c9f5ba4c50120dfc7780078d",
     "2856eaa75f3fdb422bcc9d8430a408c459b9b7c1c9f5ba4c50120dfc7780078d"
@@ -39,7 +47,7 @@
       },
       "provenance": {
         "candidate_section": null,
-        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "compiler": "mwccpsp.exe",
         "data_map": null,
         "defines": [],
         "flags": [
@@ -51,12 +59,12 @@
           "decomp/include"
         ],
         "loader": [
-          "/home/vinicius/.local/bin/wibo"
+          "wibo"
         ],
         "object": "build/seto053/coordinator/614ec/verify-1/func_000614EC.o",
         "object_sha256": "2856eaa75f3fdb422bcc9d8430a408c459b9b7c1c9f5ba4c50120dfc7780078d",
         "source": "decomp/src/eboot/func_000614EC.c",
-        "source_sha256": "a9e990c8f25b2752038ac72d2cdd459b4c8dae44bce1e373b963d12a880fa8f6"
+        "source_sha256": "2c334aa1a4f6d78040d7f29cdf3e5b5cd8521add0dac8b9f5e4a33ee9de25780"
       },
       "section": ".text",
       "status": "MATCHED",
@@ -94,7 +102,7 @@
       },
       "provenance": {
         "candidate_section": null,
-        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "compiler": "mwccpsp.exe",
         "data_map": null,
         "defines": [],
         "flags": [
@@ -106,12 +114,12 @@
           "decomp/include"
         ],
         "loader": [
-          "/home/vinicius/.local/bin/wibo"
+          "wibo"
         ],
         "object": "build/seto053/coordinator/614ec/verify-2/func_000614EC.o",
         "object_sha256": "2856eaa75f3fdb422bcc9d8430a408c459b9b7c1c9f5ba4c50120dfc7780078d",
         "source": "decomp/src/eboot/func_000614EC.c",
-        "source_sha256": "a9e990c8f25b2752038ac72d2cdd459b4c8dae44bce1e373b963d12a880fa8f6"
+        "source_sha256": "2c334aa1a4f6d78040d7f29cdf3e5b5cd8521add0dac8b9f5e4a33ee9de25780"
       },
       "section": ".text",
       "status": "MATCHED",
@@ -123,5 +131,5 @@
   "section": ".text",
   "size_bytes": 44,
   "source_path": "decomp/src/eboot/func_000614EC.c",
-  "source_sha256": "a9e990c8f25b2752038ac72d2cdd459b4c8dae44bce1e373b963d12a880fa8f6"
+  "source_sha256": "2c334aa1a4f6d78040d7f29cdf3e5b5cd8521add0dac8b9f5e4a33ee9de25780"
 }

@@ -639,9 +639,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0002adf8.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0002adf8-19913499577a.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0002adf8.json",
+        "certificate_sha256": "1e010b6819126faa90903b2a8f66f65bd64600c96b732f9d3ab92db95248188a",
+        "data_reference_count": 0,
         "matching_words": 62,
-        "total_words": 62,
         "object_sha256s": [
           "82817af73a65670d4d73a8207d0ec90e4cb7d30e0166a7c80cf2b8376300c115",
           "82817af73a65670d4d73a8207d0ec90e4cb7d30e0166a7c80cf2b8376300c115"
@@ -656,9 +657,8 @@
           "word 49 (0x2aebc): IoFileMgrForUser/0x6A638D83 (stub 0x6ad7c, target 0x6ad7c) <=> IoFileMgrForUser/0x6A638D83 (stub 0x6ad7c, symbol 'func_0006AD7C' -> 0x6ad7c)",
           "word 52 (0x2aec8): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0002adf8.json",
-        "certificate_sha256": "69e3655fb905d0824646d56872aff144fba7c7073162409f3541f791b7db52db"
+        "status": "MATCHED",
+        "total_words": 62
       },
       "section": ".text",
       "kind": "code",
@@ -1321,9 +1321,10 @@
       "source_path": "decomp/src/eboot/func_0003B49C.c",
       "source_sha256": "77ac3082fc4d92d6d9556be2dd1b2ee6405cd4ec598921fc974a71bf0fcc0472",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b49c.json",
+        "certificate_sha256": "7b7f1bad91cd9e1be5ba7f9d9a15835e2178feff2110c3786912b29274639942",
+        "data_reference_count": 0,
         "matching_words": 45,
-        "total_words": 45,
         "object_sha256s": [
           "9719a8389514356eaa142c345cd92166d635aef6e1a4589f13850b42b78236ce",
           "9719a8389514356eaa142c345cd92166d635aef6e1a4589f13850b42b78236ce"
@@ -1331,10 +1332,10 @@
         "resolved_calls": [
           "word 4 (0x3b4ac): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b49c.json",
-        "certificate_sha256": "bcb87b5eea2c135349aff54d3061e9918e8b9be56b2e76a84e4d6c16039d57f0"
-      }
+        "status": "MATCHED",
+        "total_words": 45
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b49c/evidence/ghidra-run-599f6858e317410ebea35da96750493c.log"
     },
     {
       "module": "EBOOT",
@@ -1348,9 +1349,10 @@
       "source_path": "decomp/src/eboot/func_0003B550.c",
       "source_sha256": "12cb1e60e75c065b179eab394772e14958bc1806d82ba3aeb5c7545d52b65c9f",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b550.json",
+        "certificate_sha256": "24a6cf6caebaf07311e4d0bc6aeccbcc3a760c5536d3766ccfdf9a3343aae539",
+        "data_reference_count": 0,
         "matching_words": 15,
-        "total_words": 15,
         "object_sha256s": [
           "2b2c2b0f624cb65986e47113c2583a6b80f5becda36173058693157d70b4c1cf",
           "2b2c2b0f624cb65986e47113c2583a6b80f5becda36173058693157d70b4c1cf"
@@ -1358,10 +1360,10 @@
         "resolved_calls": [
           "word 2 (0x3b558): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b550.json",
-        "certificate_sha256": "3c46d6f615e4addf77af4e7f18f4bdfd5a6f7294ac1a16e21fc1e30e0e936118"
-      }
+        "status": "MATCHED",
+        "total_words": 15
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b550/evidence/ghidra-run-cd72cd356ffc458cb17896de5eefef31.log"
     },
     {
       "module": "EBOOT",
@@ -1375,9 +1377,10 @@
       "source_path": "decomp/src/eboot/func_0003B58C.c",
       "source_sha256": "65f1d49375cf1ffef5981e0a591aec85e7168104892f283d6014e11685345271",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b58c.json",
+        "certificate_sha256": "0e881f423ad06548ae3cb584566d89b30d69ff2a08ee00dcccd74ebb3d0a8571",
+        "data_reference_count": 0,
         "matching_words": 14,
-        "total_words": 14,
         "object_sha256s": [
           "bb08c974b1dc38969045f7cdb4fd43aeaa347affda54d3a8cec5dc28f9739203",
           "bb08c974b1dc38969045f7cdb4fd43aeaa347affda54d3a8cec5dc28f9739203"
@@ -1385,10 +1388,10 @@
         "resolved_calls": [
           "word 2 (0x3b594): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b58c.json",
-        "certificate_sha256": "212667b5c5c43a886d00bdfec3c8e456e496867c552258c5d62b41a04289df80"
-      }
+        "status": "MATCHED",
+        "total_words": 14
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b58c/evidence/ghidra-run-403df5f15b384f5bbf2c0f37650ee9b5.log"
     },
     {
       "module": "EBOOT",
@@ -1402,9 +1405,10 @@
       "source_path": "decomp/src/eboot/func_0003B5C4.c",
       "source_sha256": "08c6bad6491d6e646847881c8e3a36148a7209e5aa27fd425e0b7678cd648a89",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b5c4.json",
+        "certificate_sha256": "a71d54056545a81efb8136f11b907e2f476056e7f412c24c9ef0fd757c7089cd",
+        "data_reference_count": 0,
         "matching_words": 12,
-        "total_words": 12,
         "object_sha256s": [
           "0370ca89cc899d9f33b624f3bc6a2ae82b80d830a3b7b03c980e0c791d37770b",
           "0370ca89cc899d9f33b624f3bc6a2ae82b80d830a3b7b03c980e0c791d37770b"
@@ -1412,10 +1416,10 @@
         "resolved_calls": [
           "word 2 (0x3b5cc): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b5c4.json",
-        "certificate_sha256": "9ae5865cbde32d2b643ead1d7f1090b170beaae7d511382a03dcfcbd4d11a053"
-      }
+        "status": "MATCHED",
+        "total_words": 12
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b5c4/evidence/ghidra-run-5b4c48fd945b488eb3b5e06bda85ef2c.log"
     },
     {
       "module": "EBOOT",
@@ -1429,9 +1433,10 @@
       "source_path": "decomp/src/eboot/func_0003B5F4.c",
       "source_sha256": "ce4ed85475d0b2f824c80bdbc48994188c25123990eb9c643f36647aa8e21f69",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b5f4.json",
+        "certificate_sha256": "4373536747120ececd7585ff2f3f56ef4ec8b65c16095258029a60f52f0f6394",
+        "data_reference_count": 0,
         "matching_words": 15,
-        "total_words": 15,
         "object_sha256s": [
           "58b568862d777248e7fa265373c7c54dc16bf5a7e0d8d831b417608c85602a83",
           "58b568862d777248e7fa265373c7c54dc16bf5a7e0d8d831b417608c85602a83"
@@ -1439,10 +1444,10 @@
         "resolved_calls": [
           "word 2 (0x3b5fc): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b5f4.json",
-        "certificate_sha256": "a6a1230e33cc2fafbbb091dc5a90ff497c7d451eb350c9ecf05e71be6ff02b20"
-      }
+        "status": "MATCHED",
+        "total_words": 15
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b5f4/evidence/ghidra-run-aa2e6950f2f64a01b932d71e4ea69623.log"
     },
     {
       "module": "EBOOT",
@@ -1483,9 +1488,10 @@
       "source_path": "decomp/src/eboot/func_0003B660.c",
       "source_sha256": "c29a377006f6d5244402d6639e9c147fb38971326fad3c4e0d5505e73a46efc1",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b660.json",
+        "certificate_sha256": "be4a095ecfba02dc3f6ea81744a0adf73f345e2cb04f15744e436a5c796e63fa",
+        "data_reference_count": 0,
         "matching_words": 27,
-        "total_words": 27,
         "object_sha256s": [
           "57c82a8f619415bc28b6ba7fb2e84ee00da1c152b62eb7fd42e3411e11e1443b",
           "57c82a8f619415bc28b6ba7fb2e84ee00da1c152b62eb7fd42e3411e11e1443b"
@@ -1493,10 +1499,10 @@
         "resolved_calls": [
           "word 4 (0x3b670): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b660.json",
-        "certificate_sha256": "a48f23a4c0665e1edf3d2c912ab628712ac4e80c56c1cdaa871c1db82c4dd21f"
-      }
+        "status": "MATCHED",
+        "total_words": 27
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b660/evidence/ghidra-run-1cf1dac9cd19455b816e8542856edd40.log"
     },
     {
       "module": "EBOOT",
@@ -1537,9 +1543,10 @@
       "source_path": "decomp/src/eboot/func_0003B6FC.c",
       "source_sha256": "026bf6e599243cd6da26d72ca425a4aa74ef1ab366a42a19aba173d58fe0d3d5",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b6fc.json",
+        "certificate_sha256": "999946c96222a478d09c2a875a6cad89c0e8c5d11f5107a906a8294ba6458834",
+        "data_reference_count": 0,
         "matching_words": 15,
-        "total_words": 15,
         "object_sha256s": [
           "7c6821dba81c0ce0c70b1d7c947187432ab8552c9f27253513cb8d1df7f37d80",
           "7c6821dba81c0ce0c70b1d7c947187432ab8552c9f27253513cb8d1df7f37d80"
@@ -1547,10 +1554,10 @@
         "resolved_calls": [
           "word 2 (0x3b704): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b6fc.json",
-        "certificate_sha256": "dc8aea76e2e09e2c4508b7c1981fc66db8fac8ff5a414f32a845416d26f88146"
-      }
+        "status": "MATCHED",
+        "total_words": 15
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b6fc/evidence/ghidra-run-e340043fddbb4f8ead9f172c80af4997.log"
     },
     {
       "module": "EBOOT",
@@ -1591,9 +1598,10 @@
       "source_path": "decomp/src/eboot/func_0003B764.c",
       "source_sha256": "92bc0ffd9d4b3009a5cee2e8d39c735fc6805af8903c34d86d845c5618e74a50",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b764.json",
+        "certificate_sha256": "a9854261be479373f0bd1cac4cf06e5e73c6bdf46d3d1e43405e6e49a593f82e",
+        "data_reference_count": 0,
         "matching_words": 15,
-        "total_words": 15,
         "object_sha256s": [
           "5ad6f430311bd5c4e03fc57bd53b069aef72a039925619fe9270267cc0643e0f",
           "5ad6f430311bd5c4e03fc57bd53b069aef72a039925619fe9270267cc0643e0f"
@@ -1601,10 +1609,10 @@
         "resolved_calls": [
           "word 2 (0x3b76c): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b764.json",
-        "certificate_sha256": "4055b6eeefe6d42bcbfeff5056a35f260bd57ac8e329e33eb5b95bc0e6576b60"
-      }
+        "status": "MATCHED",
+        "total_words": 15
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b764/evidence/ghidra-run-08402f4d89ed4c769aff88bea32a1e9c.log"
     },
     {
       "module": "EBOOT",
@@ -1645,9 +1653,10 @@
       "source_path": "decomp/src/eboot/func_0003B7D0.c",
       "source_sha256": "2d3e0f094900e5c1adfb58acc53db69c08cd9af6ac462a1373c42bb7e058e3cd",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003b7d0.json",
+        "certificate_sha256": "be57f0d91b13bf28916588905074fd61a862af02cd057ef709c8a3db37f75073",
+        "data_reference_count": 0,
         "matching_words": 24,
-        "total_words": 24,
         "object_sha256s": [
           "c8c0edd252f284423c4d0054935956168adbfefa9a13d32e1bc35efc4746d4af",
           "c8c0edd252f284423c4d0054935956168adbfefa9a13d32e1bc35efc4746d4af"
@@ -1655,10 +1664,10 @@
         "resolved_calls": [
           "word 4 (0x3b7e0): this module @ 0x3b340 <=> this module @ 0x3b340"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003b7d0.json",
-        "certificate_sha256": "f84478096e5b43fd6f09be6be572d4dd921717fc8bdc1f92d5592de88636a15f"
-      }
+        "status": "MATCHED",
+        "total_words": 24
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3b7d0/evidence/ghidra-run-9b7a85bc99e44882a81be7d18ce9d7f1.log"
     },
     {
       "module": "EBOOT",
@@ -1925,9 +1934,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0003bb1c.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0003bb1c-3a8629be341b.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003bb1c.json",
+        "certificate_sha256": "56cd83329fc95c8a00387e058025882271e99177f390bbcbbadf85bf01b5e18b",
+        "data_reference_count": 0,
         "matching_words": 19,
-        "total_words": 19,
         "object_sha256s": [
           "7d1f89830c1f34894176c591bd0f8654b78daaba001000ffd978a0c4fc90ac40",
           "7d1f89830c1f34894176c591bd0f8654b78daaba001000ffd978a0c4fc90ac40"
@@ -1935,9 +1945,8 @@
         "resolved_calls": [
           "word 3 (0x3bb28): this module @ 0x3ba34 <=> this module @ 0x3ba34"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003bb1c.json",
-        "certificate_sha256": "9c33305b0ae53d56588f9a46b73290c355a904f92ebefd02b861b8f592915efe"
+        "status": "MATCHED",
+        "total_words": 19
       },
       "section": ".text",
       "kind": "code",
@@ -1966,9 +1975,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0003bb68.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0003bb68-3b63fcce912b.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003bb68.json",
+        "certificate_sha256": "1c652f4abe42acb46b3d0c927274a7ecd3a66bb1115c500fe5b117fa9d9c60c2",
+        "data_reference_count": 0,
         "matching_words": 21,
-        "total_words": 21,
         "object_sha256s": [
           "89e854feb5cb133b19e48f16407013c3212bf2576d28af209ad1e7d5ddf43cc4",
           "89e854feb5cb133b19e48f16407013c3212bf2576d28af209ad1e7d5ddf43cc4"
@@ -1976,9 +1986,8 @@
         "resolved_calls": [
           "word 5 (0x3bb7c): this module @ 0x3ba34 <=> this module @ 0x3ba34"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003bb68.json",
-        "certificate_sha256": "47914f2144f05f3ed68bc2553bb4e29428a6ae13252274b0106ea563c8b5e454"
+        "status": "MATCHED",
+        "total_words": 21
       },
       "section": ".text",
       "kind": "code",
@@ -2065,9 +2074,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0003c424.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0003c424-e7b078ec1248.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003c424.json",
+        "certificate_sha256": "3372b6186453598070123896fa3f8980d80f31ef5e0b9e5b672ec1e2fcd2af8d",
+        "data_reference_count": 0,
         "matching_words": 21,
-        "total_words": 21,
         "object_sha256s": [
           "26e35b31b277f3cfc3c415461cc762e36b8eaefb8f841894f058f1e95956e65e",
           "26e35b31b277f3cfc3c415461cc762e36b8eaefb8f841894f058f1e95956e65e"
@@ -2075,9 +2085,8 @@
         "resolved_calls": [
           "word 3 (0x3c430): this module @ 0x3a90c <=> this module @ 0x3a90c"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003c424.json",
-        "certificate_sha256": "931a38548f80492465075f055a0d610e7495d06276ecb4a77a57ba0d0726696e"
+        "status": "MATCHED",
+        "total_words": 21
       },
       "section": ".text",
       "kind": "code",
@@ -2136,9 +2145,10 @@
       "source_path": "decomp/src/eboot/func_0003C4A8.c",
       "source_sha256": "73d535e29dea7f6874b1d1913b77bacfcf0e58935a37ffe118ac70f518f20ff7",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003c4a8.json",
+        "certificate_sha256": "3a1ea02daffebf48fa94d946cf8dc18adac7566f1cb994b1dab4605ab7dbac04",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "00eb1c17f4a3847f4b0769b2f2d88893b274e96c6c24832b2f4bad682114ea78",
           "00eb1c17f4a3847f4b0769b2f2d88893b274e96c6c24832b2f4bad682114ea78"
@@ -2146,10 +2156,10 @@
         "resolved_calls": [
           "word 2 (0x3c4b0): this module @ 0x3c424 <=> this module @ 0x3c424"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003c4a8.json",
-        "certificate_sha256": "b1d7ac32cdb8c0ca21dbd7c98f7eba49e56e0b2863c1450e304c46eaf3c6e780"
-      }
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3c4a8/evidence/ghidra-run-783a327b5a4649c6b9754ed4ed912f94.log"
     },
     {
       "module": "EBOOT",
@@ -2163,9 +2173,10 @@
       "source_path": "decomp/src/eboot/func_0003C4D0.c",
       "source_sha256": "edd5d3965f0a1ea8295a12f16d0377445fde64bd46d6f18e6f71eff46c4f8de8",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003c4d0.json",
+        "certificate_sha256": "cbec73eda2a2b6545284bba00ab0e0308cd1734dde699cd5fc914876348b96aa",
+        "data_reference_count": 0,
         "matching_words": 18,
-        "total_words": 18,
         "object_sha256s": [
           "3a750c216e593104ea57e476588218e28a5f2d65f84528201ed56014d1f056e9",
           "3a750c216e593104ea57e476588218e28a5f2d65f84528201ed56014d1f056e9"
@@ -2173,10 +2184,10 @@
         "resolved_calls": [
           "word 3 (0x3c4dc): this module @ 0x3c424 <=> this module @ 0x3c424"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003c4d0.json",
-        "certificate_sha256": "282b5e6566496e890832bcf4bc7852134d43d0fba50a1cb05a0fd92a303a2645"
-      }
+        "status": "MATCHED",
+        "total_words": 18
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3c4d0/evidence/ghidra-run-8562bf4c83614e9ca619923f2562757b.log"
     },
     {
       "module": "EBOOT",
@@ -2217,9 +2228,10 @@
       "source_path": "decomp/src/eboot/func_0003C544.c",
       "source_sha256": "216d56425c08d8d09fdbe5b83ca661cd26968cab225436fc2fb8291860c3b66a",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003c544.json",
+        "certificate_sha256": "826e3029952032c4cfdac235587be9ae3b39b3e2654fa1358ea7bb09725022b3",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "2f6a79edb45a9201b6e2509463f66a05acd8ab8fbb17eb2b374bedce44149fdc",
           "2f6a79edb45a9201b6e2509463f66a05acd8ab8fbb17eb2b374bedce44149fdc"
@@ -2227,10 +2239,10 @@
         "resolved_calls": [
           "word 2 (0x3c54c): this module @ 0x3c424 <=> this module @ 0x3c424"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003c544.json",
-        "certificate_sha256": "2b84bd2272ce1747ccb5ec7b445295dd0bcff500567f3f066b125062a6af27bb"
-      }
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/3c544/evidence/ghidra-run-215fd3b758f14664a2b1011aaed8bb2d.log"
     },
     {
       "module": "EBOOT",
@@ -2372,9 +2384,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0003c7b8.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0003c7b8-50e840adcb6a.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003c7b8.json",
+        "certificate_sha256": "855a873f7aefe300f262016b20d74749d1bcdefcfb99c1544f7a528c5737ffdc",
+        "data_reference_count": 0,
         "matching_words": 15,
-        "total_words": 15,
         "object_sha256s": [
           "4dac02e6d52f1182bb382f776b1897ec81af689383ba47caebf672e33994cb3f",
           "4dac02e6d52f1182bb382f776b1897ec81af689383ba47caebf672e33994cb3f"
@@ -2382,9 +2395,8 @@
         "resolved_calls": [
           "word 5 (0x3c7cc): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003c7b8.json",
-        "certificate_sha256": "4d8e44ff94558a217909fd87f6cc5c562f1afdf34eb4cbfca074db2d4a9b46af"
+        "status": "MATCHED",
+        "total_words": 15
       },
       "section": ".text",
       "kind": "code",
@@ -2413,9 +2425,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0003c7f4.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0003c7f4-e0eb64746942.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003c7f4.json",
+        "certificate_sha256": "4f1067761758b9af4aa043e4f2a419825637ccfc53ddbd225c8b30352af608b4",
+        "data_reference_count": 0,
         "matching_words": 11,
-        "total_words": 11,
         "object_sha256s": [
           "11c0301a8cd1fc8674cb63f5fa163a3c7176c59ad56313de4c0acf9301f6d5c9",
           "11c0301a8cd1fc8674cb63f5fa163a3c7176c59ad56313de4c0acf9301f6d5c9"
@@ -2423,9 +2436,8 @@
         "resolved_calls": [
           "word 3 (0x3c800): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003c7f4.json",
-        "certificate_sha256": "e320a62c9fb1bc25304102d5652fec3877bfd3404d97e1c5f5d9422f505c251f"
+        "status": "MATCHED",
+        "total_words": 11
       },
       "section": ".text",
       "kind": "code",
@@ -2443,7 +2455,7 @@
         "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions"
       ],
       "source_path": "decomp/src/eboot/func_0003C7F4.c",
-      "source_sha256": "41ea366d0df90f62bbf96487ba9ede51ecc79afa9880a9bbadc5cb061138c18f"
+      "source_sha256": "f733ab712aafea7470b2138bafaeab3937167c378e112b6f124697336b3f6012"
     },
     {
       "module": "EBOOT",
@@ -2964,18 +2976,19 @@
       "source_path": "decomp/src/eboot/func_0003F3A4.c",
       "source_sha256": "03ae6db3cc5198ba6075254d67849cf413de86f6c9799dacc7a3cf3925511ded",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0003f3a4.json",
+        "certificate_sha256": "b2e2387f3dfa18c695f5e5a8eff74d4721959e7e079693e69099fc1f99722f49",
+        "data_reference_count": 0,
         "matching_words": 17,
-        "total_words": 17,
         "object_sha256s": [
           "9b66a45ca4de9c94565e9000c0d483d142080ac78325296b0a83cd6e328c9aef",
           "9b66a45ca4de9c94565e9000c0d483d142080ac78325296b0a83cd6e328c9aef"
         ],
         "resolved_calls": [],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0003f3a4.json",
-        "certificate_sha256": "4be2648453dc48b5ebda1385aa3ca1e56880f954449d1e9f5ea231614e192d14"
-      }
+        "status": "MATCHED",
+        "total_words": 17
+      },
+      "ghidra_log_path": "build/seto049/internal-boundaries/0003f3a4-02b6c6ce1c04.log"
     },
     {
       "module": "EBOOT",
@@ -3090,18 +3103,19 @@
       "source_path": "decomp/src/eboot/func_00048518.c",
       "source_sha256": "aef098179ddb3e22fdb85a3bfd285a861a3f636381a9d7f5806bea7b398cc952",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-00048518.json",
+        "certificate_sha256": "ad5388e80a952bcf168166a233f7cd6f17cdf8e6a62eed2991c5620ffd76dd43",
+        "data_reference_count": 0,
         "matching_words": 18,
-        "total_words": 18,
         "object_sha256s": [
           "51b711a7a7b0ca0df088e0e30e43cbb69fd44524f42ec96227826e0b8b629fc7",
           "51b711a7a7b0ca0df088e0e30e43cbb69fd44524f42ec96227826e0b8b629fc7"
         ],
         "resolved_calls": [],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-00048518.json",
-        "certificate_sha256": "49ecb2b0027ebd252c67464ab1a445f00f155484227b7a3d705450d180516c64"
-      }
+        "status": "MATCHED",
+        "total_words": 18
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/48518/evidence/ghidra-run-ecab8f79985f411f861fbbf415c243b3.log"
     },
     {
       "module": "EBOOT",
@@ -3420,9 +3434,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-00049c10.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/00049c10-6a4719a0ea5c.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-00049c10.json",
+        "certificate_sha256": "d4b6b64b03d75cfdb17f1757aebfa50d7083ac8e28427fa717cf29ca21663e44",
+        "data_reference_count": 0,
         "matching_words": 17,
-        "total_words": 17,
         "object_sha256s": [
           "5fbe4b30783ec17d53808209f36a4ea7dfc73ae667499cdda72f24876f5f19ef",
           "5fbe4b30783ec17d53808209f36a4ea7dfc73ae667499cdda72f24876f5f19ef"
@@ -3430,9 +3445,8 @@
         "resolved_calls": [
           "word 2 (0x49c18): this module @ 0x49850 <=> this module @ 0x49850"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-00049c10.json",
-        "certificate_sha256": "02b6ff0cc649eab6f44f4ac944c9aa383bc296e4725c65a0b8ed025b0eeba2df"
+        "status": "MATCHED",
+        "total_words": 17
       },
       "section": ".text",
       "kind": "code",
@@ -3461,9 +3475,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-0004a424.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0004a424-11cc9c9fb2c3.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0004a424.json",
+        "certificate_sha256": "84d7e2a571a8033bb5878c57c105b1b2828e77f679d026f25393343733aa585a",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "bc337b215cec2fd0992c156d5bc34dc2ab05253e1006dae060343153f7f59a66",
           "bc337b215cec2fd0992c156d5bc34dc2ab05253e1006dae060343153f7f59a66"
@@ -3471,9 +3486,8 @@
         "resolved_calls": [
           "word 4 (0x4a434): this module @ 0x49aac <=> this module @ 0x49aac"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0004a424.json",
-        "certificate_sha256": "1de2edfc0e6e1ff2e0dd6e52d02f4e79a244aafe66b36ab67a0e1149b4dd77c7"
+        "status": "MATCHED",
+        "total_words": 10
       },
       "section": ".text",
       "kind": "code",
@@ -4213,9 +4227,10 @@
       "source_path": "decomp/src/eboot/func_0004EA30.c",
       "source_sha256": "28601f370c2530bb2a7d29fed2cfb49fc9bbaf616f453217b22fd19bd507684c",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0004ea30.json",
+        "certificate_sha256": "8d6ddb01368adf212cfa7c76879b71267063d86217c2c566a3c88a72982abf40",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "d1b98cdacef1e65fe47ab32b6902f3ef10afe27e9fbacac40876f2876fd9d1f7",
           "d1b98cdacef1e65fe47ab32b6902f3ef10afe27e9fbacac40876f2876fd9d1f7"
@@ -4223,10 +4238,10 @@
         "resolved_calls": [
           "word 5 (0x4ea44): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0004ea30.json",
-        "certificate_sha256": "2fcaa3a4cc28359f60d58a746b5c37d129c7f514111a96923e1adb267ecd2616"
-      }
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/4ea30/evidence/ghidra-run-c412438ba1694baf9bc46b5d17bc7d10.log"
     },
     {
       "module": "EBOOT",
@@ -4835,18 +4850,19 @@
       "source_path": "decomp/src/eboot/func_00059048.c",
       "source_sha256": "8b2244723c190ac2894fd7bc0009a22d01a9551ef795fba2c9e529c873102f57",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-00059048.json",
+        "certificate_sha256": "bd4ab54ce2f7e2cdc6d4ddb2dd355db294b418f11046dfdd828dbfc3841e682b",
+        "data_reference_count": 0,
         "matching_words": 12,
-        "total_words": 12,
         "object_sha256s": [
           "9137755b2bec602dae35d6390ee09a71eae75a12cbf2c40dcf7c02a13510cbb4",
           "9137755b2bec602dae35d6390ee09a71eae75a12cbf2c40dcf7c02a13510cbb4"
         ],
         "resolved_calls": [],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-00059048.json",
-        "certificate_sha256": "7f945e940c1d814f19709065e095107636de7aa883714708068e2945a0a45fc4"
-      }
+        "status": "MATCHED",
+        "total_words": 12
+      },
+      "ghidra_log_path": "build/seto049/internal-boundaries/00059048-1cfc5f0b56dd.log"
     },
     {
       "module": "EBOOT",
@@ -4938,9 +4954,10 @@
       "source_path": "decomp/src/eboot/func_0005A204.c",
       "source_sha256": "4dc0cc6aa6233a79fac6f49ffe1ed088570234d5f7a3be689804968b53749566",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0005a204.json",
+        "certificate_sha256": "7053effccaefc220d99cdbd46256fb33a17dd1f8b714e4e00a337c8a0f336ca2",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "1bb80fe99a9c31656236871e16894e5b1749eac905c26b8453e3683cd86ac9f4",
           "1bb80fe99a9c31656236871e16894e5b1749eac905c26b8453e3683cd86ac9f4"
@@ -4948,10 +4965,10 @@
         "resolved_calls": [
           "word 2 (0x5a20c): this module @ 0x5a134 <=> this module @ 0x5a134"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0005a204.json",
-        "certificate_sha256": "272d7c4273a0e44d882eb3a9a7f2fabbf796bc442cdfd6f3de9d9b10f42b234f"
-      }
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/5a204/evidence/ghidra-run-860be2c9b6bc43d5a117b2194bd022d7.log"
     },
     {
       "module": "EBOOT",
@@ -4965,9 +4982,10 @@
       "source_path": "decomp/src/eboot/func_0005A22C.c",
       "source_sha256": "e1fb78b4618f93cf69a2b5cbdc14d26e707b2186235f1b468943d176261e4d6c",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0005a22c.json",
+        "certificate_sha256": "8ce23f04ff07bc1316c7183a5ca3ffcc12387a1952985fc4e9a6de98609b91b2",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "59b2216f22883d16463054dfaa0b86cd27d2e09a5a13ba802c5e476e8867512e",
           "59b2216f22883d16463054dfaa0b86cd27d2e09a5a13ba802c5e476e8867512e"
@@ -4975,10 +4993,10 @@
         "resolved_calls": [
           "word 2 (0x5a234): this module @ 0x5a134 <=> this module @ 0x5a134"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0005a22c.json",
-        "certificate_sha256": "9cd718eb703624240f26d038a98fa092e62aee7637d566cb13ddbede60fae223"
-      }
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/5a22c/evidence/ghidra-run-b397531ed2254c5fa90b10b5bd644c26.log"
     },
     {
       "module": "EBOOT",
@@ -4992,9 +5010,10 @@
       "source_path": "decomp/src/eboot/func_0005A298.c",
       "source_sha256": "4be4e2b67e7aaf5a8bcaa6e99c7594535831e16c94cc8b3ea4710679ab2ed4fa",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-0005a298.json",
+        "certificate_sha256": "10b510222bcf62692de52ca83fa90f79c91e2752345a553dd972859b03d3ac11",
+        "data_reference_count": 0,
         "matching_words": 10,
-        "total_words": 10,
         "object_sha256s": [
           "3004f9fe76e09fefd9d00064197bed0642f454793909c93bcb377276f46965a5",
           "3004f9fe76e09fefd9d00064197bed0642f454793909c93bcb377276f46965a5"
@@ -5002,10 +5021,10 @@
         "resolved_calls": [
           "word 2 (0x5a2a0): this module @ 0x5a134 <=> this module @ 0x5a134"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-0005a298.json",
-        "certificate_sha256": "e9dcea3ca9acf8b9bfb53d9c95aa7d33e5ba0d46896a265b33d1e5eb674bc909"
-      }
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "ghidra_log_path": "build/decomp-campaign/codex-coordinator/5a298/evidence/ghidra-run-076748bb3c0f42cd9628b3bd8369d865.log"
     },
     {
       "module": "EBOOT",
@@ -5268,9 +5287,10 @@
       "evidence_path": "decomp/evidence/internal/eboot-000614ec.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/000614ec-8ea4b798b4c5.log",
       "result": {
-        "status": "MATCHED",
+        "certificate_path": "decomp/evidence/internal/eboot-000614ec.json",
+        "certificate_sha256": "ae0ff4f9a48c2112c6ca8cafc3d0131d23abe75a28db8e04eac88618d404bf5c",
+        "data_reference_count": 0,
         "matching_words": 11,
-        "total_words": 11,
         "object_sha256s": [
           "2856eaa75f3fdb422bcc9d8430a408c459b9b7c1c9f5ba4c50120dfc7780078d",
           "2856eaa75f3fdb422bcc9d8430a408c459b9b7c1c9f5ba4c50120dfc7780078d"
@@ -5278,9 +5298,8 @@
         "resolved_calls": [
           "word 3 (0x614f8): this module @ 0x3c65c <=> this module @ 0x3c65c"
         ],
-        "data_reference_count": 0,
-        "certificate_path": "decomp/evidence/internal/eboot-000614ec.json",
-        "certificate_sha256": "e76693f7a98073807d4c269325f64f9b5a7fdbf4eb91c802be8d6c02f29f76d9"
+        "status": "MATCHED",
+        "total_words": 11
       },
       "section": ".text",
       "kind": "code",
@@ -5298,7 +5317,7 @@
         "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions"
       ],
       "source_path": "decomp/src/eboot/func_000614EC.c",
-      "source_sha256": "a9e990c8f25b2752038ac72d2cdd459b4c8dae44bce1e373b963d12a880fa8f6"
+      "source_sha256": "2c334aa1a4f6d78040d7f29cdf3e5b5cd8521add0dac8b9f5e4a33ee9de25780"
     },
     {
       "module": "EBOOT",
