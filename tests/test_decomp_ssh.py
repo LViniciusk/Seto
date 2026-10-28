@@ -32,6 +32,8 @@ def test_ssh_request_uses_verified_noninteractive_transport_and_json_stdin(tmp_p
         observed["argv"] = argv
         observed["payload"] = json.loads(str(kwargs["input"]))
         observed["shell"] = kwargs.get("shell", False)
+        observed["json_stdin"] = isinstance(kwargs.get("input"), str)
+        observed["stdin_argument"] = kwargs.get("stdin")
         return subprocess.CompletedProcess(argv, 0, '{"ok":true}', "")
 
     executor = SSHExecutor(process_runner=fake_process)
@@ -46,13 +48,45 @@ def test_ssh_request_uses_verified_noninteractive_transport_and_json_stdin(tmp_p
     assert isinstance(argv, list)
     assert "BatchMode=yes" in argv
     assert "StrictHostKeyChecking=yes" in argv
+    assert "-T" in argv
+    assert "-n" not in argv  # SSH stdin carries the JSON helper request.
     assert "Alluka" in argv
     assert observed["shell"] is False
+    assert observed["json_stdin"] is True
+    assert observed["stdin_argument"] is None
     assert observed["payload"] == {
         "op": "ping",
         "root": "/home/operator/seto-worker",
     }
     assert response == {"ok": True}
+
+
+def test_remote_exec_child_does_not_inherit_ssh_json_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "remote"
+    root.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    observed: list[object] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        observed.append(kwargs.get("stdin"))
+        return subprocess.CompletedProcess(argv, 0, b"help", b"")
+
+    monkeypatch.setattr(decomp_ssh_module.subprocess, "run", fake_run)
+    response = handle_request(
+        {
+            "op": "exec",
+            "root": str(root),
+            "argv": ["opencode", "run", "--help"],
+            "cwd": ".",
+            "timeout": 5,
+        }
+    )
+
+    assert response["returncode"] == 0
+    assert observed == [subprocess.DEVNULL]
+    assert decomp_ssh_module.REMOTE_HELPER.count("stdin=subprocess.DEVNULL") == 2
 
 
 def test_remote_file_operations_hash_and_reject_escape_paths(
@@ -195,10 +229,12 @@ def test_remote_helper_runs_one_opencode_attempt_and_caches_its_result(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     source = b"int func_0002C28C(void) { return 9; }\n"
     calls = 0
+    observed_stdin: list[object] = []
 
     def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
         nonlocal calls
         calls += 1
+        observed_stdin.append(_kwargs.get("stdin"))
         candidate = root / "decomp/src/eboot/func_0002C28C.c"
         candidate.parent.mkdir(parents=True, exist_ok=True)
         candidate.write_bytes(source)
@@ -223,6 +259,7 @@ def test_remote_helper_runs_one_opencode_attempt_and_caches_its_result(
     second = handle_request(request)
 
     assert calls == 1
+    assert observed_stdin == [subprocess.DEVNULL]
     assert first == second
     assert first["completed"] is True
     assert first["source_sha256"] == hashlib.sha256(source).hexdigest()
