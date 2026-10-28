@@ -61,6 +61,11 @@ CHATGPT_OAUTH_METHODS = frozenset(
 )
 OPENAI_PROVIDER_PACKAGE = "@opencode/ai/providers/openai"
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+REVALIDATABLE_QUOTA_SCOPES = frozenset(
+    {"opencode:alluka", "opencode:kita-server"}
+)
+MAX_QUOTA_RESUME_DELAY_SECONDS = 366 * 24 * 60 * 60
+QUOTA_EVIDENCE_MAX_AGE_SECONDS = 15 * 60
 REMOTE_PROJECT_OPENCODE_CONFIG = (
     b'{"$schema":"https://opencode.ai/config.json","snapshots":false}\n'
 )
@@ -112,6 +117,17 @@ class Failure:
     retry_after_seconds: float | None = None
     diagnostic_stage: str | None = None
     diagnostic_code: str | None = None
+
+
+@dataclass(frozen=True)
+class QuotaRevalidationEvidence:
+    """Fresh operator confirmation that one configured quota scope is available."""
+
+    scope: str
+    source: str
+    available: bool
+    observed_at: float
+    note: str
 
 
 @dataclass(frozen=True)
@@ -301,6 +317,20 @@ def _retry_after(text: str) -> float | None:
     return None
 
 
+def _quota_resume_at(now: float, retry_after_seconds: float | None) -> float | None:
+    """Keep only finite, provider-supplied quota reset delays as revalidation gates."""
+    if retry_after_seconds is None:
+        return None
+    delay = float(retry_after_seconds)
+    if (
+        not math.isfinite(delay)
+        or delay < 0
+        or delay > MAX_QUOTA_RESUME_DELAY_SECONDS
+    ):
+        return None
+    return now + delay
+
+
 def classify_failure(
     returncode: int | None,
     stdout: str,
@@ -318,7 +348,10 @@ def classify_failure(
         r"billing hard limit|monthly limit reached|daily quota exhausted",
         text,
     ):
-        return Failure(FailureKind.QUOTA_EXHAUSTED)
+        return Failure(
+            FailureKind.QUOTA_EXHAUSTED,
+            _retry_after(f"{stdout}\n{stderr}"),
+        )
     if re.search(r"rate limit|too many requests|http\s*429|status\s*429", text):
         return Failure(FailureKind.RATE_LIMIT, _retry_after(f"{stdout}\n{stderr}"))
     if re.search(
@@ -1445,6 +1478,7 @@ class CampaignStore:
                 if failure.kind is FailureKind.QUOTA_EXHAUSTED:
                     provider_status = "suspended_quota"
                     preferred_provider = None
+                    resume_at = _quota_resume_at(now, delay)
                 elif failure.kind is FailureKind.RATE_LIMIT:
                     provider_status = "rate_limited"
                     available_at = now + float(delay or 0.0)
@@ -2334,7 +2368,7 @@ class CampaignStore:
                 task_status = "stalled"
                 preferred_provider = claim.provider
             if failure.kind is FailureKind.QUOTA_EXHAUSTED:
-                resume_at = None
+                resume_at = _quota_resume_at(now, delay)
             elif provider_status in {"rate_limited", "network_backoff"}:
                 resume_at = available_at
             else:
@@ -3349,6 +3383,160 @@ class CampaignStore:
             row = db.execute("SELECT status FROM providers WHERE provider=?", (provider,)).fetchone()
             return "active" if row is None else str(row[0])
 
+    def provider_quota_revalidation_state(
+        self, provider: str, *, now: float | None = None
+    ) -> dict[str, Any]:
+        """Report whether a quota suspension may be explicitly revalidated.
+
+        Expiring a provider-supplied Retry-After only makes revalidation eligible;
+        it never activates the scope or authorizes an inference attempt.
+        """
+        now = time.time() if now is None else now
+        if not math.isfinite(now):
+            raise ValueError("quota revalidation time must be finite")
+        if provider not in REVALIDATABLE_QUOTA_SCOPES:
+            return {
+                "provider": provider,
+                "status": self.provider_status(provider),
+                "eligible": False,
+                "reason": "scope_not_revalidatable",
+            }
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT status,resume_at,reason FROM providers WHERE provider=?",
+                (provider,),
+            ).fetchone()
+        if row is None:
+            return {
+                "provider": provider,
+                "status": "active",
+                "eligible": False,
+                "reason": "no_quota_suspension_recorded",
+            }
+        status = str(row["status"])
+        resume_at = None if row["resume_at"] is None else float(row["resume_at"])
+        if resume_at is not None and not math.isfinite(resume_at):
+            return {
+                "provider": provider,
+                "status": status,
+                "resume_at": None,
+                "eligible": False,
+                "reason": "invalid_provider_retry_after",
+            }
+        if status != "suspended_quota" or row["reason"] != FailureKind.QUOTA_EXHAUSTED.value:
+            return {
+                "provider": provider,
+                "status": status,
+                "resume_at": resume_at,
+                "eligible": False,
+                "reason": "not_a_quota_exhaustion_suspension",
+            }
+        if resume_at is not None and resume_at > now:
+            return {
+                "provider": provider,
+                "status": status,
+                "resume_at": resume_at,
+                "eligible": False,
+                "reason": "provider_retry_after_not_elapsed",
+            }
+        return {
+            "provider": provider,
+            "status": status,
+            "resume_at": resume_at,
+            "eligible": True,
+            "reason": "awaiting_fresh_quota_availability_evidence",
+        }
+
+    def revalidate_quota_scope(
+        self,
+        provider: str,
+        evidence: QuotaRevalidationEvidence,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Reactivate one remote OpenCode quota scope after fresh operator proof.
+
+        This is a local SQLite transition only: it performs no provider request,
+        does not alter candidate/attempt rows, and cannot release other scopes.
+        """
+        now = time.time() if now is None else now
+        if not math.isfinite(now):
+            raise ValueError("quota revalidation time must be finite")
+        if provider not in REVALIDATABLE_QUOTA_SCOPES:
+            raise ValueError("only the configured Alluka/Kita OpenCode scopes can be revalidated")
+        if not isinstance(evidence, QuotaRevalidationEvidence):
+            raise ValueError("fresh quota availability evidence is required")
+        if not isinstance(evidence.scope, str) or not isinstance(evidence.source, str):
+            raise ValueError("quota evidence scope/source is malformed")
+        if evidence.scope != provider:
+            raise ValueError("quota evidence belongs to a different provider scope")
+        if evidence.source != "operator_confirmation":
+            raise ValueError("only explicit operator confirmation is supported without a probe")
+        if evidence.available is not True:
+            raise ValueError("provider quota is not confirmed available")
+        if isinstance(evidence.observed_at, bool) or not isinstance(
+            evidence.observed_at, (int, float)
+        ):
+            raise ValueError("quota availability evidence timestamp is malformed")
+        observed_at = float(evidence.observed_at)
+        if (
+            not math.isfinite(observed_at)
+            or observed_at > now
+            or now - observed_at > QUOTA_EVIDENCE_MAX_AGE_SECONDS
+        ):
+            raise ValueError("quota availability evidence is stale or has an invalid timestamp")
+        if not isinstance(evidence.note, str):
+            raise ValueError("quota availability evidence note is malformed")
+        note = " ".join(_safe_text(evidence.note, limit=240).split())
+        if not note:
+            raise ValueError("quota availability evidence requires a non-empty note")
+
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status,resume_at,reason FROM providers WHERE provider=?",
+                (provider,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("provider has no recorded quota exhaustion to revalidate")
+            status = str(row["status"])
+            resume_at = None if row["resume_at"] is None else float(row["resume_at"])
+            if status == "active":
+                db.commit()
+                return {"provider": provider, "status": status, "changed": False}
+            if (
+                status != "suspended_quota"
+                or row["reason"] != FailureKind.QUOTA_EXHAUSTED.value
+            ):
+                raise ValueError("provider is not suspended by a recorded quota exhaustion")
+            if resume_at is not None and not math.isfinite(resume_at):
+                raise ValueError("provider Retry-After timestamp is invalid; quota revalidation refused")
+            if resume_at is not None and resume_at > now:
+                raise ValueError(
+                    f"provider Retry-After has not elapsed (resume_at={resume_at:.3f})"
+                )
+            history = str(row["reason"] or FailureKind.QUOTA_EXHAUSTED.value)
+            updated_reason = _safe_text(
+                f"{history}; revalidated by operator: {note}", limit=600
+            )
+            changed = db.execute(
+                """UPDATE providers SET status='active',resume_at=NULL,reason=?,updated_at=?
+                   WHERE provider=? AND status='suspended_quota'
+                     AND reason='quota_exhausted'
+                     AND (resume_at IS NULL OR resume_at<=?)""",
+                (updated_reason, now, provider, now),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("provider quota state changed during revalidation")
+            self._event(
+                db,
+                "provider_quota_revalidated",
+                worker_id="operator",
+                provider=provider,
+            )
+            db.commit()
+        return {"provider": provider, "status": "active", "changed": True}
+
     def record_integration_result(
         self,
         address: str,
@@ -3395,7 +3583,11 @@ class CampaignStore:
             row = db.execute(
                 "SELECT status,resume_at FROM providers WHERE provider=?", (provider,)
             ).fetchone()
-        if row is None or row["status"] not in {"rate_limited", "network_backoff"}:
+        if row is None or row["status"] not in {
+            "rate_limited",
+            "network_backoff",
+            "suspended_quota",
+        }:
             return None
         return None if row["resume_at"] is None else float(row["resume_at"])
 
@@ -9998,6 +10190,10 @@ def _status_report(
                 {configured_quota_scope(worker) for worker in config.get("workers", {}).values()}
             )
         },
+        "provider_quota_revalidation": {
+            scope: store.provider_quota_revalidation_state(scope)
+            for scope in sorted(REVALIDATABLE_QUOTA_SCOPES)
+        },
         "observed_consumption": {
             "model_process_attempts_by_provider": provider_attempts,
             "completed_attempt_duration_by_provider": attempt_duration_by_provider,
@@ -10016,6 +10212,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="seed the local SQLite queue from the reviewed inventory")
     subparsers.add_parser("plan", help="show queued candidates and explicit execution readiness")
     subparsers.add_parser("status", help="show queue/provider/checkpoint status")
+    quota_revalidate = subparsers.add_parser(
+        "revalidate-quota",
+        help="read quota revalidation eligibility or selectively reopen a confirmed remote scope",
+    )
+    quota_revalidate.add_argument(
+        "--scope", choices=sorted(REVALIDATABLE_QUOTA_SCOPES), required=True
+    )
+    quota_revalidate.add_argument(
+        "--confirm-available",
+        action="store_true",
+        help="operator attests that the provider's actual quota is available; readiness/cost metadata is insufficient",
+    )
+    quota_revalidate.add_argument(
+        "--evidence-note",
+        help="short non-secret note naming the external quota availability check",
+    )
     subparsers.add_parser(
         "recover-local",
         help="validate archived EBOOT sources and run local MWCC/matcher without Luna attempts",
@@ -10114,6 +10326,42 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(_doctor(config, config_path))
             return 0
         store = CampaignStore(database_path)
+        if args.command == "revalidate-quota":
+            configured_remote_scopes = {
+                configured_quota_scope(worker)
+                for worker in config.get("workers", {}).values()
+                if worker.get("provider") == "opencode"
+                and worker.get("transport") == "ssh"
+                and worker.get("model") == "opencode/deepseek-v4.1-flash-free"
+                and worker.get("free_model_only") is True
+            }
+            if args.scope not in configured_remote_scopes:
+                raise ValueError("quota scope is not a configured remote OpenCode worker")
+            if not args.confirm_available:
+                _print_json(
+                    {
+                        **store.provider_quota_revalidation_state(args.scope),
+                        "changed": False,
+                        "availability_proven": False,
+                        "instruction": (
+                            "Read-only status only. Readiness/auth/cost metadata do not prove quota; "
+                            "run again with --confirm-available and --evidence-note only after "
+                            "external confirmation of actual quota availability. No probe was run."
+                        ),
+                    }
+                )
+                return 0
+            if not isinstance(args.evidence_note, str) or not args.evidence_note.strip():
+                raise ValueError("--evidence-note is required with --confirm-available")
+            evidence = QuotaRevalidationEvidence(
+                scope=args.scope,
+                source="operator_confirmation",
+                available=True,
+                observed_at=time.time(),
+                note=args.evidence_note,
+            )
+            _print_json(store.revalidate_quota_scope(args.scope, evidence))
+            return 0
         if args.command == "init":
             inserted = store.seed(
                 candidates, excluded_addresses=certified_addresses
