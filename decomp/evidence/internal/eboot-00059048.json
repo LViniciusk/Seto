@@ -1,0 +1,123 @@
+{
+  "address": "0x59048",
+  "build_sha256": [
+    "9137755b2bec602dae35d6390ee09a71eae75a12cbf2c40dcf7c02a13510cbb4",
+    "9137755b2bec602dae35d6390ee09a71eae75a12cbf2c40dcf7c02a13510cbb4"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x59048",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00059048",
+      "match": {
+        "address": 364616,
+        "candidate": {
+          "location": "symbol 'func_00059048' at section offset 0x0",
+          "path": "build/seto053/coordinator/59048/verify-1/func_00059048.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 12,
+        "name": "func_00059048",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 12
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "/home/vinicius/.local/bin/wibo"
+        ],
+        "object": "build/seto053/coordinator/59048/verify-1/func_00059048.o",
+        "object_sha256": "9137755b2bec602dae35d6390ee09a71eae75a12cbf2c40dcf7c02a13510cbb4",
+        "source": "decomp/src/eboot/func_00059048.c",
+        "source_sha256": "8b2244723c190ac2894fd7bc0009a22d01a9551ef795fba2c9e529c873102f57"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00059048",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x59048",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00059048",
+      "match": {
+        "address": 364616,
+        "candidate": {
+          "location": "symbol 'func_00059048' at section offset 0x0",
+          "path": "build/seto053/coordinator/59048/verify-2/func_00059048.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 12,
+        "name": "func_00059048",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 12
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "/home/vinicius/.local/bin/wibo"
+        ],
+        "object": "build/seto053/coordinator/59048/verify-2/func_00059048.o",
+        "object_sha256": "9137755b2bec602dae35d6390ee09a71eae75a12cbf2c40dcf7c02a13510cbb4",
+        "source": "decomp/src/eboot/func_00059048.c",
+        "source_sha256": "8b2244723c190ac2894fd7bc0009a22d01a9551ef795fba2c9e529c873102f57"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00059048",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 48,
+  "source_path": "decomp/src/eboot/func_00059048.c",
+  "source_sha256": "8b2244723c190ac2894fd7bc0009a22d01a9551ef795fba2c9e529c873102f57"
+}

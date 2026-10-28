@@ -1,0 +1,127 @@
+{
+  "address": "0x3c424",
+  "build_sha256": [
+    "26e35b31b277f3cfc3c415461cc762e36b8eaefb8f841894f058f1e95956e65e",
+    "26e35b31b277f3cfc3c415461cc762e36b8eaefb8f841894f058f1e95956e65e"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x3c424",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0003C424",
+      "match": {
+        "address": 246820,
+        "candidate": {
+          "location": "symbol 'func_0003C424' at section offset 0x0",
+          "path": "build/seto053/coordinator/3c424/verify-1/func_0003C424.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 21,
+        "name": "func_0003C424",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 3 (0x3c430): this module @ 0x3a90c <=> this module @ 0x3a90c"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 21
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "/home/vinicius/.local/bin/wibo"
+        ],
+        "object": "build/seto053/coordinator/3c424/verify-1/func_0003C424.o",
+        "object_sha256": "26e35b31b277f3cfc3c415461cc762e36b8eaefb8f841894f058f1e95956e65e",
+        "source": "decomp/src/eboot/func_0003C424.c",
+        "source_sha256": "6423490c26dc5a526446c16c4bb34b5d506e25367f3f1ba7f14e5e35fe62fcdb"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0003C424",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x3c424",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0003C424",
+      "match": {
+        "address": 246820,
+        "candidate": {
+          "location": "symbol 'func_0003C424' at section offset 0x0",
+          "path": "build/seto053/coordinator/3c424/verify-2/func_0003C424.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 21,
+        "name": "func_0003C424",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 3 (0x3c430): this module @ 0x3a90c <=> this module @ 0x3a90c"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 21
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "/mnt/c/Users/Vinicius/.seto/tools/mwccpsp_3.0.1_219/mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "/home/vinicius/.local/bin/wibo"
+        ],
+        "object": "build/seto053/coordinator/3c424/verify-2/func_0003C424.o",
+        "object_sha256": "26e35b31b277f3cfc3c415461cc762e36b8eaefb8f841894f058f1e95956e65e",
+        "source": "decomp/src/eboot/func_0003C424.c",
+        "source_sha256": "6423490c26dc5a526446c16c4bb34b5d506e25367f3f1ba7f14e5e35fe62fcdb"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0003C424",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 84,
+  "source_path": "decomp/src/eboot/func_0003C424.c",
+  "source_sha256": "6423490c26dc5a526446c16c4bb34b5d506e25367f3f1ba7f14e5e35fe62fcdb"
+}
