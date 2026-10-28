@@ -711,6 +711,7 @@ class InternalCampaignRunner:
         recover_promotion: Callable[[InternalClaim], Mapping[str, Any] | None] | None = None,
         lease_seconds: float = 1800,
         max_attempts_per_candidate: int = 8,
+        provider_parallelism: Mapping[str, int] | None = None,
     ) -> None:
         self.store = store
         self.boundary = boundary
@@ -721,9 +722,15 @@ class InternalCampaignRunner:
         self.recover_promotion = recover_promotion
         self.lease_seconds = lease_seconds
         self.max_attempts_per_candidate = max_attempts_per_candidate
+        self.provider_parallelism = {
+            str(scope): max(1, int(limit))
+            for scope, limit in (provider_parallelism or {}).items()
+        }
         self._inference_state_lock = threading.Lock()
         self._active_inferences = 0
         self._peak_inferences = 0
+        self._worker_cursor_lock = threading.Lock()
+        self._worker_cursor = 0
 
     def _inference_started(self) -> None:
         with self._inference_state_lock:
@@ -737,6 +744,49 @@ class InternalCampaignRunner:
     def _peak_inference_count(self) -> int:
         with self._inference_state_lock:
             return self._peak_inferences
+
+    def _select_rotating_workers(
+        self,
+        workers: tuple[tuple[str, str, str | None], ...],
+        count: int,
+        *,
+        eligible_ids: set[str],
+        excluded_ids: set[str] | None = None,
+        scope_capacity: Mapping[str, int] | None = None,
+    ) -> tuple[tuple[str, str, str | None], ...]:
+        if count <= 0 or not workers:
+            return ()
+        excluded = excluded_ids or set()
+        selected: list[tuple[str, str, str | None]] = []
+        selected_per_scope: dict[str, int] = {}
+        with self._worker_cursor_lock:
+            start = self._worker_cursor % len(workers)
+            scanned = 0
+            while scanned < len(workers) and len(selected) < count:
+                worker = workers[(start + scanned) % len(workers)]
+                capacity = (scope_capacity or {}).get(worker[1], len(workers))
+                scope_selected = selected_per_scope.get(worker[1], 0)
+                if (
+                    worker[0] in eligible_ids
+                    and worker[0] not in excluded
+                    and scope_selected < capacity
+                ):
+                    selected.append(worker)
+                    selected_per_scope[worker[1]] = scope_selected + 1
+                scanned += 1
+            if scanned:
+                self._worker_cursor = (start + scanned) % len(workers)
+        return tuple(selected)
+
+    def _rotate_worker_order(
+        self, workers: tuple[tuple[str, str, str | None], ...]
+    ) -> tuple[tuple[str, str, str | None], ...]:
+        if len(workers) < 2:
+            return workers
+        with self._worker_cursor_lock:
+            start = self._worker_cursor % len(workers)
+            self._worker_cursor = (start + 1) % len(workers)
+        return workers[start:] + workers[:start]
 
     def run_segment(
         self,
@@ -762,6 +812,8 @@ class InternalCampaignRunner:
                 "stages": {},
                 "external_work_remains": bool(self.store.pending_count()),
             }
+        if len({worker[0] for worker in worker_rows}) != len(worker_rows):
+            raise ValueError("internal worker identifiers must be unique")
         attempts_remaining = max(
             0,
             max_total_attempts - self.store.campaign_store.total_attempt_count(),
@@ -771,46 +823,88 @@ class InternalCampaignRunner:
             if max_attempts_this_segment is None
             else max_attempts_this_segment
         )
-        concurrent_slots = min(
-            len(worker_rows),
-            segment_limit,
-            attempts_remaining,
-            self.store.exact_pending_count(),
+        exact_pending = self.store.exact_pending_count()
+        active_worker_ids = {
+            worker_id
+            for worker_id, provider, _model_provider in worker_rows
+            if self.store.campaign_store.provider_status(provider) == "active"
+        }
+        active_by_scope: dict[str, int] = {}
+        for worker_id, provider, _model_provider in worker_rows:
+            if worker_id in active_worker_ids:
+                active_by_scope[provider] = active_by_scope.get(provider, 0) + 1
+        provider_capacity = sum(
+            min(count, self.provider_parallelism.get(scope, count))
+            for scope, count in active_by_scope.items()
         )
-        if len(worker_rows) > 1 and concurrent_slots > 1 and not boundary_only:
+        concurrent_slots = min(
+            provider_capacity, segment_limit, attempts_remaining, exact_pending
+        )
+        if len(worker_rows) > 1 and concurrent_slots > 0 and not boundary_only:
             worker_results: list[dict[str, Any]] = []
-            selected_workers = worker_rows[:concurrent_slots]
+            tried_worker_ids: set[str] = set()
+            selected_workers = self._select_rotating_workers(
+                worker_rows,
+                concurrent_slots,
+                eligible_ids=active_worker_ids,
+                scope_capacity=self.provider_parallelism,
+            )
             with concurrent.futures.ThreadPoolExecutor(
-                max_workers=concurrent_slots,
+                max_workers=max(1, concurrent_slots),
                 thread_name_prefix="seto-internal-worker",
             ) as pool:
-                pending = {
-                    pool.submit(
-                        self.run_segment,
-                        (worker,),
-                        max_total_attempts=max_total_attempts,
-                        deadline=deadline,
-                        max_attempts_this_segment=1,
-                        max_boundary_tasks_this_segment=1,
-                        _skip_boundary_work=True,
-                    ): worker[0]
-                    for worker in selected_workers
-                }
-                for future in concurrent.futures.as_completed(pending):
-                    worker_id = pending[future]
-                    try:
-                        result = dict(future.result())
-                        result["worker_id"] = worker_id
-                    except Exception as exc:
-                        result = {
-                            "worker_id": worker_id,
-                            "attempted": 0,
-                            "outcomes": {"worker_error": 1},
-                            "boundary_outcomes": {},
-                            "stages": {},
-                            "error": type(exc).__name__,
-                        }
-                    worker_results.append(result)
+                while selected_workers:
+                    tried_worker_ids.update(worker[0] for worker in selected_workers)
+                    pending = {
+                        pool.submit(
+                            self.run_segment,
+                            (worker,),
+                            max_total_attempts=max_total_attempts,
+                            deadline=deadline,
+                            max_attempts_this_segment=1,
+                            max_boundary_tasks_this_segment=1,
+                            _skip_boundary_work=True,
+                        ): worker[0]
+                        for worker in selected_workers
+                    }
+                    for future in concurrent.futures.as_completed(pending):
+                        worker_id = pending[future]
+                        try:
+                            result = dict(future.result())
+                            result["worker_id"] = worker_id
+                        except Exception as exc:
+                            result = {
+                                "worker_id": worker_id,
+                                "attempted": 0,
+                                "outcomes": {"worker_error": 1},
+                                "boundary_outcomes": {},
+                                "stages": {},
+                                "error": type(exc).__name__,
+                            }
+                        worker_results.append(result)
+
+                    started = sum(
+                        int(result.get("stages", {}).get("worker_attempts_started", 0))
+                        for result in worker_results
+                    )
+                    slots_left = min(
+                        concurrent_slots - started,
+                        max(0, max_total_attempts - self.store.campaign_store.total_attempt_count()),
+                        self.store.exact_pending_count(),
+                    )
+                    if (
+                        slots_left <= 0
+                        or time.monotonic() >= deadline
+                        or self.store.campaign_store.stop_requested()
+                    ):
+                        break
+                    selected_workers = self._select_rotating_workers(
+                        worker_rows,
+                        slots_left,
+                        eligible_ids=active_worker_ids,
+                        excluded_ids=tried_worker_ids,
+                        scope_capacity=self.provider_parallelism,
+                    )
 
             outcomes: dict[str, int] = {}
             boundary_outcomes: dict[str, int] = {}
@@ -834,6 +928,8 @@ class InternalCampaignRunner:
                 "peak_inference_workers": self._peak_inference_count(),
                 "external_work_remains": bool(self.store.pending_count()),
             }
+        if len(worker_rows) > 1 and not boundary_only:
+            worker_rows = self._rotate_worker_order(worker_rows)
         attempted = 0
         outcomes: list[str] = []
         boundary_outcomes: list[str] = []
@@ -2251,6 +2347,7 @@ def make_production_internal_runner(
         recover_promotion=recover_catalog_promotion,
         lease_seconds=lease_seconds,
         max_attempts_per_candidate=max_attempts_per_candidate,
+        provider_parallelism=campaign_runner.provider_parallelism,
     )
 
 

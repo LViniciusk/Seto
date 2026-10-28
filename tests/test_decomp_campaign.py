@@ -463,7 +463,9 @@ def test_internal_prose_checkpoint_without_source_still_fails_before_matcher(
     assert campaign_store.total_attempt_count() == 1
 
 
-def _parallel_internal_runner(tmp_path: Path, worker_count: int):
+def _parallel_internal_runner(
+    tmp_path: Path, worker_count: int, *, barrier_size: int | None = None
+):
     from internal_campaign import InternalCampaignRunner
 
     campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
@@ -481,7 +483,7 @@ def _parallel_internal_runner(tmp_path: Path, worker_count: int):
         db.execute(
             "UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'"
         )
-    worker_barrier = threading.Barrier(worker_count)
+    worker_barrier = threading.Barrier(barrier_size or worker_count)
     assignments: list[tuple[str, str]] = []
     assignment_lock = threading.Lock()
     active = 0
@@ -543,11 +545,101 @@ def test_internal_ready_workers_claim_distinct_tasks_and_overlap(tmp_path: Path)
     assert campaign_store.total_attempt_count() == 4
 
 
+def test_two_internal_workers_cannot_claim_the_same_function(tmp_path: Path) -> None:
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [InternalFunction("EBOOT", 0x1800, 8, "UNVERIFIED", "build/manifest.json")]
+    )
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'"
+        )
+    claim_barrier = threading.Barrier(2)
+
+    def claim(worker_id: str):
+        claim_barrier.wait(timeout=5)
+        return internal_store.claim_next(
+            worker_id,
+            f"scope-{worker_id}",
+            model_provider="opencode",
+            lease_seconds=60,
+            max_total_attempts=2,
+            max_attempts_per_candidate=2,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = [
+            future.result(timeout=10)
+            for future in (
+                pool.submit(claim, "claimant-a"),
+                pool.submit(claim, "claimant-b"),
+            )
+        ]
+    assert sum(item is not None for item in claims) == 1
+    assert {item.address for item in claims if item is not None} == {"0x1800"}
+    assert campaign_store.total_attempt_count() == 0
+
+
+def test_internal_concurrent_runner_preserves_empty_stop_and_deadline_gates(
+    tmp_path: Path,
+) -> None:
+    from internal_campaign import InternalCampaignRunner
+
+    empty_store = CampaignStore(tmp_path / "empty.sqlite3")
+    empty_runner = InternalCampaignRunner(
+        InternalCampaignStore(empty_store),
+        boundary=lambda claim, _deadline: claim,
+        worker=lambda *_args: pytest.fail("empty queue must not call a worker"),
+        matcher=lambda *_args: {},
+        certifier=lambda *_args: {},
+    )
+    empty = empty_runner.run_segment(
+        [("worker-a", "scope-a", "opencode"), ("worker-b", "scope-b", "opencode")],
+        max_total_attempts=2,
+        deadline=time.monotonic() + 5,
+    )
+    assert empty["attempted"] == 0
+    assert empty["external_work_remains"] is False
+    assert empty_store.total_attempt_count() == 0
+
+    for case in ("stop", "deadline"):
+        campaign_store = CampaignStore(tmp_path / f"{case}.sqlite3")
+        internal_store = InternalCampaignStore(campaign_store)
+        internal_store.seed(
+            [InternalFunction("EBOOT", 0x3800, 8, "UNVERIFIED", "build/manifest.json")]
+        )
+        with campaign_store._connect() as db:
+            db.execute(
+                "UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'"
+            )
+        if case == "stop":
+            campaign_store.request_stop()
+            deadline = time.monotonic() + 5
+        else:
+            deadline = time.monotonic() - 1
+        runner = InternalCampaignRunner(
+            internal_store,
+            boundary=lambda claim, _deadline: claim,
+            worker=lambda *_args: pytest.fail(f"{case} gate must prevent worker start"),
+            matcher=lambda *_args: {},
+            certifier=lambda *_args: {},
+        )
+        result = runner.run_segment(
+            [("worker-a", "scope-a", "opencode"), ("worker-b", "scope-b", "opencode")],
+            max_total_attempts=2,
+            max_attempts_this_segment=2,
+            deadline=deadline,
+        )
+        assert result["attempted"] == 0
+        assert campaign_store.total_attempt_count() == 0
+
+
 def test_internal_parallel_start_preserves_cumulative_attempt_ceiling(
     tmp_path: Path,
 ) -> None:
     campaign_store, runner, workers, assignments, lock, peak_active = (
-        _parallel_internal_runner(tmp_path, 4)
+        _parallel_internal_runner(tmp_path, 4, barrier_size=2)
     )
     result = runner.run_segment(
         workers,
@@ -562,7 +654,109 @@ def test_internal_parallel_start_preserves_cumulative_attempt_ceiling(
     assert peak_active() == 2
     assert len(observed) == 2
     assert len({address for _, address in observed}) == 2
+    assert result["outcomes"] == {"nonmatching": 2}
     assert campaign_store.total_attempt_count() == 2
+
+
+def test_internal_worker_selection_rotates_between_segments(tmp_path: Path) -> None:
+    campaign_store, runner, workers, assignments, lock, _peak_active = (
+        _parallel_internal_runner(tmp_path, 4, barrier_size=2)
+    )
+    observed_by_segment: list[set[str]] = []
+    for _ in range(2):
+        with lock:
+            before = len(assignments)
+        result = runner.run_segment(
+            workers,
+            max_total_attempts=4,
+            max_attempts_this_segment=2,
+            max_boundary_tasks_this_segment=1,
+            deadline=time.monotonic() + 15,
+        )
+        assert result["attempted"] == 2
+        assert result["outcomes"] == {"nonmatching": 2}
+        with lock:
+            observed_by_segment.append(
+                {worker_id for worker_id, _address in assignments[before:]}
+            )
+    assert observed_by_segment == [{"worker-0", "worker-1"}, {"worker-2", "worker-3"}]
+    assert campaign_store.total_attempt_count() == 4
+
+
+def test_internal_dispatch_respects_quota_scope_parallel_capacity(tmp_path: Path) -> None:
+    campaign_store, runner, workers, assignments, lock, peak_active = (
+        _parallel_internal_runner(tmp_path, 4, barrier_size=3)
+    )
+    workers = [
+        ("worker-0", "shared-scope", "opencode"),
+        ("worker-1", "shared-scope", "opencode"),
+        ("worker-2", "independent-scope", "opencode"),
+        ("worker-3", "independent-scope", "opencode"),
+    ]
+    runner.provider_parallelism = {"shared-scope": 1, "independent-scope": 2}
+    result = runner.run_segment(
+        workers,
+        max_total_attempts=4,
+        max_attempts_this_segment=4,
+        deadline=time.monotonic() + 15,
+    )
+    with lock:
+        observed_workers = {worker_id for worker_id, _address in assignments}
+    assert result["attempted"] == 3
+    assert peak_active() == 3
+    assert observed_workers == {"worker-0", "worker-2", "worker-3"}
+    assert campaign_store.total_attempt_count() == 3
+
+
+def test_internal_dispatch_skips_suspended_quota_scopes(tmp_path: Path) -> None:
+    from internal_campaign import InternalCampaignRunner
+
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [InternalFunction("EBOOT", 0x3000, 8, "UNVERIFIED", "build/manifest.json")]
+    )
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'"
+        )
+        db.execute(
+            "INSERT INTO providers(provider,status,updated_at) VALUES('suspended-scope','suspended_quota',?)",
+            (time.time(),),
+        )
+    worker_calls: list[str] = []
+
+    def worker(claim: InternalClaim, begin_attempt, _deadline: float):
+        worker_calls.append(claim.worker_id)
+        begin_attempt(claim)
+        return {"status": "SOURCE_READY", "source_sha256": "c" * 64}
+
+    runner = InternalCampaignRunner(
+        internal_store,
+        boundary=lambda claim, _deadline: claim,
+        worker=worker,
+        matcher=lambda _claim, _result, _deadline: {
+            "status": "NONMATCHING",
+            "source_sha256": "c" * 64,
+            "matching_words": 0,
+            "total_words": 2,
+        },
+        certifier=lambda _claim, _result: {"certified": False},
+        lease_seconds=60,
+        max_attempts_per_candidate=2,
+    )
+    result = runner.run_segment(
+        [
+            ("quota-stopped", "suspended-scope", "opencode"),
+            ("available", "active-scope", "opencode"),
+        ],
+        max_total_attempts=1,
+        max_attempts_this_segment=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert result["attempted"] == 1
+    assert worker_calls == ["available"]
+    assert campaign_store.total_attempt_count() == 1
 
 
 def test_internal_concurrent_worker_failure_does_not_cancel_other_claims(
@@ -578,7 +772,7 @@ def test_internal_concurrent_worker_failure_does_not_cancel_other_claims(
                 "EBOOT", 0x2000 + index * 0x10, 8, "UNVERIFIED",
                 "build/parallel-failure-manifest.json", priority=10 - index,
             )
-            for index in range(3)
+            for index in range(2)
         ]
     )
     with campaign_store._connect() as db:
@@ -592,7 +786,7 @@ def test_internal_concurrent_worker_failure_does_not_cancel_other_claims(
     def worker(claim: InternalClaim, begin_attempt, _deadline: float):
         with worker_calls_lock:
             worker_calls.append(claim.worker_id)
-        if claim.worker_id == "unavailable":
+        if claim.worker_id.startswith("unavailable"):
             raise InternalWorkerUnavailable("synthetic provider failure")
         begin_attempt(claim)
         peer_barrier.wait(timeout=8)
@@ -614,18 +808,24 @@ def test_internal_concurrent_worker_failure_does_not_cancel_other_claims(
     )
     result = runner.run_segment(
         [
-            ("unavailable", "scope-a", "opencode"),
-            ("worker-b", "scope-b", "opencode"),
+            ("unavailable-0", "scope-a", "opencode"),
+            ("unavailable-1", "scope-b", "opencode"),
             ("worker-c", "scope-c", "opencode"),
+            ("worker-d", "scope-d", "opencode"),
         ],
-        max_total_attempts=3,
-        max_attempts_this_segment=3,
+        max_total_attempts=2,
+        max_attempts_this_segment=4,
         max_boundary_tasks_this_segment=1,
         deadline=time.monotonic() + 15,
     )
     assert result["attempted"] == 2
     assert result["outcomes"] == {"nonmatching": 2}
-    assert set(worker_calls) == {"unavailable", "worker-b", "worker-c"}
+    assert set(worker_calls) == {
+        "unavailable-0",
+        "unavailable-1",
+        "worker-c",
+        "worker-d",
+    }
     assert campaign_store.total_attempt_count() == 2
 
 
@@ -658,6 +858,9 @@ def test_concurrent_internal_certifications_do_not_lose_catalog_entries(
     )
     runner.auto_preflight = False
     runner.context_worktrees = worktrees
+    # Exercise concurrent catalog writes even though production matcher slots
+    # stay at one; only the matcher here is a synthetic, local test double.
+    runner.matcher_slots = threading.BoundedSemaphore(2)
 
     boundary_checkpoints = {}
     for address in addresses:

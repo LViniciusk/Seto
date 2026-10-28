@@ -7862,13 +7862,18 @@ matcher continua serial (paralelismo 1), o catálogo de certificados protege a
 transação de leitura/validação/replace com lock e uma falha individual não cancela
 as outras futures. A alternância exports/internas continua sequencial entre
 fatias, com até quatro tentativas concorrentes dentro da fatia ativa. O
-pré-aquecimento exige boundaries `EXACT` suficientes para até quatro workers.
+pré-aquecimento tenta preencher até quatro slots, mas libera a execução se houver
+ao menos um candidato `EXACT`; a concorrência efetiva é limitada pelos candidatos,
+workers com provider ativo e capacidade por `quota_scope`. A seleção percorre os
+workers em cursor circular entre segmentos; scopes suspensos são ignorados e
+workers que falham antes de iniciar inference são substituídos por alternativas
+ainda não tentadas na fatia, sem retry do worker indisponível.
 
 Testes sintéticos confirmam quatro workers com claims/endereço distintos e
 execução sobreposta; um segundo caso limita simultaneamente quatro workers a
 duas tentativas, sem exceder o teto global. A sobreposição foi verificada nos
 testes, não numa campanha real, pois os providers estavam bloqueados.
 
-Validação local final em Windows/Python 3.12: **1089 passed, 44 skipped**;
+Validação local final em Windows/Python 3.12: **1095 passed, 44 skipped**;
 `compileall`, `git diff --check`, `--metadata-only` e `--full` passaram. Os skips
 são integrações opt-in ou ferramentas Linux/WSL não instaladas nesta execução.

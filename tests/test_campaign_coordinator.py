@@ -350,3 +350,32 @@ def test_initial_internal_preparation_fills_multiple_ready_worker_slots() -> Non
     assert prepared["exact_pending_after"] == 4
     assert prepared["minimum_exact_pending"] == 4
     assert events == ["discover", "boundary"]
+
+
+def test_initial_internal_preparation_accepts_any_positive_exact_queue() -> None:
+    for initial_exact in (0, 1, 2, 3):
+        events: list[str] = []
+
+        def discover(_deadline: float) -> DiscoveryResult:
+            events.append("discover")
+            return DiscoveryResult("eboot-internal", "hash", candidates_added=0)
+
+        def prepare(_deadline: float, _limit: int) -> dict[str, object]:
+            events.append("boundary")
+            return {"attempted": 0, "boundary_outcomes": {}}
+
+        prepared = prepare_internal_lane_before_inference(
+            discover_internal=discover,
+            prepare_boundary=prepare,
+            exact_pending_count=lambda: initial_exact,
+            deadline=1000.0,
+            max_boundary_tasks=8,
+            minimum_exact_pending=4,
+            monotonic=lambda: 10.0,
+        )
+        assert prepared["ready"] is (initial_exact > 0)
+        assert prepared["exact_pending_after"] == initial_exact
+        if initial_exact < 4:
+            assert events == ["discover", "boundary"]
+        else:
+            assert events == []

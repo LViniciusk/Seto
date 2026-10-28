@@ -172,7 +172,7 @@ def prepare_internal_lane_before_inference(
                 raise RuntimeError("initial internal boundary preparation consumed an inference attempt")
     exact_after = exact_pending_count()
     return {
-        "ready": exact_after >= minimum_exact_pending,
+        "ready": exact_after > 0,
         "exact_pending_before": exact_before,
         "exact_pending_after": exact_after,
         "minimum_exact_pending": minimum_exact_pending,
