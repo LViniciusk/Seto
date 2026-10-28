@@ -142,11 +142,12 @@ resuming:
 py -3.12 scripts/decomp_campaign.py resume --recover-expired
 ```
 
-Use `--retry-blocked` only after diagnosing and fixing the underlying cause;
-`resume` explicitly reactivates quota-suspended providers, so it should not be
-used as an automatic retry loop. Rate limits honor `Retry-After`, provider
-outages back off, and a run exits instead of polling when no worker can claim a
-task.
+`resume` clears only the campaign stop flag; it does not change provider status,
+quota/auth reasons, resume deadlines, or timestamps. Use `--retry-blocked` only
+after diagnosing and fixing the underlying cause. Resuming tasks never releases
+quota: a provider must be independently verified and selectively authorized
+before it can run again. Rate limits honor `Retry-After`, provider outages back
+off, and a run exits instead of polling when no worker can claim a task.
 
 ## Session and campaign limits
 

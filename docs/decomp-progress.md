@@ -7877,3 +7877,31 @@ testes, não numa campanha real, pois os providers estavam bloqueados.
 Validação local final em Windows/Python 3.12: **1095 passed, 44 skipped**;
 `compileall`, `git diff --check`, `--metadata-only` e `--full` passaram. Os skips
 são integrações opt-in ou ferramentas Linux/WSL não instaladas nesta execução.
+
+## SETO-DECOMP-051 — retomada sem liberação implícita de quota
+
+`CampaignStore.resume()` agora limpa somente `stop_requested`; foi removido o
+parâmetro `reset_providers` e seus call sites foram ajustados. Assim, retomada de
+leases, retries seletivos e recuperação local não mudam `status`, `resume_at`,
+`reason` ou `updated_at` dos providers. Nenhuma operação nova de reativação foi
+criada porque não há evidência atual de quota liberada que a justifique.
+
+O preflight read-only confirmou os hashes privados, Ghidra, MWCC, wibo e WSL
+READY. Alluka e Kita carregam o agent restrito e o modelo exato
+`opencode/deepseek-v4.1-flash-free`, com metadata de preço zero, mas os scopes
+SQLite `opencode:alluka` e `opencode:kita-server` continuam
+`suspended_quota`/`quota_exhausted`, sem `resume_at` ou informação confiável de
+renovação (últimos estados registrados em 2026-10-27 e 2026-10-26). O `doctor`
+marca a execução remota como não verificada. Para OpenAI, OAuth está armazenado,
+mas assinatura ChatGPT e custo adicional não foram confirmados. DeepSeek local
+tem metadata pública/free, mas acesso e modo de uso não foram verificados. O
+`opencode stats` é telemetria de uso de sessões, não informa quota restante por
+`quota_scope`; não foi encontrado endpoint oficial de quota sem inferência.
+
+Portanto, nenhum provider pode ser declarado atualmente liberado para inferência.
+Não houve tentativa, sessão ou alteração de quota nesta correção. O SQLite foi
+copiado por `Connection.backup()` para
+`build/decomp-campaign/task051-preflight-20261028T123528Z.sqlite3`; antes e após
+as alterações locais manteve `integrity_check=ok`, 217 tentativas export + 2
+internas, zero leases ativos e `stop_requested=0`. A cobertura real permanece
+2.316 instruções MATCHED; faltam 184 para 2.500.
