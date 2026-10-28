@@ -33,6 +33,12 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from campaign_coordinator import (
+    ContinuousCampaignCoordinator,
+    DiscoveryResult,
+    prepare_internal_lane_before_inference,
+    run_fair_segments,
+)
 from decomp_ssh import (
     MAX_PROMPT_BYTES,
     MAX_RESPONSE_BYTES,
@@ -193,6 +199,32 @@ class Claim:
     checkpoint: dict[str, Any]
     evidence: dict[str, Any]
     model_provider: str | None = None
+
+    @property
+    def numeric_address(self) -> int:
+        return int(self.address, 0)
+
+
+@dataclass(frozen=True)
+class InternalClaim:
+    """Leased internal-function work identity; deliberately has no NID field."""
+
+    module: str
+    address: str
+    size_bytes: int
+    section: str
+    kind: str
+    priority: int
+    boundary_status: str
+    worker_id: str
+    provider: str
+    session_id: str | None
+    attempt_number: int
+    lease_until: float
+    checkpoint: dict[str, Any]
+    evidence: dict[str, Any]
+    model_provider: str | None = None
+    is_internal: bool = True
 
     @property
     def numeric_address(self) -> int:
@@ -531,6 +563,10 @@ def _sanitize_checkpoint(
             "last_diagnostic",
             "last_diagnostic_detail",
             "recovery_reason",
+            "last_local_match_source_sha256",
+            "promotion_pending",
+            "promotion_recovery",
+            "recovery_state",
         }
     result: dict[str, Any] = {}
     for key in allowed:
@@ -543,6 +579,7 @@ def _sanitize_checkpoint(
             "source_sha256",
             "best_source_sha256",
             "ghidra_log_sha256",
+            "last_local_match_source_sha256",
         }:
             if HEX_SHA256.fullmatch(str(value)):
                 result[key] = str(value)
@@ -552,6 +589,70 @@ def _sanitize_checkpoint(
                 value.replace("\\", "/"),
             ):
                 result[key] = value
+        elif key == "promotion_pending" and isinstance(value, bool):
+            result[key] = value
+        elif key == "promotion_recovery" and isinstance(value, dict):
+            address = value.get("address")
+            size_bytes = value.get("size_bytes")
+            source_hash = value.get("source_sha256")
+            builds = value.get("build_sha256")
+            reports = value.get("report_files")
+            valid_reports = isinstance(reports, list) and len(reports) == 2
+            sanitized_reports = []
+            if valid_reports:
+                for item in reports:
+                    if not isinstance(item, dict):
+                        valid_reports = False
+                        break
+                    path = item.get("path")
+                    digest = item.get("sha256")
+                    if (
+                        not isinstance(path, str)
+                        or not re.fullmatch(
+                            r"build/seto049/internal-audit/eboot/[0-9a-f]{1,8}/"
+                            r"[0-9a-f]{64}/attempt-[1-9][0-9]*/journal-[0-9a-f]{32}/"
+                            r"verify-[12]\.json",
+                            path,
+                        )
+                        or not isinstance(digest, str)
+                        or not HEX_SHA256.fullmatch(digest)
+                    ):
+                        valid_reports = False
+                        break
+                    sanitized_reports.append({"path": path, "sha256": digest})
+            if (
+                value.get("version") == 1
+                and value.get("module") == "EBOOT"
+                and isinstance(address, str)
+                and re.fullmatch(r"0x[0-9a-f]{1,8}", address)
+                and isinstance(size_bytes, int)
+                and not isinstance(size_bytes, bool)
+                and size_bytes > 0
+                and size_bytes % 4 == 0
+                and value.get("section") == ".text"
+                and isinstance(source_hash, str)
+                and HEX_SHA256.fullmatch(source_hash)
+                and isinstance(builds, list)
+                and len(builds) == 2
+                and builds[0] == builds[1]
+                and all(isinstance(item, str) and HEX_SHA256.fullmatch(item) for item in builds)
+                and valid_reports
+            ):
+                result[key] = {
+                    "version": 1,
+                    "module": "EBOOT",
+                    "address": address,
+                    "size_bytes": size_bytes,
+                    "section": ".text",
+                    "source_path": f"decomp/src/eboot/func_{int(address, 0):08X}.c",
+                    "source_sha256": source_hash,
+                    "build_sha256": list(builds),
+                    "worker_id": _safe_text(value.get("worker_id", ""), 64),
+                    "attempt_number": max(1, int(value.get("attempt_number", 1))),
+                    "report_files": sanitized_reports,
+                }
+        elif key == "recovery_state" and value in {"source_pending", "promotion_pending"}:
+            result[key] = value
         elif key == "limitations" and isinstance(value, list):
             result[key] = [_safe_text(item, 1000) for item in value[:40]]
         elif key == "evidence_paths" and isinstance(value, list):
@@ -869,6 +970,41 @@ class CampaignStore:
                     retry_after REAL,
                     UNIQUE(address, attempt_number)
                 );
+                CREATE TABLE IF NOT EXISTS internal_candidates (
+                    module TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    section TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    boundary_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    owner TEXT,
+                    provider TEXT,
+                    session_id TEXT,
+                    lease_until REAL,
+                    available_at REAL NOT NULL DEFAULT 0,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    boundary_attempts INTEGER NOT NULL DEFAULT 0,
+                    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(module,address)
+                );
+                CREATE TABLE IF NOT EXISTS internal_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    module TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL,
+                    worker_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    ended_at REAL,
+                    outcome TEXT NOT NULL DEFAULT 'running',
+                    UNIQUE(module,address,attempt_number)
+                );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     created_at REAL NOT NULL,
@@ -884,6 +1020,18 @@ class CampaignStore:
                 );
                 INSERT OR IGNORE INTO metadata(key, value) VALUES ('stop_requested', '0');
                 """
+            )
+            internal_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(internal_candidates)")
+            }
+            if "priority" not in internal_columns:
+                db.execute(
+                    "ALTER TABLE internal_candidates ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
+                )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS internal_candidates_claim_order "
+                "ON internal_candidates(status,available_at,priority DESC,attempt_count,module,address)"
             )
 
     def seed(
@@ -1001,7 +1149,7 @@ class CampaignStore:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if max_total_attempts is not None:
-                total_attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+                total_attempts = self._total_attempt_count(db)
                 if total_attempts >= max_total_attempts:
                     db.commit()
                     return None
@@ -1186,7 +1334,7 @@ class CampaignStore:
                     (now, claim.provider),
                 )
             if max_total_attempts is not None:
-                total_attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+                total_attempts = self._total_attempt_count(db)
                 if total_attempts >= max_total_attempts:
                     db.execute(
                         """UPDATE candidates SET status='pending',owner=NULL,provider=NULL,
@@ -1477,6 +1625,29 @@ class CampaignStore:
             raise ValueError("OpenCode session ID cannot be empty")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if getattr(claim, "is_internal", False):
+                row = self._require_internal_owner(db, claim)
+                db.execute(
+                    "UPDATE internal_candidates SET session_id=?,updated_at=? "
+                    "WHERE module=? AND address=?",
+                    (session_id, time.time(), claim.module, claim.address),
+                )
+                if row["status"] == "running":
+                    db.execute(
+                        "UPDATE internal_attempts SET session_id=? "
+                        "WHERE module=? AND address=? AND attempt_number=?",
+                        (session_id, claim.module, claim.address, claim.attempt_number),
+                    )
+                self._event(
+                    db,
+                    "internal_session_bound",
+                    address=claim.address,
+                    worker_id=claim.worker_id,
+                    provider=claim.provider,
+                    session_id=session_id,
+                )
+                db.commit()
+                return replace(claim, session_id=session_id)
             row = self._require_owner(db, claim)
             now = time.time()
             db.execute(
@@ -1522,6 +1693,20 @@ class CampaignStore:
         update = _sanitize_checkpoint(checkpoint, trusted_evidence=trusted_evidence)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if getattr(claim, "is_internal", False):
+                row = self._require_internal_owner(db, claim)
+                current = json.loads(row["checkpoint_json"])
+                current.update(update)
+                encoded = _json_dump(current)
+                if len(encoded) > 128_000:
+                    raise ValueError("internal checkpoint metadata exceeds 128 KiB")
+                db.execute(
+                    "UPDATE internal_candidates SET checkpoint_json=?,updated_at=? "
+                    "WHERE module=? AND address=?",
+                    (encoded, time.time(), claim.module, claim.address),
+                )
+                db.commit()
+                return
             row = self._require_owner(db, claim)
             checkpoint = json.loads(row["checkpoint_json"])
             checkpoint.update(update)
@@ -1547,6 +1732,44 @@ class CampaignStore:
             raise ValueError("Ghidra boundary size must be a positive multiple of four bytes")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if getattr(claim, "is_internal", False):
+                row = self._require_internal_owner(db, claim)
+                if row["status"] != "boundary_checking":
+                    raise RuntimeError("internal boundary update requires an active Ghidra lease")
+                start, end = claim.numeric_address, claim.numeric_address + size_bytes
+                exact_rows = db.execute(
+                    "SELECT module,address,size_bytes FROM internal_candidates "
+                    "WHERE boundary_status='EXACT' AND NOT (module=? AND address=?)",
+                    (claim.module, claim.address),
+                ).fetchall()
+                exact_rows.extend(
+                    db.execute(
+                        "SELECT 'EBOOT' AS module,address,size_bytes FROM candidates "
+                        "WHERE boundary_status='EXACT'"
+                    ).fetchall()
+                )
+                for exact in exact_rows:
+                    other_start = int(exact["address"], 0)
+                    other_end = other_start + int(exact["size_bytes"])
+                    if start < other_end and other_start < end:
+                        raise ValueError("Ghidra boundary overlaps an exact function range")
+                merged = json.loads(row["evidence_json"])
+                merged["ghidra_validation"] = evidence
+                db.execute(
+                    "UPDATE internal_candidates SET size_bytes=?,boundary_status='EXACT',"
+                    "evidence_json=?,updated_at=? WHERE module=? AND address=?",
+                    (size_bytes, _json_dump(merged), time.time(), claim.module, claim.address),
+                )
+                self._event(
+                    db,
+                    "internal_boundary_validated",
+                    address=claim.address,
+                    worker_id=claim.worker_id,
+                    provider=claim.provider,
+                    session_id=claim.session_id,
+                )
+                db.commit()
+                return
             row = self._require_owner(db, claim)
             if row["status"] not in {"running", "preparing", "boundary_checking"}:
                 raise RuntimeError("boundary update requires an active campaign lease")
@@ -1582,6 +1805,27 @@ class CampaignStore:
                 session_id=claim.session_id,
             )
             db.commit()
+
+    def _require_internal_owner(
+        self, db: sqlite3.Connection, claim: InternalClaim
+    ) -> sqlite3.Row:
+        row = db.execute(
+            "SELECT * FROM internal_candidates WHERE module=? AND address=?",
+            (claim.module, claim.address),
+        ).fetchone()
+        if (
+            row is None
+            or row["status"] not in {"running", "preparing", "boundary_checking"}
+            or row["owner"] != claim.worker_id
+            or row["provider"] != claim.provider
+            or row["session_id"] != claim.session_id
+            or int(row["attempt_count"]) != claim.attempt_number
+            or row["lease_until"] is None
+            or float(row["lease_until"]) != claim.lease_until
+            or float(row["lease_until"]) < time.time()
+        ):
+            raise RuntimeError("internal task lease is no longer owned by this worker")
+        return row
 
     def complete(
         self,
@@ -1698,7 +1942,7 @@ class CampaignStore:
             else:
                 no_progress = 0 if improved else int(row["attempts_without_progress"]) + 1
             now = time.time()
-            total_attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+            total_attempts = self._total_attempt_count(db)
             stop_row = db.execute(
                 "SELECT value FROM metadata WHERE key='stop_requested'"
             ).fetchone()
@@ -1801,7 +2045,7 @@ class CampaignStore:
                     or float(provider_row["resume_at"]) > now
                 )
             )
-            total_attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+            total_attempts = self._total_attempt_count(db)
             stopped = db.execute(
                 "SELECT value FROM metadata WHERE key='stop_requested'"
             ).fetchone()
@@ -1919,7 +2163,7 @@ class CampaignStore:
                 or no_progress >= max_attempts_without_progress
                 else "pending"
             )
-            total_attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+            total_attempts = self._total_attempt_count(db)
             stopped = db.execute(
                 "SELECT value FROM metadata WHERE key='stop_requested'"
             ).fetchone()
@@ -3161,7 +3405,13 @@ class CampaignStore:
 
     def total_attempt_count(self) -> int:
         with self._connect() as db:
-            return int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+            return self._total_attempt_count(db)
+
+    @staticmethod
+    def _total_attempt_count(db: sqlite3.Connection) -> int:
+        export_count = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+        internal_count = int(db.execute("SELECT COUNT(*) FROM internal_attempts").fetchone()[0])
+        return export_count + internal_count
 
     def next_eligible_time(
         self,
@@ -3286,7 +3536,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=10,
+                    timeout=2,
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError):
@@ -3360,10 +3610,11 @@ def _run_process(
         process.wait(timeout=4)
     except subprocess.TimeoutExpired:
         _terminate_process(process)
+    reader_deadline = time.monotonic() + 3
     for thread in readers:
-        thread.join(timeout=4)
+        thread.join(timeout=max(0.0, reader_deadline - time.monotonic()))
     if writer is not None:
-        writer.join(timeout=4)
+        writer.join(timeout=max(0.0, reader_deadline - time.monotonic()))
     return WorkResult(
         returncode=process.returncode if process.returncode is not None else -1,
         stdout=stdout_buffer.decode("utf-8", errors="replace"),
@@ -3414,6 +3665,15 @@ def _extract_checkpoint(output: str) -> dict[str, Any]:
                 checkpoint["next_experiment"] = "Review saved source and verified matcher report."
             return checkpoint
     raise ValueError("OpenCode did not return the required JSON checkpoint")
+
+
+def _matcher_attempt_label(claim: Claim | InternalClaim) -> str:
+    if not getattr(claim, "is_internal", False):
+        return f"attempt-{claim.attempt_number}"
+    run_id = claim.checkpoint.get("matcher_run_id")
+    if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise ValueError("internal matcher run id is missing or malformed")
+    return f"attempt-{claim.attempt_number}-internal-{run_id}"
 
 
 def _prompt(
@@ -4268,6 +4528,16 @@ class CampaignRunner:
             for task in self.store.list_tasks()
             if task["boundary_status"] == "EXACT" and task["address"] != address.lower()
         )
+        if self.store.path.is_file():
+            with self.store._connect() as db:
+                ranges.extend(
+                    (int(row["address"], 0), int(row["size_bytes"]))
+                    for row in db.execute(
+                        "SELECT address,size_bytes FROM internal_candidates "
+                        "WHERE module='EBOOT' AND boundary_status='EXACT' AND address<>?",
+                        (address.lower(),),
+                    )
+                )
         for other_start, other_size in ranges:
             if other_start == start:
                 continue
@@ -4401,15 +4671,22 @@ class CampaignRunner:
 
     def _prepare_claim(self, worktree: Path, claim: Claim, deadline: float | None) -> Claim:
         """Recheck export provenance and exact Ghidra body before any model call."""
+        internal = bool(getattr(claim, "is_internal", False))
+        if internal and (
+            claim.module != "EBOOT" or claim.section != ".text" or claim.kind != "code"
+        ):
+            raise ValueError("production internal worker currently accepts EBOOT .text code only")
         eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
         triage = worktree / "build" / "seto035" / "export-triage.json"
-        if any(path.is_symlink() or not path.is_file() for path in (eboot, triage)):
+        required = (eboot,) if internal else (eboot, triage)
+        if any(path.is_symlink() or not path.is_file() for path in required):
             raise ValueError("private EBOOT or real export/import triage is missing/unsafe")
         if self.expected_eboot_sha256:
             observed = hashlib.sha256(eboot.read_bytes()).hexdigest()
             if observed != self.expected_eboot_sha256.lower():
                 raise ValueError("local EBOOT hash differs from the certified baseline")
-        validate_export_evidence(triage, claim.address, claim.nid)
+        if not internal:
+            validate_export_evidence(triage, claim.address, claim.nid)
         try:
             cached_boundary = validated_cached_ghidra_boundary(worktree, claim)
         except ValueError:
@@ -4456,6 +4733,17 @@ class CampaignRunner:
             )
             cached_text = cached_path.read_text(encoding="utf-8", errors="replace")
             if _ghidra_log_has_reconstruction_details(cached_text):
+                if internal:
+                    checkpoint = dict(claim.checkpoint)
+                    checkpoint.update(
+                        {
+                            "ghidra_log_path": str(claim.checkpoint["ghidra_log_path"]),
+                            "ghidra_log_sha256": hashlib.sha256(cached_path.read_bytes()).hexdigest(),
+                            "boundary_status": "EXACT",
+                        }
+                    )
+                    self.store.save_checkpoint(claim, checkpoint, trusted_evidence=True)
+                    return replace(claim, checkpoint=checkpoint)
                 return self._attach_historical_hypothesis(
                     worktree, replace(claim, checkpoint=dict(claim.checkpoint))
                 )
@@ -4582,6 +4870,8 @@ class CampaignRunner:
         )
         log_text = log_path.read_text(encoding="utf-8")
         boundary = validate_ghidra_log(log_text, claim.numeric_address)
+        if internal and claim.numeric_address + int(boundary["size_bytes"]) > 0x6AD2C:
+            raise ValueError("independent EBOOT boundary escapes the original .text section")
         if not _ghidra_log_has_reconstruction_details(log_text):
             raise ValueError("Ghidra analysis omitted the instruction listing or decompilation")
         self._validate_boundary_nonoverlap(
@@ -4723,6 +5013,104 @@ class CampaignRunner:
         }
         return result
 
+    def _verify_internal_with_matcher_twice(
+        self,
+        worktree: Path,
+        claim: InternalClaim,
+        deadline: float,
+    ) -> dict[str, Any]:
+        """Reuse the production matcher twice without invoking export/NID gates."""
+        if (
+            claim.module != "EBOOT"
+            or claim.section != ".text"
+            or claim.kind != "code"
+            or claim.boundary_status != "EXACT"
+        ):
+            raise ValueError("internal matching requires an EXACT EBOOT .text code function")
+        log_value = claim.checkpoint.get("ghidra_log_path")
+        log_digest = claim.checkpoint.get("ghidra_log_sha256")
+        if not isinstance(log_value, str) or not isinstance(log_digest, str):
+            raise ValueError("internal matcher requires hash-bound independent Ghidra evidence")
+        log_path = campaign_build_path(worktree, log_value)
+        worker_root = campaign_build_path(
+            worktree, f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
+        )
+        if (
+            log_path.is_symlink()
+            or not log_path.is_file()
+            or log_path.stat().st_size > 2_000_000
+            or not log_path.resolve(strict=True).is_relative_to(worker_root.resolve(strict=False))
+            or hashlib.sha256(log_path.read_bytes()).hexdigest() != log_digest
+        ):
+            raise ValueError("internal Ghidra evidence is absent, changed, or outside the task directory")
+        boundary = validate_ghidra_log(
+            log_path.read_text(encoding="utf-8", errors="replace"), claim.numeric_address
+        )
+        if (
+            boundary["size_bytes"] != claim.size_bytes
+            or claim.numeric_address + claim.size_bytes > 0x6AD2C
+            or not _ghidra_log_has_reconstruction_details(log_path.read_text(encoding="utf-8", errors="replace"))
+        ):
+            raise ValueError("internal Ghidra boundary does not match its EBOOT .text interval")
+
+        source_relative = f"decomp/src/eboot/func_{claim.numeric_address:08X}.c"
+        source = _safe_worktree_path(worktree, Path(source_relative))
+        eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
+        config = worktree / "config" / "wsl" / "seto.toml"
+        matcher = worktree / "scripts" / "match_function.py"
+        if source.is_symlink() or not source.is_file() or any(
+            path.is_symlink() or not path.is_file() for path in (eboot, config, matcher)
+        ):
+            raise ValueError("internal source, EBOOT, MWCC config, or matcher is missing/unsafe")
+        if os.name == "nt":
+            reports = self._run_matcher_wsl(
+                worktree, claim, source, eboot, config, matcher, deadline=deadline
+            )
+        else:
+            reports = self._run_matcher_native(
+                worktree, claim, source, eboot, config, matcher, deadline=deadline
+            )
+        if len(reports) != 2:
+            raise MatcherIncomplete("internal matcher did not produce two complete reports")
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        for report in reports:
+            _validate_complete_matcher_report(
+                report,
+                expected_address=claim.numeric_address,
+                expected_size=claim.size_bytes,
+                expected_source_sha256=source_hash,
+            )
+        from internal_functions import internal_reference_evidence_is_resolved
+
+        references_resolved = all(
+            internal_reference_evidence_is_resolved(report) for report in reports
+        )
+        objects = [str(report.get("provenance", {}).get("object_sha256", "")) for report in reports]
+        matched = all(
+            is_strict_match(report, expected_address=claim.numeric_address, expected_size=claim.size_bytes)
+            for report in reports
+        ) and objects[0] == objects[1] and references_resolved
+        if matched:
+            status = "MATCHED"
+        elif not references_resolved or any(report.get("status") == "INCONCLUSIVE" for report in reports) or (
+            all(report.get("status") == "MATCHED" for report in reports) and objects[0] != objects[1]
+        ):
+            status = "INCONCLUSIVE"
+        else:
+            status = "NONMATCHING"
+        return {
+            "status": status,
+            "source_sha256": source_hash,
+            "matching_words": min(
+                (int(report.get("match", {}).get("matching_words", -1)) for report in reports),
+                default=-1,
+            ),
+            "total_words": claim.size_bytes // 4,
+            "build_sha256": objects,
+            "reports": reports,
+            "ghidra_log_sha256": log_digest,
+        }
+
     def _run_matcher_native(
         self,
         worktree: Path,
@@ -4738,10 +5126,11 @@ class CampaignRunner:
         reports: list[dict[str, Any]] = []
         if not verification_numbers or any(number not in {1, 2} for number in verification_numbers):
             raise ValueError("matcher verification numbers must be selected from 1 and 2")
+        attempt_label = _matcher_attempt_label(claim)
         for number in verification_numbers:
             relative_out = (
                 f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
-                f"/attempt-{claim.attempt_number}/verify-{number}"
+                f"/{attempt_label}/verify-{number}"
             )
             out = campaign_build_path(
                 worktree, relative_out
@@ -4811,10 +5200,11 @@ class CampaignRunner:
         reports: list[dict[str, Any]] = []
         if not verification_numbers or any(number not in {1, 2} for number in verification_numbers):
             raise ValueError("matcher verification numbers must be selected from 1 and 2")
+        attempt_label = _matcher_attempt_label(claim)
         for number in verification_numbers:
             relative_out = (
                 f"decomp-campaign/{claim.worker_id}/{claim.address.removeprefix('0x')}"
-                f"/attempt-{claim.attempt_number}/verify-{number}"
+                f"/{attempt_label}/verify-{number}"
             )
             out = campaign_build_path(worktree, relative_out)
             out.mkdir(parents=True, exist_ok=True)
@@ -5407,6 +5797,135 @@ class CampaignRunner:
                 pass
             return "boundary_blocked"
 
+    def discover_internal_manifest(
+        self,
+        worker_id: str,
+        worktree: Path,
+        destination: Path,
+        deadline: float,
+    ) -> Any:
+        """Run read-only bounded Ghidra enumeration; records are hints, not boundaries."""
+        from internal_functions import (
+            load_function_manifest,
+            parse_ghidra_enumeration,
+            write_function_manifest,
+        )
+
+        if destination.is_symlink():
+            raise ValueError("internal discovery manifest path is a symlink")
+        if destination.is_file():
+            manifest = load_function_manifest(destination)
+            if manifest.module != "EBOOT":
+                raise ValueError("cached internal discovery manifest is not for EBOOT")
+            return manifest
+        if worktree.is_symlink() or not worktree.is_dir():
+            raise ValueError("internal discovery worktree is missing or unsafe")
+        eboot = worktree / "private" / "decrypted" / "ULUS10136_EBOOT.elf"
+        script = worktree / "scripts" / "ghidra" / "SetoEnumerateFunctions.java"
+        if any(path.is_symlink() or not path.is_file() for path in (eboot, script)):
+            raise ValueError("EBOOT or read-only Ghidra enumeration script is missing/unsafe")
+        if self.expected_eboot_sha256 and (
+            hashlib.sha256(eboot.read_bytes()).hexdigest()
+            != self.expected_eboot_sha256.lower()
+        ):
+            raise ValueError("internal discovery EBOOT hash differs from configured baseline")
+        if os.name == "nt":
+            if not self.ghidra_windows_home or self.ghidra_windows_home.startswith(("\\\\", "//")):
+                raise ValueError("local Windows Ghidra installation is not configured")
+            ghidra_bat = Path(self.ghidra_windows_home) / "support" / "analyzeHeadless.bat"
+            powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+            wrapper = worktree / "scripts" / "run_ghidra_headless.ps1"
+            if (
+                powershell is None
+                or ghidra_bat.is_symlink()
+                or not ghidra_bat.is_file()
+                or wrapper.is_symlink()
+                or not wrapper.is_file()
+            ):
+                raise ValueError("Windows Ghidra headless launcher or safe wrapper is missing")
+        elif not self.ghidra_home or not self.ghidra_home.startswith("/"):
+            raise ValueError("machine-local Ghidra home is not configured")
+
+        analysis_id = uuid.uuid4().hex
+        project_dir = campaign_build_path(
+            worktree,
+            f"decomp-campaign/{worker_id}/discovery/ghidra-project-{analysis_id}",
+        )
+        if project_dir.exists() or project_dir.is_symlink():
+            raise ValueError("refusing to overwrite an internal discovery Ghidra project")
+        project_dir.mkdir(parents=True, exist_ok=False)
+        settings_dir = project_dir / "user-settings"
+        settings_dir.mkdir(parents=True, exist_ok=False)
+        environment = _ghidra_settings_environment(settings_dir)
+        script_dir = worktree / "scripts" / "ghidra"
+        project_name = f"seto_eboot_discovery_{analysis_id}"
+        if os.name == "nt":
+            java_environment = _ghidra_java_environment(self.ghidra_java_home)
+            if self.ghidra_java_home and not java_environment:
+                raise ValueError("configured Windows JDK is missing or invalid")
+            environment.update(java_environment)
+            argv = [
+                powershell,
+                "-NoProfile",
+                "-File",
+                str(wrapper),
+                str(ghidra_bat),
+                str(project_dir),
+                project_name,
+                "-import",
+                str(eboot),
+                "-scriptPath",
+                str(script_dir),
+                "-postScript",
+                "SetoEnumerateFunctions.java",
+                "EBOOT",
+                "4096",
+            ]
+        else:
+            argv = [
+                f"{self.ghidra_home.rstrip('/')}/support/analyzeHeadless",
+                str(project_dir),
+                project_name,
+                "-import",
+                str(eboot),
+                "-scriptPath",
+                str(script_dir),
+                "-postScript",
+                "SetoEnumerateFunctions.java",
+                "EBOOT",
+                "4096",
+            ]
+
+        if not self._acquire_resource_slot(self.ghidra_slots, deadline):
+            raise CampaignInterrupted
+        self.store.record_event(
+            "internal_discovery_started", worker_id=worker_id, provider="ghidra"
+        )
+        try:
+            process = _run_process(
+                argv,
+                cwd=worktree,
+                timeout=1800,
+                output_limit=8_000_000,
+                stop_requested=self.store.stop_requested,
+                deadline=deadline,
+                environment_overrides=environment,
+            )
+        finally:
+            self.ghidra_slots.release()
+            self.store.record_event(
+                "internal_discovery_finished", worker_id=worker_id, provider="ghidra"
+            )
+        if process.interrupted:
+            raise CampaignInterrupted
+        if process.timed_out or process.returncode != 0:
+            raise ValueError("Ghidra internal function enumeration failed")
+        manifest = parse_ghidra_enumeration(process.stdout + "\n" + process.stderr)
+        if manifest.module != "EBOOT":
+            raise ValueError("Ghidra internal enumeration returned another module")
+        write_function_manifest(destination, manifest)
+        return manifest
+
     def _fail(self, claim: Claim, failure: Failure) -> None:
         self.store.fail(
             claim,
@@ -5421,9 +5940,24 @@ class CampaignRunner:
             return True
         return self.clock() >= self.luna_release_at
 
-    def run(self, workers: Sequence[Worker], *, max_tasks: int) -> dict[str, Any]:
+    def run(
+        self,
+        workers: Sequence[Worker],
+        *,
+        max_tasks: int,
+        deadline: float | None = None,
+        max_attempts_this_segment: int | None = None,
+        max_boundary_tasks_this_segment: int | None = None,
+        max_idle_wait_seconds: float | None = None,
+    ) -> dict[str, Any]:
         if max_tasks <= 0:
             raise ValueError("max_tasks must be positive")
+        if max_attempts_this_segment is not None and max_attempts_this_segment <= 0:
+            raise ValueError("segment attempt limit must be positive")
+        if max_boundary_tasks_this_segment is not None and max_boundary_tasks_this_segment <= 0:
+            raise ValueError("segment Ghidra boundary limit must be positive")
+        if max_idle_wait_seconds is not None and max_idle_wait_seconds <= 0:
+            raise ValueError("segment idle wait limit must be positive")
         if len({worker.worker_id for worker in workers}) != len(workers):
             raise ValueError("worker identifiers must be unique")
         if not workers:
@@ -5447,10 +5981,19 @@ class CampaignRunner:
         self.store.recover_expired()
         if self.store.stop_requested():
             return {"attempted": 0, "outcomes": {}, "stopped": True}
-        deadline = (
+        segment_deadline = (
             None
             if self.max_duration_seconds is None
             else time.monotonic() + self.max_duration_seconds
+        )
+        if deadline is None:
+            deadline = segment_deadline
+        elif segment_deadline is not None:
+            deadline = min(deadline, segment_deadline)
+        idle_deadline = (
+            None
+            if max_idle_wait_seconds is None
+            else time.monotonic() + max_idle_wait_seconds
         )
         outcomes: list[str] = []
         condition = threading.Condition()
@@ -5463,6 +6006,7 @@ class CampaignRunner:
         boundary_active = 0
         boundary_threads_remaining = 1
         boundary_outcomes: list[str] = []
+        boundary_claimed = 0
         promotions: list[str] = []
         promotion_failures: list[str] = []
         promotion_results_lock = threading.Lock()
@@ -5502,6 +6046,7 @@ class CampaignRunner:
 
         def boundary_coordinator() -> None:
             nonlocal boundary_active, boundary_threads_remaining, completion_generation
+            nonlocal boundary_claimed
             available_workers = [
                 worker.worker_id
                 for worker in workers[: min(self.ghidra_parallelism, len(workers))]
@@ -5516,11 +6061,19 @@ class CampaignRunner:
                         while available_workers and not stop_or_expired():
                             worker_id = available_workers[-1]
                             with boundary_claim_lock:
-                                claim = self.store.claim_boundary(
-                                    worker_id,
-                                    lease_seconds=self.lease_seconds,
-                                    excluded_addresses=self.excluded_addresses,
-                                )
+                                if (
+                                    max_boundary_tasks_this_segment is not None
+                                    and boundary_claimed >= max_boundary_tasks_this_segment
+                                ):
+                                    claim = None
+                                else:
+                                    claim = self.store.claim_boundary(
+                                        worker_id,
+                                        lease_seconds=self.lease_seconds,
+                                        excluded_addresses=self.excluded_addresses,
+                                    )
+                                    if claim is not None:
+                                        boundary_claimed += 1
                             if claim is None:
                                 break
                             available_workers.pop()
@@ -5564,6 +6117,11 @@ class CampaignRunner:
                     while True:
                         if stop_or_expired() or self.store.total_attempt_count() >= max_tasks:
                             return
+                        if (
+                            max_attempts_this_segment is not None
+                            and attempts_started >= max_attempts_this_segment
+                        ):
+                            return
                         if not self._provider_gate_open(worker):
                             has_campaign_work = bool(
                                 attempts_active
@@ -5586,11 +6144,19 @@ class CampaignRunner:
                                 if next_eligible is None:
                                     return
                             remaining = float(self.luna_release_at) - self.clock()
+                            if idle_deadline is not None:
+                                idle_remaining = idle_deadline - time.monotonic()
+                                if idle_remaining <= 0:
+                                    return
+                                remaining = min(remaining, idle_remaining)
                             # Bounded, event-driven wait: stop/deadline and the
                             # operator clock are re-checked without busy-looping.
                             condition.wait(timeout=min(max(remaining, 0.05), 0.5))
                             continue
-                        if attempts_started + attempts_claiming + attempts_preparing < max_tasks:
+                        segment_ceiling = max_tasks
+                        if max_attempts_this_segment is not None:
+                            segment_ceiling = min(segment_ceiling, max_attempts_this_segment)
+                        if attempts_started + attempts_claiming + attempts_preparing < segment_ceiling:
                             attempts_claiming += 1
                             break
                         condition.wait(timeout=0.5)
@@ -5652,6 +6218,11 @@ class CampaignRunner:
                         delay = max(0.0, next_eligible - time.time())
                         if deadline is not None:
                             delay = min(delay, max(0.0, deadline - time.monotonic()))
+                        if idle_deadline is not None:
+                            idle_remaining = idle_deadline - time.monotonic()
+                            if idle_remaining <= 0:
+                                return
+                            delay = min(delay, idle_remaining)
                         if delay <= 0:
                             continue
                         # Backoff waits are event-driven and bounded so stop/deadline
@@ -9366,6 +9937,28 @@ def _status_report(
         except (OSError, json.JSONDecodeError):
             inventory_baseline = {}
     certified_addresses = normalize_certified_addresses(inventory_baseline)
+    coverage_metrics: dict[str, int] = {}
+    internal_catalog_path = repo_root / "config" / "decomp_internal_inventory.json"
+    if internal_catalog_path.is_file() and not internal_catalog_path.is_symlink():
+        try:
+            from internal_functions import internal_catalog_metrics
+
+            internal_document = json.loads(internal_catalog_path.read_text(encoding="utf-8"))
+            coverage_metrics = internal_catalog_metrics(
+                internal_document.get("functions", []), inventory_baseline
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            coverage_metrics = {}
+    with store._connect() as db:
+        internal_status_counts = {
+            str(row["status"]): int(row["count"])
+            for row in db.execute(
+                "SELECT status,COUNT(*) AS count FROM internal_candidates GROUP BY status"
+            )
+        }
+        internal_attempts = int(
+            db.execute("SELECT COUNT(*) FROM internal_attempts").fetchone()[0]
+        )
     return {
         "execution_enabled": bool(config.get("execution", {}).get("enabled", False)),
         "provider_access_verified": bool(
@@ -9392,6 +9985,11 @@ def _status_report(
         "certified_baseline_addresses_excluded": len(certified_addresses),
         "matched_functions": len(matched),
         "matched_instructions": sum(int(task["size_bytes"]) // 4 for task in matched),
+        "coverage_metrics": coverage_metrics,
+        "internal_queue": {
+            "tasks_by_status": internal_status_counts,
+            "attempts_cumulative": internal_attempts,
+        },
         "reconstructed_c_functions": len(reconstructed),
         "reconstructed_c_addresses": reconstructed,
         "blockers": blockers,
@@ -9468,6 +10066,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="restrict productive execution to explicit inventory addresses; repeatable",
     )
     run.add_argument("--max-tasks", type=int, default=None, help="cumulative SQLite attempt ceiling")
+    night = subparsers.add_parser(
+        "night-run",
+        help="run sequential bounded segments with queue-empty EBOOT rediscovery",
+    )
+    night.add_argument("--confirm", action="store_true", help="confirm this model execution campaign")
+    night.add_argument("--productive", action="store_true", help="expand beyond the pilot after verified authorization")
+    night.add_argument("--allow-openai-usage", action="store_true", help="confirm use of the configured OpenAI account")
+    night.add_argument("--allow-free-model-usage", action="store_true", help="confirm requests to the exact allowlisted free model")
+    night.add_argument(
+        "--execution-target",
+        choices=("local", "remote", "all"),
+        default="local",
+        help="select configured local, SSH, or both worker transports (default: local)",
+    )
+    night.add_argument(
+        "--all-eligible",
+        action="store_true",
+        help="select every non-MATCHED, non-blocked candidate with an exact boundary",
+    )
+    night.add_argument(
+        "--candidate-address",
+        action="append",
+        default=None,
+        help="restrict productive execution to explicit inventory addresses; repeatable",
+    )
+    night.add_argument("--max-tasks", type=int, default=None, help="cumulative SQLite attempt ceiling")
+    night.add_argument(
+        "--duration-seconds",
+        type=int,
+        default=None,
+        help="global wall-clock deadline for every segment (defaults to configured maximum)",
+    )
     return parser
 
 
@@ -9649,6 +10279,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("run --recover-expired separately before selective recovery")
             retried_addresses: list[str] = []
             reopened_addresses: list[str] = []
+            internal_recovered = 0
             if args.reopen_candidate:
                 reasons: dict[str, str] = {}
                 for item in args.reopen_candidate:
@@ -9682,6 +10313,12 @@ def main(argv: list[str] | None = None) -> int:
                 recovered = 0
             else:
                 recovered = store.recover_expired() if args.recover_expired else 0
+                if args.recover_expired:
+                    from internal_campaign import InternalCampaignStore
+
+                    internal_recovered = InternalCampaignStore(store).recover_expired(
+                        max_attempts=int(config["limits"]["max_attempts_per_candidate"])
+                    )
                 store.resume()
             if args.retry_blocked:
                 with store._connect() as db:
@@ -9703,12 +10340,14 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "resumed": True,
                     "expired_leases_recovered": recovered,
+                    "internal_expired_leases_recovered": internal_recovered,
                     "retried_addresses": retried_addresses,
                     "reopened_addresses": reopened_addresses,
                 }
             )
             return 0
-        if args.command == "run":
+        if args.command in {"run", "night-run"}:
+            night_run = args.command == "night-run"
             if not args.confirm:
                 raise ValueError("run requires --confirm; preparation commands never start model sessions")
             productive_candidate_addresses = productive_candidate_selection(
@@ -9722,10 +10361,16 @@ def main(argv: list[str] | None = None) -> int:
                 for address in productive_candidate_addresses
             ):
                 raise ValueError("certified baseline addresses cannot be selected for productive retry")
-            if args.continuous and not config.get("execution", {}).get("continuous", False):
+            if getattr(args, "continuous", False) and not config.get("execution", {}).get("continuous", False):
                 raise ValueError("continuous mode is disabled in config")
-            if args.continuous and not args.productive:
+            if getattr(args, "continuous", False) and not args.productive:
                 raise ValueError("--continuous is reserved for the separately authorized productive campaign")
+            if night_run and not config.get("execution", {}).get("continuous", False):
+                raise ValueError("night-run requires continuous mode to be enabled in config")
+            if night_run and (not args.productive or not args.all_eligible):
+                raise ValueError("night-run requires --productive --all-eligible so new exports can join discovery")
+            if night_run and args.duration_seconds is not None and args.duration_seconds <= 0:
+                raise ValueError("--duration-seconds must be positive")
             if args.productive and not (
                 config.get("execution", {}).get("pilot_verified", False)
                 and config.get("execution", {}).get("productive_expansion_authorized", False)
@@ -9886,6 +10531,12 @@ def main(argv: list[str] | None = None) -> int:
                     max(1, len(workers)) * 2,
                 )
                 phase_duration = float(pilot["max_duration_seconds"])
+            if night_run:
+                configured_duration = float(limits["max_duration_seconds"])
+                requested_duration = float(args.duration_seconds or configured_duration)
+                if requested_duration > configured_duration:
+                    raise ValueError("--duration-seconds cannot exceed the configured campaign duration")
+                phase_duration = requested_duration
             local_ghidra = tomllib.loads(
                 (REPO_ROOT / config["toolchain"]["ghidra_local_config"]).read_text(encoding="utf-8")
             )["ghidra"]
@@ -10041,6 +10692,323 @@ def main(argv: list[str] | None = None) -> int:
                     f"cumulative attempt ceiling {max_tasks} is below the SQLite total {attempts_used}"
                 )
             remaining_attempts = max_tasks - attempts_used
+            if night_run:
+                from internal_campaign import (
+                    InternalCampaignStore,
+                    make_production_internal_runner,
+                )
+                from internal_functions import (
+                    load_function_manifest,
+                    load_internal_catalog,
+                    select_internal_discoveries,
+                )
+
+                internal_store = InternalCampaignStore(store)
+                internal_store.recover_expired(
+                    max_attempts=int(limits["max_attempts_per_candidate"])
+                )
+                internal_runner = make_production_internal_runner(
+                    runner,
+                    store,
+                    {worker.worker_id: worker for worker in workers},
+                    repo_root=REPO_ROOT,
+                    catalog_path=REPO_ROOT / "config/decomp_internal_inventory.json",
+                    lease_seconds=float(limits["lease_seconds"]),
+                    max_attempts_per_candidate=int(limits["max_attempts_per_candidate"]),
+                )
+                next_fair_lane = ["internal"]
+
+                def run_segment(global_deadline: float, cumulative_ceiling: int) -> dict[str, Any]:
+                    def export_work_remains() -> bool:
+                        with store._connect() as db:
+                            return bool(
+                                db.execute(
+                                    "SELECT 1 FROM candidates WHERE status IN "
+                                    "('pending','needs_boundary','boundary_checking','preparing','running') LIMIT 1"
+                                ).fetchone()
+                            )
+
+                    def run_export_slice(
+                        deadline: float, ceiling: int, attempt_limit: int
+                    ) -> Mapping[str, Any]:
+                        segment = runner.run(
+                            workers,
+                            max_tasks=ceiling,
+                            deadline=deadline,
+                            max_attempts_this_segment=attempt_limit,
+                            max_boundary_tasks_this_segment=1,
+                            max_idle_wait_seconds=5.0,
+                        )
+                        return {
+                            **segment,
+                            "external_work_remains": export_work_remains(),
+                        }
+
+                    def run_internal_slice(
+                        deadline: float, ceiling: int, attempt_limit: int
+                    ) -> Mapping[str, Any]:
+                        return internal_runner.run_segment(
+                            [
+                                (worker.worker_id, worker.execution_scope, worker.provider)
+                                for worker in workers
+                            ],
+                            max_total_attempts=ceiling,
+                            deadline=deadline,
+                            max_attempts_this_segment=attempt_limit,
+                            max_boundary_tasks_this_segment=1,
+                        )
+
+                    first_lane = next_fair_lane[0]
+                    next_fair_lane[0] = "exports" if first_lane == "internal" else "internal"
+                    return run_fair_segments(
+                        run_exports=run_export_slice,
+                        run_internal=run_internal_slice,
+                        attempts_used=store.total_attempt_count,
+                        stop_requested=store.stop_requested,
+                        deadline=global_deadline,
+                        max_tasks=cumulative_ceiling,
+                        attempts_per_turn=1,
+                        exports_work_remains=export_work_remains,
+                        first_lane=first_lane,
+                    )
+
+                def discover_eboot_exports(global_deadline: float) -> DiscoveryResult:
+                    nonlocal candidates, inventory
+                    triage_path = REPO_ROOT / str(config["inputs"]["triage_report"])
+                    inventory_digest = hashlib.sha256(
+                        triage_path.read_bytes() + inventory_path.read_bytes()
+                    ).hexdigest()
+                    if time.monotonic() >= global_deadline:
+                        return DiscoveryResult(
+                            "eboot-exports",
+                            inventory_digest,
+                            exhausted_reason="global deadline reached before export discovery",
+                        )
+                    matched_addresses = list(certified_addresses)
+                    matched_addresses.extend(
+                        task["address"]
+                        for task in store.list_tasks()
+                        if task["status"] == "matched"
+                    )
+                    discovered = discover_proven_exports(
+                        triage_path,
+                        candidates,
+                        matched_addresses=matched_addresses,
+                    )
+                    inserted = append_inventory_candidates(inventory_path, discovered)
+                    if inserted:
+                        candidates, inventory = load_inventory(inventory_path)
+                        store.seed(candidates, excluded_addresses=certified_addresses)
+                    return DiscoveryResult(
+                        "eboot-exports",
+                        inventory_digest,
+                        candidates_added=inserted,
+                        eligible_work=inserted > 0,
+                        exhausted_reason=(
+                            None
+                            if inserted
+                            else "triage contains no additional unique, relocation-proven EBOOT exports"
+                        ),
+                    )
+
+                def discover_internal_hints(global_deadline: float) -> DiscoveryResult:
+                    catalog_path = REPO_ROOT / "config/decomp_internal_inventory.json"
+                    eboot_path = REPO_ROOT / str(config["inputs"]["eboot"])
+                    eboot_hash = hashlib.sha256(eboot_path.read_bytes()).hexdigest()
+                    manifest_directory = REPO_ROOT / "build/seto049/function-manifests"
+                    manifest_path = manifest_directory / f"EBOOT-{eboot_hash[:16]}.json"
+                    fingerprint = hashlib.sha256()
+                    fingerprint.update(eboot_hash.encode("ascii"))
+                    for evidence_path in (manifest_path, catalog_path):
+                        if evidence_path.is_file() and not evidence_path.is_symlink():
+                            fingerprint.update(evidence_path.read_bytes())
+                    if time.monotonic() >= global_deadline:
+                        return DiscoveryResult(
+                            "eboot-internal",
+                            fingerprint.hexdigest(),
+                            exhausted_reason="global deadline reached before internal discovery",
+                        )
+                    if manifest_path.is_symlink():
+                        raise ValueError("internal discovery manifest path is a symlink")
+                    if manifest_path.is_file():
+                        manifest = load_function_manifest(manifest_path)
+                    else:
+                        if not worktrees:
+                            raise ValueError("internal discovery requires an isolated Ghidra worktree")
+                        discovery_worker, discovery_worktree = sorted(worktrees.items())[0]
+                        manifest = runner.discover_internal_manifest(
+                            discovery_worker,
+                            discovery_worktree,
+                            manifest_path,
+                            global_deadline,
+                        )
+                        fingerprint.update(manifest_path.read_bytes())
+                    internal_catalog = load_internal_catalog(catalog_path)
+                    source_root = str(REPO_ROOT / "src")
+                    if source_root not in sys.path:
+                        sys.path.insert(0, source_root)
+                    from seto import elf as seto_elf
+
+                    eboot_module = seto_elf.parse(eboot_path)
+                    text_section = eboot_module.require_section(".text")
+                    tasks = store.list_tasks()
+                    matched_exports = {
+                        int(address, 0) for address in certified_addresses
+                    }
+                    matched_exports.update(
+                        int(task["address"], 0)
+                        for task in tasks
+                        if task["status"] == "matched"
+                    )
+                    by_address = {item.address: item for item in manifest.functions}
+                    matched_calls = {
+                        ("EBOOT", target)
+                        for address in matched_exports
+                        for item in [by_address.get(address)]
+                        if item is not None
+                        for target in item.calls
+                    }
+                    hints = select_internal_discoveries(
+                        manifest,
+                        known_exports={
+                            ("EBOOT", candidate.numeric_address)
+                            for candidate in candidates
+                        }
+                        | {("EBOOT", address) for address in matched_exports},
+                        known_internal=internal_catalog,
+                        calls_from_matched_exports=matched_calls,
+                        evidence_path=manifest_path.relative_to(REPO_ROOT).as_posix(),
+                        limit=64,
+                        module_address_range=(
+                            text_section.addr,
+                            text_section.addr + text_section.size,
+                        ),
+                        known_exact_ranges=(
+                            [
+                                (
+                                    "EBOOT",
+                                    int(str(item["address"]), 0),
+                                    int(item["size_bytes"]),
+                                )
+                                for item in inventory.get("baseline", {}).get(
+                                    "eboot_matched_ranges", []
+                                )
+                            ]
+                            + [
+                                ("EBOOT", candidate.numeric_address, candidate.size_bytes)
+                                for candidate in candidates
+                                if candidate.boundary_status == "EXACT"
+                                and candidate.size_bytes > 0
+                            ]
+                            + [
+                                ("EBOOT", int(task["address"], 0), int(task["size_bytes"]))
+                                for task in tasks
+                                if task.get("boundary_status") == "EXACT"
+                                and int(task.get("size_bytes", 0)) > 0
+                            ]
+                        ),
+                    )
+                    inserted = internal_store.seed(hints)
+                    queued_remaining = internal_store.pending_count()
+                    return DiscoveryResult(
+                        "eboot-internal",
+                        fingerprint.hexdigest(),
+                        candidates_added=inserted,
+                        eligible_work=inserted > 0 or queued_remaining > 0,
+                        exhausted_reason=(
+                            None
+                            if queued_remaining
+                            else "no new, unique EBOOT .text internal hints remain"
+                        ),
+                        details={
+                            "enumerated_functions": len(manifest.functions),
+                            "unverified_hints_remaining": queued_remaining,
+                            "inserted_internal_tasks": inserted,
+                            "exact_catalog_entries": sum(
+                                item.boundary_status == "EXACT" for item in internal_catalog
+                            ),
+                            "matched_exports_used_for_call_ranking": len(matched_exports),
+                        },
+                    )
+
+                def inspect_prx_scope(global_deadline: float) -> DiscoveryResult:
+                    fingerprint = hashlib.sha256()
+                    for module_key in ("libtutoriallist", "libhtml_view"):
+                        module_path = REPO_ROOT / str(config["inputs"][module_key])
+                        if module_path.is_file() and not module_path.is_symlink():
+                            fingerprint.update(module_path.name.encode("utf-8"))
+                            fingerprint.update(hashlib.sha256(module_path.read_bytes()).digest())
+                    return DiscoveryResult(
+                        "prx-modules",
+                        fingerprint.hexdigest(),
+                        details={
+                            "modules": ["libtutoriallist.prx", "libhtml_view.prx"],
+                            "baseline_matched_functions": int(
+                                inventory.get("baseline", {}).get("prx_matched_functions", 0)
+                            ),
+                            "action": "PRX matching uses the separate module/address catalog, not EBOOT SQLite",
+                            "deadline_reached": time.monotonic() >= global_deadline,
+                        },
+                    )
+
+                global_deadline = time.monotonic() + phase_duration
+
+                def prepare_initial_internal_boundary(
+                    deadline: float, max_boundary_tasks: int
+                ) -> Mapping[str, Any]:
+                    return internal_runner.run_segment(
+                        [
+                            (worker.worker_id, worker.execution_scope, worker.provider)
+                            for worker in workers
+                        ],
+                        max_total_attempts=max_tasks,
+                        deadline=deadline,
+                        max_boundary_tasks_this_segment=max_boundary_tasks,
+                        boundary_only=True,
+                    )
+
+                initial_internal_preparation = prepare_internal_lane_before_inference(
+                    discover_internal=discover_internal_hints,
+                    prepare_boundary=prepare_initial_internal_boundary,
+                    exact_pending_count=internal_store.exact_pending_count,
+                    deadline=global_deadline,
+                    max_boundary_tasks=8,
+                )
+                if not initial_internal_preparation["ready"]:
+                    _print_json(
+                        {
+                            "attempted": 0,
+                            "attempts_existing": attempts_used,
+                            "attempts_cumulative": store.total_attempt_count(),
+                            "attempt_budget_new": max(0, max_tasks - attempts_used),
+                            "initial_internal_preparation": initial_internal_preparation,
+                            "stop_reason": "internal_not_ready_before_first_inference",
+                        }
+                    )
+                    return 2
+
+                coordinator = ContinuousCampaignCoordinator(
+                    run_segment=run_segment,
+                    discovery_steps=(
+                        discover_eboot_exports,
+                        discover_internal_hints,
+                        inspect_prx_scope,
+                    ),
+                    attempts_used=store.total_attempt_count,
+                    stop_requested=store.stop_requested,
+                    max_tasks=max_tasks,
+                    duration_seconds=phase_duration,
+                )
+                outcome = coordinator.run(deadline=global_deadline)
+                outcome["attempts_existing"] = attempts_used
+                outcome["attempt_budget_new"] = max(0, max_tasks - attempts_used)
+                outcome["new_candidates_discovered"] = discovered_count + sum(
+                    int(item.get("candidates_added", 0)) for item in outcome["discoveries"]
+                )
+                outcome["local_recovery_evidence_copied"] = recovery_evidence_copied
+                outcome["initial_internal_preparation"] = initial_internal_preparation
+                _print_json(outcome)
+                return 0
             if remaining_attempts:
                 # `CampaignRunner` passes this value to SQLite's atomic
                 # max_total_attempts guard, so it must remain the cumulative

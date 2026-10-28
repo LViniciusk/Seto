@@ -1,4 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+decomp/src/** text eol=lf
+decomp/evidence/internal/** text eol=lf
+config/decomp_internal_inventory.json text eol=lf
 config/toolchain.lock text eol=lf
 scripts/bootstrap_toolchain.sh text eol=lf

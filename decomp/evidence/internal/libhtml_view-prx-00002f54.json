@@ -1,0 +1,123 @@
+{
+  "address": "0x2f54",
+  "build_sha256": [
+    "8ff2a93981f9e92508f3e4eb8396efbebe945e84f501a06740b1811657f790ad",
+    "8ff2a93981f9e92508f3e4eb8396efbebe945e84f501a06740b1811657f790ad"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "libhtml_view.prx",
+  "reports": [
+    {
+      "address": "0x2f54",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00002F54",
+      "match": {
+        "address": 12116,
+        "candidate": {
+          "location": "symbol 'func_00002F54' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/2f54/round-03-verify-1/func_00002F54.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00002F54",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/2f54/round-03-verify-1/func_00002F54.o",
+        "object_sha256": "8ff2a93981f9e92508f3e4eb8396efbebe945e84f501a06740b1811657f790ad",
+        "source": "decomp/src/libhtml_view/func_00002F54.c",
+        "source_sha256": "d47a729e81eaa185466d22472b16beabe4191e2cdd919602365cdd148d8406ca"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_00002F54",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2f54",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00002F54",
+      "match": {
+        "address": 12116,
+        "candidate": {
+          "location": "symbol 'func_00002F54' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/2f54/round-03-verify-2/func_00002F54.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00002F54",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/2f54/round-03-verify-2/func_00002F54.o",
+        "object_sha256": "8ff2a93981f9e92508f3e4eb8396efbebe945e84f501a06740b1811657f790ad",
+        "source": "decomp/src/libhtml_view/func_00002F54.c",
+        "source_sha256": "d47a729e81eaa185466d22472b16beabe4191e2cdd919602365cdd148d8406ca"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_00002F54",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".sceStub.text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/libhtml_view/func_00002F54.c",
+  "source_sha256": "d47a729e81eaa185466d22472b16beabe4191e2cdd919602365cdd148d8406ca"
+}

@@ -1,0 +1,121 @@
+{
+  "address": "0x26d88",
+  "build_sha256": [
+    "bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05",
+    "bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x26d88",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00026D88",
+      "match": {
+        "address": 159112,
+        "candidate": {
+          "location": "symbol 'func_00026D88' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/26d88/integrated-verify-1/func_00026D88.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00026D88",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/26d88/integrated-verify-1/func_00026D88.o",
+        "object_sha256": "bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05",
+        "source": "decomp/src/eboot/func_00026D88.c",
+        "source_sha256": "5582d5ef74d82d92e37d9514977b9affea9616dd455fbafe11bda02304d39ca0"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00026D88",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x26d88",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00026D88",
+      "match": {
+        "address": 159112,
+        "candidate": {
+          "location": "symbol 'func_00026D88' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/26d88/integrated-verify-2/func_00026D88.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00026D88",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/26d88/integrated-verify-2/func_00026D88.o",
+        "object_sha256": "bc495c452555b06e260e242d0558fc53154edf9d7c7c8bf50ca59e004a813b05",
+        "source": "decomp/src/eboot/func_00026D88.c",
+        "source_sha256": "5582d5ef74d82d92e37d9514977b9affea9616dd455fbafe11bda02304d39ca0"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00026D88",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/eboot/func_00026D88.c",
+  "source_sha256": "5582d5ef74d82d92e37d9514977b9affea9616dd455fbafe11bda02304d39ca0"
+}

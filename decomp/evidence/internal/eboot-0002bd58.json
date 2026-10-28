@@ -1,0 +1,123 @@
+{
+  "address": "0x2bd58",
+  "build_sha256": [
+    "65a8954693cb1695d679bcf6373146ff9e84ab4e8328e9224170fcaeccac9a20",
+    "65a8954693cb1695d679bcf6373146ff9e84ab4e8328e9224170fcaeccac9a20"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x2bd58",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002BD58",
+      "match": {
+        "address": 179544,
+        "candidate": {
+          "location": "symbol 'func_0002BD58' at section offset 0x0",
+          "path": "build/seto049/experiments/2bd58/integrated-verify-3/func_0002BD58.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 7,
+        "name": "func_0002BD58",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 7
+      },
+      "object_path": "build/seto049/experiments/2bd58/integrated-verify-3/func_0002BD58.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/2bd58/integrated-verify-3/func_0002BD58.o",
+        "object_sha256": "65a8954693cb1695d679bcf6373146ff9e84ab4e8328e9224170fcaeccac9a20",
+        "source": "decomp/src/eboot/func_0002BD58.c",
+        "source_sha256": "39eb28a42d9e9f44a053523a02602c07daa5a28e720ebfa8357706e4af09cfed"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002BD58",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2bd58",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002BD58",
+      "match": {
+        "address": 179544,
+        "candidate": {
+          "location": "symbol 'func_0002BD58' at section offset 0x0",
+          "path": "build/seto049/experiments/2bd58/integrated-verify-4/func_0002BD58.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 7,
+        "name": "func_0002BD58",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 7
+      },
+      "object_path": "build/seto049/experiments/2bd58/integrated-verify-4/func_0002BD58.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/2bd58/integrated-verify-4/func_0002BD58.o",
+        "object_sha256": "65a8954693cb1695d679bcf6373146ff9e84ab4e8328e9224170fcaeccac9a20",
+        "source": "decomp/src/eboot/func_0002BD58.c",
+        "source_sha256": "39eb28a42d9e9f44a053523a02602c07daa5a28e720ebfa8357706e4af09cfed"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002BD58",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 28,
+  "source_path": "decomp/src/eboot/func_0002BD58.c",
+  "source_sha256": "39eb28a42d9e9f44a053523a02602c07daa5a28e720ebfa8357706e4af09cfed"
+}

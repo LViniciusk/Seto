@@ -1,0 +1,125 @@
+{
+  "address": "0x2bc34",
+  "build_sha256": [
+    "0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c",
+    "0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x2bc34",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002BC34",
+      "match": {
+        "address": 179252,
+        "candidate": {
+          "location": "symbol 'func_0002BC34' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/2bc34/integrated-verify-1/func_0002BC34.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_0002BC34",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 0 (0x2bc34): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/2bc34/integrated-verify-1/func_0002BC34.o",
+        "object_sha256": "0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c",
+        "source": "decomp/src/eboot/func_0002BC34.c",
+        "source_sha256": "191e68e2cbc63e3dcc5871e583cf5565b03858bfd4325ac31ff31266409f76a7"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002BC34",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2bc34",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002BC34",
+      "match": {
+        "address": 179252,
+        "candidate": {
+          "location": "symbol 'func_0002BC34' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/2bc34/integrated-verify-2/func_0002BC34.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_0002BC34",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 0 (0x2bc34): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/2bc34/integrated-verify-2/func_0002BC34.o",
+        "object_sha256": "0b70de7b777123aca10abdf343b2eb156c4826ffa079b51a8e1388a956dceb4c",
+        "source": "decomp/src/eboot/func_0002BC34.c",
+        "source_sha256": "191e68e2cbc63e3dcc5871e583cf5565b03858bfd4325ac31ff31266409f76a7"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002BC34",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/eboot/func_0002BC34.c",
+  "source_sha256": "191e68e2cbc63e3dcc5871e583cf5565b03858bfd4325ac31ff31266409f76a7"
+}

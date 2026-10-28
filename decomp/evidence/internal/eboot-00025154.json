@@ -1,0 +1,123 @@
+{
+  "address": "0x25154",
+  "build_sha256": [
+    "705c22816eba6dbe61ccd975a5783cb7166f4880f7e346d618f4624561b8ef32",
+    "705c22816eba6dbe61ccd975a5783cb7166f4880f7e346d618f4624561b8ef32"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x25154",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00025154",
+      "match": {
+        "address": 151892,
+        "candidate": {
+          "location": "symbol 'func_00025154' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/25154/integrated-verify-1/func_00025154.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 12,
+        "name": "func_00025154",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 12
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/25154/integrated-verify-1/func_00025154.o",
+        "object_sha256": "705c22816eba6dbe61ccd975a5783cb7166f4880f7e346d618f4624561b8ef32",
+        "source": "decomp/src/eboot/func_00025154.c",
+        "source_sha256": "230734e0a6c8795a0c8cff9308e3cf67cd24779dfc9ab117f18399ffaa276792"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00025154",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x25154",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00025154",
+      "match": {
+        "address": 151892,
+        "candidate": {
+          "location": "symbol 'func_00025154' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/25154/integrated-verify-2/func_00025154.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 12,
+        "name": "func_00025154",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 12
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/25154/integrated-verify-2/func_00025154.o",
+        "object_sha256": "705c22816eba6dbe61ccd975a5783cb7166f4880f7e346d618f4624561b8ef32",
+        "source": "decomp/src/eboot/func_00025154.c",
+        "source_sha256": "230734e0a6c8795a0c8cff9308e3cf67cd24779dfc9ab117f18399ffaa276792"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00025154",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 48,
+  "source_path": "decomp/src/eboot/func_00025154.c",
+  "source_sha256": "230734e0a6c8795a0c8cff9308e3cf67cd24779dfc9ab117f18399ffaa276792"
+}

@@ -1,0 +1,123 @@
+{
+  "address": "0x28b3c",
+  "build_sha256": [
+    "f41c6d4f8d39c8d3b9371f1c9bed4064a91a2c59c86e35ea2bf5deae86a8c491",
+    "f41c6d4f8d39c8d3b9371f1c9bed4064a91a2c59c86e35ea2bf5deae86a8c491"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x28b3c",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00028B3C",
+      "match": {
+        "address": 166716,
+        "candidate": {
+          "location": "symbol 'func_00028B3C' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/28b3c/integrated-verify-1/func_00028B3C.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 3,
+        "name": "func_00028B3C",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 3
+      },
+      "object_path": "build/seto049/experiments/internal/28b3c/integrated-verify-1/func_00028B3C.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/28b3c/integrated-verify-1/func_00028B3C.o",
+        "object_sha256": "f41c6d4f8d39c8d3b9371f1c9bed4064a91a2c59c86e35ea2bf5deae86a8c491",
+        "source": "decomp/src/eboot/func_00028B3C.c",
+        "source_sha256": "aec782d568ba1507fa1010fccba268f1b7ecfd508d15e719ae6d51ff0d25409d"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00028B3C",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x28b3c",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00028B3C",
+      "match": {
+        "address": 166716,
+        "candidate": {
+          "location": "symbol 'func_00028B3C' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/28b3c/integrated-verify-2/func_00028B3C.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 3,
+        "name": "func_00028B3C",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 3
+      },
+      "object_path": "build/seto049/experiments/internal/28b3c/integrated-verify-2/func_00028B3C.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/28b3c/integrated-verify-2/func_00028B3C.o",
+        "object_sha256": "f41c6d4f8d39c8d3b9371f1c9bed4064a91a2c59c86e35ea2bf5deae86a8c491",
+        "source": "decomp/src/eboot/func_00028B3C.c",
+        "source_sha256": "aec782d568ba1507fa1010fccba268f1b7ecfd508d15e719ae6d51ff0d25409d"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_00028B3C",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 12,
+  "source_path": "decomp/src/eboot/func_00028B3C.c",
+  "source_sha256": "aec782d568ba1507fa1010fccba268f1b7ecfd508d15e719ae6d51ff0d25409d"
+}

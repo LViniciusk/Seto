@@ -1,0 +1,123 @@
+{
+  "address": "0x5e4ac",
+  "build_sha256": [
+    "6f8240800a0c7062b33140a8c02ca5d7b26fb42ad22faa1716c23972984d0661",
+    "6f8240800a0c7062b33140a8c02ca5d7b26fb42ad22faa1716c23972984d0661"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x5e4ac",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0005E4AC",
+      "match": {
+        "address": 386220,
+        "candidate": {
+          "location": "symbol 'func_0005E4AC' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/5e4ac/integrated-verify-1/func_0005E4AC.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 7,
+        "name": "func_0005E4AC",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 7
+      },
+      "object_path": "build/seto049/experiments/internal/5e4ac/integrated-verify-1/func_0005E4AC.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/5e4ac/integrated-verify-1/func_0005E4AC.o",
+        "object_sha256": "6f8240800a0c7062b33140a8c02ca5d7b26fb42ad22faa1716c23972984d0661",
+        "source": "decomp/src/eboot/func_0005E4AC.c",
+        "source_sha256": "7a2022482a68368aeee4e7c7be1adc9865ef34eba174b006dd7481f9b60f594f"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0005E4AC",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x5e4ac",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0005E4AC",
+      "match": {
+        "address": 386220,
+        "candidate": {
+          "location": "symbol 'func_0005E4AC' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/5e4ac/integrated-verify-2/func_0005E4AC.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 7,
+        "name": "func_0005E4AC",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 7
+      },
+      "object_path": "build/seto049/experiments/internal/5e4ac/integrated-verify-2/func_0005E4AC.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/5e4ac/integrated-verify-2/func_0005E4AC.o",
+        "object_sha256": "6f8240800a0c7062b33140a8c02ca5d7b26fb42ad22faa1716c23972984d0661",
+        "source": "decomp/src/eboot/func_0005E4AC.c",
+        "source_sha256": "7a2022482a68368aeee4e7c7be1adc9865ef34eba174b006dd7481f9b60f594f"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0005E4AC",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 28,
+  "source_path": "decomp/src/eboot/func_0005E4AC.c",
+  "source_sha256": "7a2022482a68368aeee4e7c7be1adc9865ef34eba174b006dd7481f9b60f594f"
+}

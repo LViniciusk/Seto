@@ -1,0 +1,123 @@
+{
+  "address": "0x2edc",
+  "build_sha256": [
+    "d4b40d6bdca69773f2221dc9cfab05d7b359c02fceb14f6530bb7db36b9e0de7",
+    "d4b40d6bdca69773f2221dc9cfab05d7b359c02fceb14f6530bb7db36b9e0de7"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "libhtml_view.prx",
+  "reports": [
+    {
+      "address": "0x2edc",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00002EDC",
+      "match": {
+        "address": 11996,
+        "candidate": {
+          "location": "symbol 'func_00002EDC' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/2edc/round-02-verify-1/func_00002EDC.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00002EDC",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/2edc/round-02-verify-1/func_00002EDC.o",
+        "object_sha256": "d4b40d6bdca69773f2221dc9cfab05d7b359c02fceb14f6530bb7db36b9e0de7",
+        "source": "decomp/src/libhtml_view/func_00002EDC.c",
+        "source_sha256": "2a7f31b5e54a98ec068b5e6cf5ff55b29aeb8223539a84c65a374495e3058238"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_00002EDC",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2edc",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_00002EDC",
+      "match": {
+        "address": 11996,
+        "candidate": {
+          "location": "symbol 'func_00002EDC' at section offset 0x0",
+          "path": "build/seto049/experiments/prx/libhtml_view/2edc/round-02-verify-2/func_00002EDC.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 2,
+        "name": "func_00002EDC",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 2
+      },
+      "provenance": {
+        "candidate_section": ".text",
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/prx/libhtml_view/2edc/round-02-verify-2/func_00002EDC.o",
+        "object_sha256": "d4b40d6bdca69773f2221dc9cfab05d7b359c02fceb14f6530bb7db36b9e0de7",
+        "source": "decomp/src/libhtml_view/func_00002EDC.c",
+        "source_sha256": "2a7f31b5e54a98ec068b5e6cf5ff55b29aeb8223539a84c65a374495e3058238"
+      },
+      "section": ".sceStub.text",
+      "status": "MATCHED",
+      "symbol": "func_00002EDC",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".sceStub.text",
+  "size_bytes": 8,
+  "source_path": "decomp/src/libhtml_view/func_00002EDC.c",
+  "source_sha256": "2a7f31b5e54a98ec068b5e6cf5ff55b29aeb8223539a84c65a374495e3058238"
+}

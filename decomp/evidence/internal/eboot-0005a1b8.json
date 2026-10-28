@@ -1,0 +1,123 @@
+{
+  "address": "0x5a1b8",
+  "build_sha256": [
+    "361c4e14d1b3424c990c6810fb3e08abdb70a59a64bf00e4a736e5106aac748d",
+    "361c4e14d1b3424c990c6810fb3e08abdb70a59a64bf00e4a736e5106aac748d"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x5a1b8",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0005A1B8",
+      "match": {
+        "address": 369080,
+        "candidate": {
+          "location": "symbol 'func_0005A1B8' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/5a1b8/integrated-verify-1/func_0005A1B8.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 5,
+        "name": "func_0005A1B8",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 5
+      },
+      "object_path": "build/seto049/experiments/internal/5a1b8/integrated-verify-1/func_0005A1B8.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/5a1b8/integrated-verify-1/func_0005A1B8.o",
+        "object_sha256": "361c4e14d1b3424c990c6810fb3e08abdb70a59a64bf00e4a736e5106aac748d",
+        "source": "decomp/src/eboot/func_0005A1B8.c",
+        "source_sha256": "1608b1dc848a0fc81677352dc21fedd68d2d5b0f0b4b34198b8995599893f042"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0005A1B8",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x5a1b8",
+      "equivalence": "binary equality of the compared range",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0005A1B8",
+      "match": {
+        "address": 369080,
+        "candidate": {
+          "location": "symbol 'func_0005A1B8' at section offset 0x0",
+          "path": "build/seto049/experiments/internal/5a1b8/integrated-verify-2/func_0005A1B8.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "binary equality of the compared range",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 5,
+        "name": "func_0005A1B8",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 5
+      },
+      "object_path": "build/seto049/experiments/internal/5a1b8/integrated-verify-2/func_0005A1B8.o",
+      "provenance": {
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto049/experiments/internal/5a1b8/integrated-verify-2/func_0005A1B8.o",
+        "object_sha256": "361c4e14d1b3424c990c6810fb3e08abdb70a59a64bf00e4a736e5106aac748d",
+        "source": "decomp/src/eboot/func_0005A1B8.c",
+        "source_sha256": "1608b1dc848a0fc81677352dc21fedd68d2d5b0f0b4b34198b8995599893f042"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0005A1B8",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 20,
+  "source_path": "decomp/src/eboot/func_0005A1B8.c",
+  "source_sha256": "1608b1dc848a0fc81677352dc21fedd68d2d5b0f0b4b34198b8995599893f042"
+}

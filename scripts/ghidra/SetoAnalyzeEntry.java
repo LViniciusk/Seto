@@ -4,6 +4,10 @@
 //   analyzeHeadless <project-dir> <project> -import <EBOOT.elf> \
 //     -scriptPath scripts/ghidra -postScript SetoAnalyzeEntry.java 0x8040
 //
+// Multiple entry addresses may be passed; each is proven independently and
+// emits its own SETO_FUNCTION_START ... block. Batching only saves JVM startup;
+// no address inherits evidence from another.
+//
 // Unlike SetoAnalyzeFunction, this script discovers the end from Ghidra's
 // Function body. It makes no edits to the program or input image.
 
@@ -22,11 +26,22 @@ public class SetoAnalyzeEntry extends GhidraScript {
     protected void run() throws Exception {
         String[] args = getScriptArgs();
         if (args.length < 1) {
-            println("SETO_ERROR=expected one entry address");
+            println("SETO_ERROR=expected at least one entry address");
             return;
         }
+        for (String argument : args) {
+            analyzeEntry(argument);
+        }
+    }
 
-        long startOffset = Long.decode(args[0]);
+    private void analyzeEntry(String argument) throws Exception {
+        long startOffset;
+        try {
+            startOffset = Long.decode(argument);
+        } catch (NumberFormatException exception) {
+            println("SETO_ERROR=invalid entry address " + argument);
+            return;
+        }
         Address start = toAddr(startOffset);
         int addressableUnitSize = currentProgram.getAddressFactory()
             .getDefaultAddressSpace().getAddressableUnitSize();
