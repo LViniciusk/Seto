@@ -3902,7 +3902,10 @@ class CampaignRunner:
         self.expected_eboot_sha256 = expected_eboot_sha256
         self.max_retry_after_seconds = max(1.0, max_retry_after_seconds)
         self.provider_parallelism = dict(provider_parallelism or {})
-        self.provider_slots: dict[str, threading.BoundedSemaphore] = {}
+        self.provider_slots: dict[str, threading.BoundedSemaphore] = {
+            provider: threading.BoundedSemaphore(max(1, int(limit)))
+            for provider, limit in self.provider_parallelism.items()
+        }
         self.ghidra_parallelism = max(1, int(ghidra_parallelism))
         self.matcher_parallelism = max(1, int(matcher_parallelism))
         self.ghidra_slots = threading.BoundedSemaphore(self.ghidra_parallelism)
@@ -10767,7 +10770,11 @@ def main(argv: list[str] | None = None) -> int:
                         stop_requested=store.stop_requested,
                         deadline=global_deadline,
                         max_tasks=cumulative_ceiling,
-                        attempts_per_turn=1,
+                        attempts_per_turn=min(
+                            4,
+                            len(workers),
+                            max(1, cumulative_ceiling - store.total_attempt_count()),
+                        ),
                         exports_work_remains=export_work_remains,
                         first_lane=first_lane,
                     )
@@ -10973,6 +10980,7 @@ def main(argv: list[str] | None = None) -> int:
                     exact_pending_count=internal_store.exact_pending_count,
                     deadline=global_deadline,
                     max_boundary_tasks=8,
+                    minimum_exact_pending=min(4, len(workers)),
                 )
                 if not initial_internal_preparation["ready"]:
                     _print_json(

@@ -7788,3 +7788,92 @@ CI da PR #50 passou nos **8 jobs** Ubuntu/Windows × Python 3.11/3.12. A primeir
 execução CI revelou CRLF em checkout Windows alterando o SHA-256 bruto das
 fontes; `decomp/src/** text eol=lf` em `.gitattributes` tornou os bytes fonte
 determinísticos e a repetição dos 8 jobs passou.
+
+## SETO-DECOMP-050 — concorrência interna e preflight bloqueado
+
+### Baseline e campanha
+
+O branch `feat/seto-decomp-050` parte do merge de PR #50 (`c4b0843`). A baseline
+continua em **2.316 instruções reais MATCHED**: EBOOT exports 368, EBOOT internas
+1.036 e PRX exports 912. As 184 instruções de 92 import stubs continuam sendo
+apenas cobertura técnica; não entram na meta de 2.500 reais. Esta rodada não
+certificou instruções adicionais: cobertura real antes/depois **2.316 → 2.316**.
+
+O SQLite permanece autoritativo e foi copiado antes da recuperação usando
+`sqlite3.Connection.backup()`. Integridade antes/depois `ok`, 219 tentativas
+cumulativas (217 exports + 2 internas), nenhum lease ativo e nenhuma tentativa
+nova. O teto calculado para a rodada é 231 (219 + 12); não houve reset de
+contadores nem alteração manual de estados de quota.
+
+| Tipo | Provider / worker | Antes | Depois |
+|---|---|---:|---:|
+| Exports | OpenAI / Luna workers + legado | 176 | 176 |
+| Exports | OpenCode / DeepSeek local + workers | 24 | 24 |
+| Exports | OpenCode / Alluka | 15 | 15 |
+| Exports | OpenCode / Kita | 2 | 2 |
+| Internas | OpenAI / `luna-01` | 2 | 2 |
+| **Total** | | **219** | **219** |
+
+### Recuperação local e hipóteses preservadas
+
+`recover-local` executou apenas trabalho local (MWCC/matcher), sem inferências:
+49 candidatos export foram examinados, 35 tinham boundary `EXACT`, 39 fontes
+históricas foram selecionadas, 16 comparações completas, 4 inconclusivas,
+1 falha de compilação, 18 falhas/incompletudes de matcher e **0 MATCHED**.
+Tentativas antes/depois: 219/219. Os resultados e divergências ficaram nos
+relatórios sob `build/decomp-campaign/experiments/`; 31 candidatos antigos foram
+reabertos para permitir recuperação posterior, sem alterar contadores.
+
+Os relatórios internos locais já existentes foram auditados e não justificam
+repetir a mesma hipótese: `0x3ca6c` e `0x6a668` continuam `NONMATCHING` por
+associação HI16/LO16 ausente no candidato; `0x15c18` é `NONMATCHING` (1/4, com
+relocation apenas no candidato); `0x17298` é `NONMATCHING` (1/6). `0x39f04`
+continua `NONMATCHING` pelo mesmo tipo de divergência, e `0x61A3C` continua
+inalterado. Para `0x1a510`, `0x33084`, `0x6a674` e `0x2ade0`, não foi encontrada
+fonte local recuperável para matcher.
+
+### Readiness e bloqueio de quota/autorização
+
+O `doctor` confirmou hashes EBOOT/PRXs/triage e Ghidra, MWCC, wibo e WSL READY.
+Alluka (aarch64, OpenCode 2.2.0) e Kita (x86_64, OpenCode 2.1.4) passam o
+readiness técnico com o DeepSeek free (`model_cost_zero=true`), mas os scopes
+SQLite `opencode:alluka` e `opencode:kita-server` ainda estão
+`suspended_quota`/`quota_exhausted`; o estado não foi limpo nem contornado. Luna
+está bloqueada porque a verificação OAuth de subscrição e a exclusão de custo
+adicional não foram confirmadas. DeepSeek local está bloqueado porque o acesso
+e o modo de uso não foram verificados. Portanto, **zero workers estavam
+autorizados e desbloqueados para iniciar inferência**; nenhuma tentativa foi
+iniciada e não existe pico real de concorrência nesta rodada.
+
+A configuração local `config/decomp_campaign.run.050.local.toml` mantém execução
+desabilitada, teto 231, deadline 5.400 s, `ghidra_parallelism=1` e
+`matcher_parallelism=1`. O piloto real deve aguardar confirmação de reset de
+quota para os scopes remotos ou verificação explícita de acesso/custo para os
+workers locais. Até então, não rodar `night-run` nem alterar os gates.
+
+### Mudanças de concorrência e testes
+
+`InternalCampaignRunner` agora pode despachar uma claim por worker READY em um
+`ThreadPoolExecutor` limitado simultaneamente pelo número de workers, pelo teto
+restante e pelo limite da fatia. Cada claim/lease e início de tentativa continuam
+serializados por `BEGIN IMMEDIATE` no SQLite; `start_attempt()` continua sendo a
+autoridade do teto cumulativo. Boundary Ghidra continua serial (paralelismo 1),
+matcher continua serial (paralelismo 1), o catálogo de certificados protege a
+transação de leitura/validação/replace com lock e uma falha individual não cancela
+as outras futures. A alternância exports/internas continua sequencial entre
+fatias, com até quatro tentativas concorrentes dentro da fatia ativa. O
+pré-aquecimento tenta preencher até quatro slots, mas libera a execução se houver
+ao menos um candidato `EXACT`; a concorrência efetiva é limitada pelos candidatos,
+workers com provider ativo e capacidade por `quota_scope`. A seleção percorre os
+workers em cursor circular entre segmentos; scopes suspensos são ignorados e
+workers que falham antes de iniciar inference são substituídos por alternativas
+ainda não tentadas na fatia, sem retry do worker indisponível.
+
+Testes sintéticos confirmam quatro workers com claims/endereço distintos e
+execução sobreposta; um segundo caso limita simultaneamente quatro workers a
+duas tentativas, sem exceder o teto global. A sobreposição foi verificada nos
+testes, não numa campanha real, pois os providers estavam bloqueados.
+
+Validação local final em Windows/Python 3.12: **1095 passed, 44 skipped**;
+`compileall`, `git diff --check`, `--metadata-only` e `--full` passaram. Os skips
+são integrações opt-in ou ferramentas Linux/WSL não instaladas nesta execução.

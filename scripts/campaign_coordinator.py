@@ -151,19 +151,22 @@ def prepare_internal_lane_before_inference(
     exact_pending_count: Callable[[], int],
     deadline: float,
     max_boundary_tasks: int = 8,
+    minimum_exact_pending: int = 1,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Discover and prove an EXACT internal task before any campaign inference."""
     if max_boundary_tasks <= 0:
         raise ValueError("initial internal boundary limit must be positive")
+    if minimum_exact_pending <= 0:
+        raise ValueError("minimum initial EXACT internal work must be positive")
     exact_before = exact_pending_count()
     discovery: DiscoveryResult | None = None
     boundary: dict[str, Any] = {}
-    if exact_before <= 0 and monotonic() < deadline:
+    if exact_before < minimum_exact_pending and monotonic() < deadline:
         discovery = discover_internal(deadline)
         if not isinstance(discovery, DiscoveryResult):
             raise TypeError("initial internal discovery must return DiscoveryResult")
-        if exact_pending_count() <= 0 and monotonic() < deadline:
+        if exact_pending_count() < minimum_exact_pending and monotonic() < deadline:
             boundary = dict(prepare_boundary(deadline, max_boundary_tasks))
             if int(boundary.get("attempted", 0)) != 0:
                 raise RuntimeError("initial internal boundary preparation consumed an inference attempt")
@@ -172,6 +175,7 @@ def prepare_internal_lane_before_inference(
         "ready": exact_after > 0,
         "exact_pending_before": exact_before,
         "exact_pending_after": exact_after,
+        "minimum_exact_pending": minimum_exact_pending,
         "discovery": None
         if discovery is None
         else {

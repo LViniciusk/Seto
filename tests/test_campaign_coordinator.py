@@ -317,3 +317,65 @@ def test_attempt_ceiling_allows_one_zero_attempt_internal_recovery_pass() -> Non
     assert calls == 1
     assert result["segments"][0]["internal_reconciled"] == 1
     assert result["stop_reason"] == "attempt_ceiling"
+
+
+def test_initial_internal_preparation_fills_multiple_ready_worker_slots() -> None:
+    exact_pending = 2
+    events: list[str] = []
+
+    def discover(_deadline: float) -> DiscoveryResult:
+        events.append("discover")
+        return DiscoveryResult(
+            "eboot-internal", "manifest-hash", candidates_added=2, eligible_work=True
+        )
+
+    def prepare(_deadline: float, boundary_limit: int) -> dict[str, object]:
+        nonlocal exact_pending
+        assert boundary_limit == 8
+        events.append("boundary")
+        exact_pending = 4
+        return {"attempted": 0, "boundary_outcomes": {"exact": 2}}
+
+    prepared = prepare_internal_lane_before_inference(
+        discover_internal=discover,
+        prepare_boundary=prepare,
+        exact_pending_count=lambda: exact_pending,
+        deadline=1000.0,
+        max_boundary_tasks=8,
+        minimum_exact_pending=4,
+        monotonic=lambda: 10.0,
+    )
+    assert prepared["ready"] is True
+    assert prepared["exact_pending_before"] == 2
+    assert prepared["exact_pending_after"] == 4
+    assert prepared["minimum_exact_pending"] == 4
+    assert events == ["discover", "boundary"]
+
+
+def test_initial_internal_preparation_accepts_any_positive_exact_queue() -> None:
+    for initial_exact in (0, 1, 2, 3):
+        events: list[str] = []
+
+        def discover(_deadline: float) -> DiscoveryResult:
+            events.append("discover")
+            return DiscoveryResult("eboot-internal", "hash", candidates_added=0)
+
+        def prepare(_deadline: float, _limit: int) -> dict[str, object]:
+            events.append("boundary")
+            return {"attempted": 0, "boundary_outcomes": {}}
+
+        prepared = prepare_internal_lane_before_inference(
+            discover_internal=discover,
+            prepare_boundary=prepare,
+            exact_pending_count=lambda: initial_exact,
+            deadline=1000.0,
+            max_boundary_tasks=8,
+            minimum_exact_pending=4,
+            monotonic=lambda: 10.0,
+        )
+        assert prepared["ready"] is (initial_exact > 0)
+        assert prepared["exact_pending_after"] == initial_exact
+        if initial_exact < 4:
+            assert events == ["discover", "boundary"]
+        else:
+            assert events == []
