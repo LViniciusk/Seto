@@ -2502,6 +2502,110 @@ def test_remote_session_location_uses_linux_workspace_and_host_scope(tmp_path: P
     )
 
 
+def test_remote_session_create_and_resume_stays_in_candidate_workspace(
+    tmp_path: Path,
+) -> None:
+    worktree = tmp_path / "local-staging"
+    worktree.mkdir()
+    store = CampaignStore(tmp_path / "remote-session-resume.sqlite3")
+    store.seed([Candidate("0x1000", 16, "0x12345678", 1, "EXACT", evidence={})])
+    worker = Worker(
+        "remote-kita",
+        "opencode",
+        "opencode/deepseek-v4.1-flash-free",
+        "seto-decomp-worker",
+        "ssh",
+        "kita-server",
+        "/home/operator/seto-worker",
+        "opencode:kita-server",
+    )
+    candidate_directory = "/home/operator/seto-worker/functions/1000"
+    session = {
+        "id": "ses_remote_candidate",
+        "location": {"directory": candidate_directory},
+        "agent": worker.agent,
+        "model": {
+            "providerID": "opencode",
+            "id": "deepseek-v4.1-flash-free",
+        },
+    }
+    calls: list[tuple[str, str, str]] = []
+
+    class FakeSSHExecutor:
+        def command(self, target, argv, **_kwargs):
+            operation, endpoint = argv[2], argv[3]
+            calls.append((operation, endpoint, target.directory))
+            assert target.directory == candidate_directory
+            if operation == "post":
+                assert endpoint == "/api/session"
+                payload = json.loads(argv[5])
+                assert payload["location"]["directory"] == candidate_directory
+                assert payload["agent"] == worker.agent
+                assert payload["model"] == {
+                    "providerID": "opencode",
+                    "id": "deepseek-v4.1-flash-free",
+                }
+            else:
+                assert operation == "get"
+                assert endpoint == f"/api/session/{session['id']}"
+            return {
+                "returncode": 0,
+                "stdout": json.dumps({"data": session}),
+                "stderr": "",
+            }
+
+    runner = CampaignRunner(
+        store,
+        opencode_command=["unused"],
+        worktrees={worker.worker_id: worktree},
+        ssh_executor=FakeSSHExecutor(),  # type: ignore[arg-type]
+        remote_targets={
+            worker.worker_id: decomp_campaign_module.RemoteTarget(
+                worker.host, worker.remote_dir
+            )
+        },
+    )
+    first = store.claim_next(
+        worker.worker_id, worker.execution_scope, model_provider=worker.provider
+    )
+    assert first is not None
+    created = runner._ensure_session(
+        first,
+        worktree,
+        None,
+        agent=worker.agent,
+        model=worker.model,
+        worker=worker,
+    )
+    assert created.session_id == session["id"]
+    store.fail(created, Failure(FailureKind.INTERRUPTED))
+
+    resumed = store.claim_next(
+        worker.worker_id,
+        worker.execution_scope,
+        model_provider=worker.provider,
+    )
+    assert resumed is not None
+    reused = runner._ensure_session(
+        resumed,
+        worktree,
+        None,
+        agent=worker.agent,
+        model=worker.model,
+        worker=worker,
+    )
+
+    assert reused.session_id == created.session_id
+    assert calls == [
+        ("post", "/api/session", candidate_directory),
+        ("get", f"/api/session/{session['id']}", candidate_directory),
+    ]
+    assert [attempt["session_id"] for attempt in store.list_attempts()] == [
+        session["id"],
+        session["id"],
+    ]
+
+
 def test_remote_readiness_requires_exact_zero_cost_catalog_and_restricted_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

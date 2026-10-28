@@ -230,11 +230,15 @@ def test_remote_helper_runs_one_opencode_attempt_and_caches_its_result(
     source = b"int func_0002C28C(void) { return 9; }\n"
     calls = 0
     observed_stdin: list[object] = []
+    observed_argv: list[list[str]] = []
+    observed_cwd: list[object] = []
 
     def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
         nonlocal calls
         calls += 1
         observed_stdin.append(_kwargs.get("stdin"))
+        observed_argv.append(argv)
+        observed_cwd.append(_kwargs.get("cwd"))
         candidate = root / "decomp/src/eboot/func_0002C28C.c"
         candidate.parent.mkdir(parents=True, exist_ok=True)
         candidate.write_bytes(source)
@@ -260,6 +264,10 @@ def test_remote_helper_runs_one_opencode_attempt_and_caches_its_result(
 
     assert calls == 1
     assert observed_stdin == [subprocess.DEVNULL]
+    assert observed_cwd == [root]
+    assert observed_argv[0][observed_argv[0].index("--session") + 1] == "ses_kita123"
+    assert observed_argv[0][observed_argv[0].index("--agent") + 1] == "seto-decomp-worker"
+    assert observed_argv[0][observed_argv[0].index("--model") + 1] == "opencode/deepseek-v4.1-flash-free"
     assert first == second
     assert first["completed"] is True
     assert first["source_sha256"] == hashlib.sha256(source).hexdigest()
