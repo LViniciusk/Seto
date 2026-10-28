@@ -330,6 +330,139 @@ def test_internal_discovery_to_certificate_end_to_end_without_nid(
     assert len(json.loads(catalog_path.read_text(encoding="utf-8"))["functions"]) == 1
 
 
+def _prose_checkpoint_internal_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stdout: str,
+    write_source: bool,
+):
+    """Build an EXACT internal task whose worker never emits a JSON checkpoint."""
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    worktree = tmp_path / "worker"
+    worktree.mkdir()
+    evidence_path = (
+        "decomp-campaign/internal-worker/1000/evidence/"
+        "ghidra-run-22222222222222222222222222222222.log"
+    )
+    log = worktree / "build" / evidence_path
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("synthetic exact body; test double only\n", encoding="utf-8")
+    log_hash = hashlib.sha256(log.read_bytes()).hexdigest()
+    checkpoint = {
+        "ghidra_log_path": evidence_path,
+        "ghidra_log_sha256": log_hash,
+        "boundary_status": "EXACT",
+    }
+    with campaign_store._connect() as db:
+        db.execute(
+            """INSERT INTO internal_candidates
+               (module,address,section,kind,size_bytes,boundary_status,status,priority,
+                available_at,attempt_count,boundary_attempts,checkpoint_json,evidence_json,
+                result_json,updated_at)
+               VALUES ('EBOOT','0x1000','.text','code',8,'EXACT','pending',50,0,0,1,?,'{}','{}',?)""",
+            (json.dumps(checkpoint, sort_keys=True), time.time()),
+        )
+    catalog_path = tmp_path / "config" / "decomp_internal_inventory.json"
+    catalog_path.parent.mkdir(parents=True)
+    catalog_path.write_text(
+        json.dumps({"schema_version": 2, "functions": []}), encoding="utf-8"
+    )
+    worker = Worker("internal-worker", "openai", "openai/gpt-6-luna")
+    runner = CampaignRunner(
+        campaign_store,
+        opencode_command=["opencode"],
+        worktrees={worker.worker_id: worktree},
+        timeout_seconds=10,
+    )
+    runner.auto_preflight = False
+
+    def ensure_session(claim: InternalClaim, *_args: object, **_kwargs: object) -> InternalClaim:
+        return campaign_store.bind_session(claim, "ses_synthetic_internal")
+
+    runner._provider_gate_open = lambda _worker: True  # type: ignore[method-assign]
+    runner._ensure_session = ensure_session  # type: ignore[method-assign]
+    runner._argv = lambda _worker, _claim, _prompt: ["synthetic-worker"]  # type: ignore[method-assign]
+
+    def simulated_worker(_argv: object, *, cwd: Path, **_kwargs: object):
+        if write_source:
+            source = cwd / "decomp/src/eboot/func_00001000.c"
+            source.write_text("int func_00001000(void) { return 7; }\n", encoding="utf-8")
+        return decomp_campaign_module.WorkResult(0, stdout, "")
+
+    monkeypatch.setattr(decomp_campaign_module, "_run_process", simulated_worker)
+    runner._verify_internal_with_matcher_twice = lambda *_args: {  # type: ignore[method-assign]
+        "status": "NONMATCHING",
+        "source_sha256": "d" * 64,
+        "matching_words": 0,
+        "total_words": 2,
+        "build_sha256": ["e" * 64, "e" * 64],
+    }
+    internal_runner = make_production_internal_runner(
+        runner,
+        campaign_store,
+        {worker.worker_id: worker},
+        repo_root=tmp_path,
+        catalog_path=catalog_path,
+        lease_seconds=60,
+        max_attempts_per_candidate=2,
+    )
+    return campaign_store, internal_runner, worker
+
+
+def test_internal_prose_checkpoint_still_reaches_matcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a real source plus prose-only output must not waste the attempt."""
+    campaign_store, internal_runner, worker = _prose_checkpoint_internal_runner(
+        tmp_path,
+        monkeypatch,
+        stdout=(
+            "Checkpoint: `func_00001000` returns 7. "
+            "Next experiment: let the orchestrator compile and compare."
+        ),
+        write_source=True,
+    )
+    outcome = internal_runner.run_segment(
+        [(worker.worker_id, worker.execution_scope, worker.provider)],
+        max_total_attempts=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert outcome["attempted"] == 1
+    assert outcome["stages"]["matcher_runs"] == 1
+    assert outcome["outcomes"] == {"nonmatching": 1}
+    assert campaign_store.total_attempt_count() == 1
+    with campaign_store._connect() as db:
+        attempt = db.execute(
+            "SELECT outcome FROM internal_attempts WHERE address='0x1000'"
+        ).fetchone()
+        result = db.execute(
+            "SELECT result_json FROM internal_candidates WHERE address='0x1000'"
+        ).fetchone()
+    assert attempt["outcome"] == "nonmatching"
+    assert json.loads(result["result_json"])["source_sha256"] == "d" * 64
+
+
+def test_internal_prose_checkpoint_without_source_still_fails_before_matcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_store, internal_runner, worker = _prose_checkpoint_internal_runner(
+        tmp_path,
+        monkeypatch,
+        stdout="Checkpoint: no reconstruction was possible.",
+        write_source=False,
+    )
+    outcome = internal_runner.run_segment(
+        [(worker.worker_id, worker.execution_scope, worker.provider)],
+        max_total_attempts=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert outcome["attempted"] == 1
+    assert outcome["stages"]["matcher_runs"] == 0
+    assert outcome["outcomes"] == {"pending": 1}
+    assert campaign_store.total_attempt_count() == 1
+
+
 def test_internal_boundary_failures_are_bounded_and_never_start_worker(tmp_path: Path) -> None:
     import time
 

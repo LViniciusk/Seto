@@ -1688,7 +1688,9 @@ def make_production_internal_runner(
             "Do not invent an NID, export identity, data identity, or unresolved relocation. "
             "Do not modify Git, configuration, other source files, credentials, or unrelated artifacts. "
             "Do not claim a match or certification; the orchestrator runs MWCC and the matcher twice. "
-            "If evidence is insufficient, preserve the best hypothesis and return a concise checkpoint."
+            "If evidence is insufficient, preserve the best hypothesis. Finish with exactly one JSON "
+            'object shaped like {"checkpoint": {"next_experiment": "...", "limitations": "..."}} '
+            "and no other final text."
         )
         if len(prompt.encode("utf-8")) > 32_000:
             raise InternalTaskBlocked("internal reconstruction prompt exceeds its fixed bound")
@@ -1800,7 +1802,17 @@ def make_production_internal_runner(
                 return {"status": "FAILED", "returncode": process.returncode}
             if source.is_symlink() or not source.is_file():
                 raise InternalTaskBlocked("internal worker did not leave a regular source file")
-            extracted = _extract_checkpoint(process.stdout)
+            try:
+                extracted = _extract_checkpoint(process.stdout)
+            except ValueError:
+                # A worker can leave a usable source without the optional final JSON
+                # checkpoint (the real failure at 0x39f04 was prose-only output).
+                # Keep the strict requirement only when no reconstruction happened.
+                if source.read_bytes() == source_stub:
+                    raise InternalWorkerUnavailable(
+                        "worker returned without reconstructing its source"
+                    ) from None
+                extracted = {}
             worker_checkpoint = {
                 key: extracted[key]
                 for key in ("next_experiment", "limitations")
