@@ -286,18 +286,32 @@ def test_import_stubs_are_technical_matches_not_decompiled_code() -> None:
         next(entry for entry in document["functions"] if entry["address"] == "0x31308")
     )
 
-    metrics = internal_catalog_metrics(
-        document["functions"],
-        {
-            "eboot_matched_functions": 16,
-            "eboot_matched_instructions": 368,
-            "prx_matched_functions": 16,
-            "prx_matched_instructions": 912,
-        },
+    export_metrics = {
+        "eboot_matched_functions": 16,
+        "eboot_matched_instructions": 368,
+        "prx_matched_functions": 16,
+        "prx_matched_instructions": 912,
+    }
+    metrics = internal_catalog_metrics(document["functions"], export_metrics)
+    expected_code_instructions = sum(
+        entry["instruction_count"]
+        for entry in document["functions"]
+        if counts_as_decompiled_code(entry)
     )
-    assert metrics["code_matched_instructions"] == 2316
-    assert metrics["import_stub_matched_instructions"] == 184
-    assert metrics["technical_matched_instructions"] == 2500
+    expected_import_stub_instructions = sum(
+        entry["instruction_count"]
+        for entry in document["functions"]
+        if entry["kind"] == "import_stub" and entry["result"]["status"] == "MATCHED"
+    )
+    expected_code_instructions += (
+        export_metrics["eboot_matched_instructions"]
+        + export_metrics["prx_matched_instructions"]
+    )
+    assert metrics["code_matched_instructions"] == expected_code_instructions
+    assert metrics["import_stub_matched_instructions"] == expected_import_stub_instructions
+    assert metrics["technical_matched_instructions"] == (
+        expected_code_instructions + expected_import_stub_instructions
+    )
 
 
 def test_import_stub_cannot_claim_code_section_or_eboot_identity(tmp_path: Path) -> None:

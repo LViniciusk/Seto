@@ -605,6 +605,33 @@
     },
     {
       "module": "EBOOT",
+      "address": "0x2ade0",
+      "size_bytes": 24,
+      "instruction_count": 6,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0002ade0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0002ADE0.c",
+      "source_sha256": "db893b7e8fce8107af7f7408b70bce881d671e8252e13c9ab9587bf4cee29039",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 6,
+        "total_words": 6,
+        "object_sha256s": [
+          "8a3dfa3a91f4ffed0f52e18028dc37ea00f4d263aaf52a6a79015d2c7e8cc862",
+          "8a3dfa3a91f4ffed0f52e18028dc37ea00f4d263aaf52a6a79015d2c7e8cc862"
+        ],
+        "resolved_calls": [
+          "word 4 (0x2adf0): this module @ 0x2aef0 <=> this module @ 0x2aef0"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0002ade0.json",
+        "certificate_sha256": "9fff606715ff508b8f27f09fa9899b088954d5f96cac0c3ca231768dc85074c0"
+      }
+    },
+    {
+      "module": "EBOOT",
       "address": "0x2adf8",
       "size_bytes": 248,
       "instruction_count": 62,
@@ -782,6 +809,31 @@
       },
       "section": ".text",
       "kind": "code"
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x2c0f0",
+      "size_bytes": 52,
+      "instruction_count": 13,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0002c0f0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0002C0F0.c",
+      "source_sha256": "0d0e9a69c10b301f9aff768e2459183cd90f4a8ba673f5a4586b0ae6170ccc51",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 13,
+        "total_words": 13,
+        "object_sha256s": [
+          "e6100497bcc86fb05b05a1f19fb82becf1c7e952e79177e20abbbb32bc20fd81",
+          "e6100497bcc86fb05b05a1f19fb82becf1c7e952e79177e20abbbb32bc20fd81"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0002c0f0.json",
+        "certificate_sha256": "4c68868890a68716e9badbf00d7cf10ceed5e1176a94f09ba8af209261517bf0"
+      }
     },
     {
       "module": "EBOOT",
@@ -1203,6 +1255,168 @@
     },
     {
       "module": "EBOOT",
+      "address": "0x3b3b0",
+      "size_bytes": 44,
+      "instruction_count": 11,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b3b0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B3B0.c",
+      "source_sha256": "476026167bee733f804beed43a1863ed58ceef2f09df15b0f7074caea5c9e4f7",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 11,
+        "total_words": 11,
+        "object_sha256s": [
+          "7e35967c170d2452f76b35a0433d4079ca2a71480ea18e9398ed9566e62a2449",
+          "7e35967c170d2452f76b35a0433d4079ca2a71480ea18e9398ed9566e62a2449"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b3b8): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b3b0.json",
+        "certificate_sha256": "622d48f2028d00cfc0e3599bd399f882fc4414557c345ee1fc88b9b783054e7f"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3b630",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b630.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B630.c",
+      "source_sha256": "a8d4bfa9c5a1b3decd62be45da13bd3fefe4a21e69ef1e7c3b453afba391a44d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "7f4d9cd252608bac5e960d7ee1473bf30c1fec011bfb10d23c711bbd34805e64",
+          "7f4d9cd252608bac5e960d7ee1473bf30c1fec011bfb10d23c711bbd34805e64"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b638): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b630.json",
+        "certificate_sha256": "2886201e6a3891f20fc394978061285c92131f6d6c9846fdf73b3abd31398e73"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3b6cc",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b6cc.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B6CC.c",
+      "source_sha256": "9eefb954c81341eadbd1d2831d077305e1f6b76b70ee5b2f2d89040e9df10fa5",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "7878b33507803bd15d4d465985c8f76e215dffc088c7a19c818e2d32e40ece3a",
+          "7878b33507803bd15d4d465985c8f76e215dffc088c7a19c818e2d32e40ece3a"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b6d4): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b6cc.json",
+        "certificate_sha256": "fca4664f7349eef398e4433825045322e0751ac319f266ecfa148c50d03f6d37"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3b738",
+      "size_bytes": 44,
+      "instruction_count": 11,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b738.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B738.c",
+      "source_sha256": "e6d492db885d2fd0d4fe13638de347b11fb14b020725d05a34c62988f44a38c4",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 11,
+        "total_words": 11,
+        "object_sha256s": [
+          "5eae9de022d67ccbe7cb5a4c40db96fc402941f9037cc9e568ecde0080b16f10",
+          "5eae9de022d67ccbe7cb5a4c40db96fc402941f9037cc9e568ecde0080b16f10"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b740): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b738.json",
+        "certificate_sha256": "e6975296de919c5693b0d2e2a23b0a5f00678d3632f8b2b287cb9cb6a75d4f42"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3b7a0",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b7a0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B7A0.c",
+      "source_sha256": "5f79c9f1108c205eceeb346c85ada82dadda303087b59f0252da46f36e4f3ca9",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "ba865a92ac3361fa83017d311620dced5fca63e53f2a59d62d93f6253cdb70cb",
+          "ba865a92ac3361fa83017d311620dced5fca63e53f2a59d62d93f6253cdb70cb"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b7a8): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b7a0.json",
+        "certificate_sha256": "f88f53c5250e3e6c33373fd8f165dc45b96f6f28572ee20a0f3daf2f95db29aa"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3b830",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b830.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B830.c",
+      "source_sha256": "ebd3945387a24853b45e6a5a700c018a37cb4f559a4ddf9a984b388a0db15d3a",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "6c847740c162170633cd559889d014d1ab1fb0ac775330eca51988600ddf63f1",
+          "6c847740c162170633cd559889d014d1ab1fb0ac775330eca51988600ddf63f1"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b838): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b830.json",
+        "certificate_sha256": "00a2230332e9743f1859fa9774f4278680911b5141bfeb81f39a28c50716f3e2"
+      }
+    },
+    {
+      "module": "EBOOT",
       "address": "0x3b860",
       "size_bytes": 88,
       "instruction_count": 22,
@@ -1258,6 +1472,33 @@
       },
       "section": ".text",
       "kind": "code"
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3b940",
+      "size_bytes": 44,
+      "instruction_count": 11,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003b940.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003B940.c",
+      "source_sha256": "9326df149c7eb0e191afff5ea1467f572e72781077a207fa1886f0cacc36b935",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 11,
+        "total_words": 11,
+        "object_sha256s": [
+          "da20e99d7729dc05811f72d38f3ad08c1a3d92296d6f8a0f3afb62f3048a60d1",
+          "da20e99d7729dc05811f72d38f3ad08c1a3d92296d6f8a0f3afb62f3048a60d1"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3b948): this module @ 0x3b340 <=> this module @ 0x3b340"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003b940.json",
+        "certificate_sha256": "7c7b9707a8a379f5a5cb7d4e5fa618b9b0cbce5cd3b781a823914ef675acb915"
+      }
     },
     {
       "module": "EBOOT",
@@ -1517,6 +1758,60 @@
       },
       "section": ".text",
       "kind": "code"
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3c478",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003c478.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003C478.c",
+      "source_sha256": "fbdb983a1c02188e3bda4e941d3e9379545739f1698ff840f2b2a5d43041cc22",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "0c5c2538c520e4c2cfb133101436a58073e796db41d44a0f85eb7af7eac74133",
+          "0c5c2538c520e4c2cfb133101436a58073e796db41d44a0f85eb7af7eac74133"
+        ],
+        "resolved_calls": [
+          "word 3 (0x3c484): this module @ 0x3c424 <=> this module @ 0x3c424"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003c478.json",
+        "certificate_sha256": "c60d0010b096645bf528772105c6d0eeebcc5cf43d0183bb501a592ba81556d6"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x3c518",
+      "size_bytes": 44,
+      "instruction_count": 11,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0003c518.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0003C518.c",
+      "source_sha256": "faadba9432affacec5f6bf3a2d8200fc72ecbbc124b69fa4b4f2787951018e89",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 11,
+        "total_words": 11,
+        "object_sha256s": [
+          "72b50aced9dc6c1fb35b97c1348124f9c0d47575d5015610053b6984e5505f1a",
+          "72b50aced9dc6c1fb35b97c1348124f9c0d47575d5015610053b6984e5505f1a"
+        ],
+        "resolved_calls": [
+          "word 2 (0x3c520): this module @ 0x3c424 <=> this module @ 0x3c424"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003c518.json",
+        "certificate_sha256": "9ab8d92030c387e3f32121b9737bf0ca528f40dcd7faff5c2aead33137109b19"
+      }
     },
     {
       "module": "EBOOT",
@@ -2142,18 +2437,38 @@
       "size_bytes": 36,
       "instruction_count": 9,
       "boundary_status": "EXACT",
-      "evidence_path": "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions",
+      "evidence_path": "decomp/evidence/internal/eboot-0003df58.json#matcher-and-boundary",
       "ghidra_log_path": "build/seto049/internal-boundaries/0003df58-d69621629816.log",
       "result": {
-        "status": "NONMATCHING",
-        "tested_source_sha256": "f823f1c48726f051d6e284b2a822dae594e45953217825618c45635c48307812",
-        "tested_object_sha256": "6975aec202dcac0242129642d107829386f11e5245f00600225b18bdbb5ad95b",
-        "matching_words": 1,
+        "status": "MATCHED",
+        "matching_words": 9,
         "total_words": 9,
-        "reason": "halfword zero-scan hypothesis differs in pointer/counter register assignment and loop scheduling"
+        "object_sha256s": [
+          "4d1e2a1f38b54a06fcc09c6e34538bfa0dbfb5a962396b8531a9d24be741dc2c",
+          "4d1e2a1f38b54a06fcc09c6e34538bfa0dbfb5a962396b8531a9d24be741dc2c"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0003df58.json",
+        "certificate_sha256": "ad3b0bf2beba0471e7c55c0ddeeddb09f4b7cad4ae6a4f50d57e39884828bd7a"
       },
       "section": ".text",
-      "kind": "code"
+      "kind": "code",
+      "prior_results": [
+        {
+          "status": "NONMATCHING",
+          "tested_source_sha256": "f823f1c48726f051d6e284b2a822dae594e45953217825618c45635c48307812",
+          "tested_object_sha256": "6975aec202dcac0242129642d107829386f11e5245f00600225b18bdbb5ad95b",
+          "matching_words": 1,
+          "total_words": 9,
+          "reason": "halfword zero-scan hypothesis differs in pointer/counter register assignment and loop scheduling"
+        }
+      ],
+      "prior_evidence_paths": [
+        "docs/decomp-progress.md#SETO-DECOMP-049-internal-functions"
+      ],
+      "source_path": "decomp/src/eboot/func_0003DF58.c",
+      "source_sha256": "b4d4c0932dae75f9479ed69540dbfac152eaa2b30c32d205e25f74982490947e"
     },
     {
       "module": "EBOOT",
@@ -2949,6 +3264,87 @@
     },
     {
       "module": "EBOOT",
+      "address": "0x4cab0",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004cab0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004CAB0.c",
+      "source_sha256": "01d3dc455ca7be38f3062c9da9a1f61ce94dc2b6b9640ac201950a8e4aee55a0",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "f717535bef78b77b96446c8474d99f26b6a7c085d5c43df590ebc19fe5a16a37",
+          "f717535bef78b77b96446c8474d99f26b6a7c085d5c43df590ebc19fe5a16a37"
+        ],
+        "resolved_calls": [
+          "word 3 (0x4cabc): this module @ 0x4ef68 <=> this module @ 0x4ef68"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004cab0.json",
+        "certificate_sha256": "cb96f3ea226cf62fa66e408b05a2abdbce38f34eeb0078538a575bddd9d19d16"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4cb40",
+      "size_bytes": 36,
+      "instruction_count": 9,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004cb40.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004CB40.c",
+      "source_sha256": "40e19a643aee576b68f1a6bf4d5e7cbb86d6e0a9ec9502f1f64127111e90f240",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 9,
+        "total_words": 9,
+        "object_sha256s": [
+          "32544a7708fb8b59466188daa5b8f71cb7527c9c664f9b13f44d7afee593255d",
+          "32544a7708fb8b59466188daa5b8f71cb7527c9c664f9b13f44d7afee593255d"
+        ],
+        "resolved_calls": [
+          "word 3 (0x4cb4c): this module @ 0x4ef60 <=> this module @ 0x4ef60"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004cb40.json",
+        "certificate_sha256": "a42ff9dfcd7e454395c3a6194147d796ef652bb7197472a404ef3661729fd9d6"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4cb64",
+      "size_bytes": 36,
+      "instruction_count": 9,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004cb64.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004CB64.c",
+      "source_sha256": "65c7dd7d44ad4e77f24e4e9f8396d454694ac07321efaa2c6f7e7db665bf18e8",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 9,
+        "total_words": 9,
+        "object_sha256s": [
+          "1405edc8f226c45c192735ce35be8826338630e454abbadc939f58d9a5e7933e",
+          "1405edc8f226c45c192735ce35be8826338630e454abbadc939f58d9a5e7933e"
+        ],
+        "resolved_calls": [
+          "word 3 (0x4cb70): this module @ 0x4ef60 <=> this module @ 0x4ef60"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004cb64.json",
+        "certificate_sha256": "739a7e4620592bc1b34fa3097acb69e9af58d079d07d8abeae88f4a462c6d80c"
+      }
+    },
+    {
+      "module": "EBOOT",
       "address": "0x4cb88",
       "size_bytes": 76,
       "instruction_count": 19,
@@ -2975,6 +3371,90 @@
       },
       "section": ".text",
       "kind": "code"
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4d2b0",
+      "size_bytes": 56,
+      "instruction_count": 14,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004d2b0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004D2B0.c",
+      "source_sha256": "9eb2148a2998e9735e3d3420b7cb50c70c4a0eb17b0346dfea3b452b8b1e5d3c",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 14,
+        "total_words": 14,
+        "object_sha256s": [
+          "0a52207f96cb4898683b4f70a8eea4aa661209c5b188326d73698f3ca48ea54c",
+          "0a52207f96cb4898683b4f70a8eea4aa661209c5b188326d73698f3ca48ea54c"
+        ],
+        "resolved_calls": [
+          "word 2 (0x4d2b8): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 4 (0x4d2c0): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 6 (0x4d2c8): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 8 (0x4d2d0): this module @ 0x5537c <=> this module @ 0x5537c"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004d2b0.json",
+        "certificate_sha256": "4deb93eb47e354382beace6ea66c70d3af54cf43af09c83c7e0a95cc8d0bbd10"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4dc90",
+      "size_bytes": 52,
+      "instruction_count": 13,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004dc90.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004DC90.c",
+      "source_sha256": "59f2762769c7b764de51de90d26345cd8ca90e83401268da04e1fac72ba34625",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 13,
+        "total_words": 13,
+        "object_sha256s": [
+          "cdb55a1ca28786d21aa2bdc99b414c0efcf177f690cfc5145b4ef23ca351e8bb",
+          "cdb55a1ca28786d21aa2bdc99b414c0efcf177f690cfc5145b4ef23ca351e8bb"
+        ],
+        "resolved_calls": [
+          "word 2 (0x4dc98): this module @ 0x4ef68 <=> this module @ 0x4ef68"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004dc90.json",
+        "certificate_sha256": "6acce023628001c9655da918990492e73e1b7452f2e31880de1b26baf16978f8"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4dcc4",
+      "size_bytes": 44,
+      "instruction_count": 11,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004dcc4.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004DCC4.c",
+      "source_sha256": "3070e985e6e4542c58d6763e3cb4ce349aedee0a47e05057336a5b5c269c8b7d",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 11,
+        "total_words": 11,
+        "object_sha256s": [
+          "0c23c6ea655744f45df281577d52bbb3bbb7138d3cfc93dd3426528e2b8e580b",
+          "0c23c6ea655744f45df281577d52bbb3bbb7138d3cfc93dd3426528e2b8e580b"
+        ],
+        "resolved_calls": [
+          "word 2 (0x4dccc): this module @ 0x4ef68 <=> this module @ 0x4ef68"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004dcc4.json",
+        "certificate_sha256": "44860c15a9393fada9e83f4208739bf11d6539cf9b6775080e38e4f6f79207f5"
+      }
     },
     {
       "module": "EBOOT",
@@ -3109,6 +3589,60 @@
       },
       "section": ".text",
       "kind": "code"
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4e5b0",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004e5b0.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004E5B0.c",
+      "source_sha256": "d3a4f8ac502fcaf9d159dc206dde7b8d642405cf5c6077243c296b695385873e",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "686590c430000261dfe463fa030604c46153f5a6878d6def5642da707a92956c",
+          "686590c430000261dfe463fa030604c46153f5a6878d6def5642da707a92956c"
+        ],
+        "resolved_calls": [
+          "word 3 (0x4e5bc): this module @ 0x4ef68 <=> this module @ 0x4ef68"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004e5b0.json",
+        "certificate_sha256": "2977e79f2115065970c4c8653333175db078f9cb3f17595f7f2e7644739d3af4"
+      }
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x4e7ac",
+      "size_bytes": 48,
+      "instruction_count": 12,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0004e7ac.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0004E7AC.c",
+      "source_sha256": "9587222dbbab6c770962c487d0ecea458537ed4dc8fdfb7e2418b286447f59c6",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 12,
+        "total_words": 12,
+        "object_sha256s": [
+          "d8a6cfddd7da1b62b120162fc701dd9548a3614e0aabdd95c59d717df6e30bf6",
+          "d8a6cfddd7da1b62b120162fc701dd9548a3614e0aabdd95c59d717df6e30bf6"
+        ],
+        "resolved_calls": [
+          "word 6 (0x4e7c4): this module @ 0x4e708 <=> this module @ 0x4e708"
+        ],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0004e7ac.json",
+        "certificate_sha256": "f776337d8d63a86447f781b438a2d0cd5614041b71d40ef3e4e5d0c47acfe375"
+      }
     },
     {
       "module": "EBOOT",
@@ -4009,6 +4543,31 @@
       },
       "section": ".text",
       "kind": "code"
+    },
+    {
+      "module": "EBOOT",
+      "address": "0x5e748",
+      "size_bytes": 56,
+      "instruction_count": 14,
+      "boundary_status": "EXACT",
+      "section": ".text",
+      "kind": "code",
+      "evidence_path": "decomp/evidence/internal/eboot-0005e748.json#matcher-and-boundary",
+      "source_path": "decomp/src/eboot/func_0005E748.c",
+      "source_sha256": "5c50bf7769c59a5c2342b95fe838b3e21c526e2d6825c46b5a86a5ab4794b0ae",
+      "result": {
+        "status": "MATCHED",
+        "matching_words": 14,
+        "total_words": 14,
+        "object_sha256s": [
+          "aa5e215f78962d4d09920f7d10caef1f2b79dd3bb1c15daf7b27c9d3bb208fab",
+          "aa5e215f78962d4d09920f7d10caef1f2b79dd3bb1c15daf7b27c9d3bb208fab"
+        ],
+        "resolved_calls": [],
+        "data_reference_count": 0,
+        "certificate_path": "decomp/evidence/internal/eboot-0005e748.json",
+        "certificate_sha256": "1be5e04c9f379a7d4d03d2cea879e096dd00fff4f8fd57ff0bc036710e2bb055"
+      }
     },
     {
       "module": "EBOOT",

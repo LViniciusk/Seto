@@ -1,0 +1,135 @@
+{
+  "address": "0x2ade0",
+  "boundary": {
+    "address": "0x2ade0",
+    "ghidra_log_sha256": "fdfd1c0fce555583903cc6390eb05c729f902b9fa5ac844239b8b73672b03355",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 24,
+    "status": "EXACT"
+  },
+  "build_sha256": [
+    "8a3dfa3a91f4ffed0f52e18028dc37ea00f4d263aaf52a6a79015d2c7e8cc862",
+    "8a3dfa3a91f4ffed0f52e18028dc37ea00f4d263aaf52a6a79015d2c7e8cc862"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x2ade0",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002ADE0",
+      "match": {
+        "address": 175584,
+        "candidate": {
+          "location": "symbol 'func_0002ADE0' at section offset 0x0",
+          "path": "build/seto052/coordinator/2ade0/verify-1/func_0002ADE0.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 6,
+        "name": "func_0002ADE0",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 4 (0x2adf0): this module @ 0x2aef0 <=> this module @ 0x2aef0"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 6
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto052/coordinator/2ade0/verify-1/func_0002ADE0.o",
+        "object_sha256": "8a3dfa3a91f4ffed0f52e18028dc37ea00f4d263aaf52a6a79015d2c7e8cc862",
+        "source": "decomp/src/eboot/func_0002ADE0.c",
+        "source_sha256": "db893b7e8fce8107af7f7408b70bce881d671e8252e13c9ab9587bf4cee29039"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002ADE0",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2ade0",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002ADE0",
+      "match": {
+        "address": 175584,
+        "candidate": {
+          "location": "symbol 'func_0002ADE0' at section offset 0x0",
+          "path": "build/seto052/coordinator/2ade0/verify-2/func_0002ADE0.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 6,
+        "name": "func_0002ADE0",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 4 (0x2adf0): this module @ 0x2aef0 <=> this module @ 0x2aef0"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 6
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto052/coordinator/2ade0/verify-2/func_0002ADE0.o",
+        "object_sha256": "8a3dfa3a91f4ffed0f52e18028dc37ea00f4d263aaf52a6a79015d2c7e8cc862",
+        "source": "decomp/src/eboot/func_0002ADE0.c",
+        "source_sha256": "db893b7e8fce8107af7f7408b70bce881d671e8252e13c9ab9587bf4cee29039"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002ADE0",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 24,
+  "source_path": "decomp/src/eboot/func_0002ADE0.c",
+  "source_sha256": "db893b7e8fce8107af7f7408b70bce881d671e8252e13c9ab9587bf4cee29039"
+}
