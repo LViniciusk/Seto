@@ -45,6 +45,30 @@ findings:
 | Worker agent | `seto-decomp-worker` is discovered and its effective policy is restricted in both checkout and campaign worktree: shell/external paths denied; edits limited to candidate C and campaign build paths; AIMemory query/read only |
 | Campaign | Pilot prepared but **not started**. Versioned defaults remain disabled; the ignored R4 profile selects both READY workers, is capped at four total attempts / 30 minutes, and still requires explicit `run --confirm` plus both usage flags |
 
+## Selective quota revalidation
+
+`suspended_quota` is not automatically cleared by model readiness, public auth,
+zero-cost metadata, campaign `resume`, or the passage of time. A finite,
+provider-supplied `Retry-After` (bounded to one year) on an explicit quota failure
+is retained as `resume_at`; until it expires, even an operator confirmation is
+rejected. After expiry (or when no
+reliable reset time was supplied), `revalidate-quota --scope ...` reports whether
+the scope is eligible for an explicit check. It performs no provider call:
+
+```powershell
+py -3.12 scripts/decomp_campaign.py revalidate-quota --scope opencode:alluka
+py -3.12 scripts/decomp_campaign.py revalidate-quota --scope opencode:alluka --confirm-available --evidence-note "provider usage page confirms quota reset"
+```
+
+The mutating form is limited to the configured remote DeepSeek scopes
+`opencode:alluka` and `opencode:kita-server`, requires a fresh explicit
+operator confirmation and a short evidence note, and reactivates only that
+provider row in one `BEGIN IMMEDIATE` transaction. It preserves the quota-failure
+reason/history, attempts, candidate state, leases, stop flag, deadlines, and every
+other scope. It does not probe, start a model, or alter usage gates. Do not use it
+until the actual provider quota has been independently verified; a READY worker
+or a zero-cost model listing is not quota evidence.
+
 OpenCode's [provider guide](https://opencode.ai/v2/docs/providers) distinguishes
 ChatGPT-plan sign-in from API-key usage; its [CLI provider guide](https://opencode.ai/v2/docs/cli/providers/)
 documents saved OAuth credentials and environment connections. OpenCode 2.1.4's

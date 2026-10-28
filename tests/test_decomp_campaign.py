@@ -11,6 +11,7 @@ import time
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,6 +26,7 @@ from decomp_campaign import (  # noqa: E402
     InternalClaim,
     Failure,
     FailureKind,
+    QuotaRevalidationEvidence,
     Worker,
     campaign_build_path,
     classify_failure,
@@ -756,6 +758,64 @@ def test_internal_dispatch_skips_suspended_quota_scopes(tmp_path: Path) -> None:
     )
     assert result["attempted"] == 1
     assert worker_calls == ["available"]
+    assert campaign_store.total_attempt_count() == 1
+
+
+def test_internal_runner_uses_a_scope_only_after_explicit_quota_revalidation(
+    tmp_path: Path,
+) -> None:
+    from internal_campaign import InternalCampaignRunner
+
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [InternalFunction("EBOOT", 0x3100, 8, "UNVERIFIED", "build/manifest.json")]
+    )
+    with campaign_store._connect() as db:
+        db.execute(
+            """UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'
+               WHERE module='EBOOT' AND address='0x3100'"""
+        )
+        db.execute(
+            """INSERT INTO providers(provider,status,resume_at,reason,updated_at)
+               VALUES('opencode:alluka','suspended_quota',NULL,'quota_exhausted',?)""",
+            (time.time(),),
+        )
+
+    worker_calls: list[str] = []
+
+    def worker(claim: InternalClaim, begin_attempt, _deadline: float):
+        begin_attempt(claim)
+        worker_calls.append(claim.worker_id)
+        return {"status": "SOURCE_READY", "source_sha256": "c" * 64}
+
+    runner = InternalCampaignRunner(
+        internal_store,
+        boundary=lambda claim, _deadline: claim,
+        worker=worker,
+        matcher=lambda _claim, _result, _deadline: {
+            "status": "NONMATCHING",
+            "source_sha256": "c" * 64,
+            "matching_words": 0,
+            "total_words": 2,
+        },
+        certifier=lambda _claim, _result: {"certified": False},
+        lease_seconds=60,
+        max_attempts_per_candidate=2,
+    )
+    workers = [("remote-alluka", "opencode:alluka", "opencode")]
+    evidence_time = time.time()
+    campaign_store.revalidate_quota_scope(
+        "opencode:alluka", _quota_evidence("opencode:alluka", evidence_time), now=evidence_time
+    )
+    resumed = runner.run_segment(
+        workers,
+        max_total_attempts=1,
+        max_attempts_this_segment=1,
+        deadline=time.monotonic() + 10,
+    )
+    assert resumed["attempted"] == 1
+    assert worker_calls == ["remote-alluka"]
     assert campaign_store.total_attempt_count() == 1
 
 
@@ -1732,6 +1792,224 @@ def _provider_state_snapshot(store: CampaignStore) -> list[tuple[object, ...]]:
                 "SELECT provider,status,resume_at,reason,updated_at FROM providers ORDER BY provider"
             )
         ]
+
+
+def _quota_evidence(
+    scope: str,
+    now: float,
+    *,
+    available: bool = True,
+    source: str = "operator_confirmation",
+    note: str = "provider quota page confirms a reset",
+) -> QuotaRevalidationEvidence:
+    return QuotaRevalidationEvidence(
+        scope=scope,
+        source=source,
+        available=available,
+        observed_at=now,
+        note=note,
+    )
+
+
+def test_quota_revalidation_requires_fresh_availability_evidence(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.record_event("quota_exhausted", provider="opencode:alluka")
+    with store._connect() as db:
+        db.execute(
+            """INSERT INTO providers(provider,status,resume_at,reason,updated_at)
+               VALUES('opencode:alluka','suspended_quota',NULL,'quota_exhausted',100)"""
+        )
+    before = _provider_state_snapshot(store)
+    events_before = store.list_recent_events()
+
+    with pytest.raises(ValueError, match="evidence"):
+        store.revalidate_quota_scope("opencode:alluka", None, now=100)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="not confirmed available"):
+        store.revalidate_quota_scope(
+            "opencode:alluka", _quota_evidence("opencode:alluka", 100, available=False), now=100
+        )
+    with pytest.raises(ValueError, match="operator confirmation"):
+        store.revalidate_quota_scope(
+            "opencode:alluka",
+            _quota_evidence("opencode:alluka", 100, source="model_readiness"),
+            now=100,
+        )
+    with pytest.raises(ValueError, match="stale or has an invalid timestamp"):
+        store.revalidate_quota_scope(
+            "opencode:alluka", _quota_evidence("opencode:alluka", 100 - 901), now=100
+        )
+    with pytest.raises(ValueError, match="Alluka/Kita"):
+        store.revalidate_quota_scope(
+            "openai", _quota_evidence("openai", 100), now=100
+        )
+
+    assert _provider_state_snapshot(store) == before
+    assert store.list_recent_events() == events_before
+    assert store.total_attempt_count() == 0
+
+
+def test_quota_revalidation_cli_is_read_only_without_explicit_confirmation() -> None:
+    parser = decomp_campaign_module.build_parser()
+    args = parser.parse_args(
+        ["revalidate-quota", "--scope", "opencode:alluka"]
+    )
+    assert args.confirm_available is False
+    assert args.evidence_note is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["revalidate-quota", "--scope", "openai"])
+
+
+def test_quota_retry_after_requires_revalidation_after_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000")])
+    claim = store.claim_next(
+        "alluka-worker", "opencode:alluka", reserve_only=True, now=100
+    )
+    assert claim is not None
+    monkeypatch.setattr(decomp_campaign_module.time, "time", lambda: 100.0)
+    failure = classify_failure(
+        1, "", "insufficient_quota: quota exceeded\nRetry-After: 3600"
+    )
+    assert failure.kind is FailureKind.QUOTA_EXHAUSTED
+    assert failure.retry_after_seconds == 3600
+    store.release_preparation(claim, failure=failure)
+
+    assert store.provider_status("opencode:alluka") == "suspended_quota"
+    assert store.provider_resume_at("opencode:alluka") == 3700
+    assert store.provider_quota_revalidation_state(
+        "opencode:alluka", now=3699
+    )["eligible"] is False
+    assert store.provider_quota_revalidation_state(
+        "opencode:alluka", now=3700
+    )["eligible"] is True
+    assert store.claim_next("alluka-worker", "opencode:alluka", now=3700) is None
+
+    with pytest.raises(ValueError, match="Retry-After has not elapsed"):
+        store.revalidate_quota_scope(
+            "opencode:alluka", _quota_evidence("opencode:alluka", 3699), now=3699
+        )
+    result = store.revalidate_quota_scope(
+        "opencode:alluka", _quota_evidence("opencode:alluka", 3700), now=3700
+    )
+    assert result == {
+        "provider": "opencode:alluka",
+        "status": "active",
+        "changed": True,
+    }
+    assert store.provider_status("opencode:alluka") == "active"
+    assert store.provider_resume_at("opencode:alluka") is None
+    with store._connect() as db:
+        provider_reason = db.execute(
+            "SELECT reason FROM providers WHERE provider='opencode:alluka'"
+        ).fetchone()[0]
+    assert "quota_exhausted" in provider_reason
+    assert "provider_quota_revalidated" in [event["kind"] for event in store.list_recent_events()]
+    assert store.claim_next("alluka-worker", "opencode:alluka", now=3701) is not None
+
+
+def test_quota_retry_after_from_started_attempt_is_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1100")])
+    claim = store.claim_next("kita-worker", "opencode:kita-server", now=500)
+    assert claim is not None
+    monkeypatch.setattr(decomp_campaign_module.time, "time", lambda: 500.0)
+
+    store.fail(
+        claim,
+        Failure(FailureKind.QUOTA_EXHAUSTED, retry_after_seconds=7200),
+    )
+
+    assert store.provider_status("opencode:kita-server") == "suspended_quota"
+    assert store.provider_resume_at("opencode:kita-server") == 7700
+    assert store.total_attempt_count() == 1
+    attempt = store.list_attempts()[0]
+    assert attempt["failure_kind"] == "quota_exhausted"
+    assert attempt["retry_after"] == 7200
+
+
+def test_quota_revalidation_is_scope_local_and_preserves_attempts_and_leases(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000")])
+    with store._connect() as db:
+        db.executemany(
+            """INSERT INTO providers(provider,status,resume_at,reason,updated_at)
+               VALUES(?,?,NULL,?,100)""",
+            [
+                ("opencode:alluka", "suspended_quota", "quota_exhausted"),
+                ("opencode:kita-server", "suspended_quota", "quota_exhausted"),
+                ("openai", "active", "agent_error"),
+            ],
+        )
+    store.record_event("quota_exhausted", provider="opencode:alluka")
+    live_claim = store.claim_next("openai-worker", "openai", now=100)
+    assert live_claim is not None
+    live_task_before = store.get_task(live_claim.address)
+    attempts_before = store.list_attempts()
+    total_before = store.total_attempt_count()
+
+    store.revalidate_quota_scope(
+        "opencode:alluka", _quota_evidence("opencode:alluka", 101), now=101
+    )
+
+    assert store.provider_status("opencode:alluka") == "active"
+    assert store.provider_status("opencode:kita-server") == "suspended_quota"
+    assert store.provider_status("openai") == "active"
+    assert store.get_task(live_claim.address) == live_task_before
+    assert store.list_attempts() == attempts_before
+    assert store.total_attempt_count() == total_before
+    events = store.list_recent_events()
+    assert sum(event["kind"] == "quota_exhausted" for event in events) == 1
+    assert sum(event["kind"] == "provider_quota_revalidated" for event in events) == 1
+
+
+def test_quota_revalidation_serializes_with_claims_during_active_campaign(
+    tmp_path: Path,
+) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    store.seed([candidate("0x1000"), candidate("0x2000"), candidate("0x3000")])
+    with store._connect() as db:
+        db.execute(
+            """INSERT INTO providers(provider,status,resume_at,reason,updated_at)
+               VALUES('opencode:alluka','suspended_quota',NULL,'quota_exhausted',100)"""
+        )
+    live_claim = store.claim_next("openai-worker", "openai", now=100)
+    assert live_claim is not None
+    live_task_before = store.get_task(live_claim.address)
+    total_before = store.total_attempt_count()
+    barrier = threading.Barrier(3)
+
+    def revalidate() -> dict[str, Any]:
+        barrier.wait(timeout=5)
+        return store.revalidate_quota_scope(
+            "opencode:alluka", _quota_evidence("opencode:alluka", 101), now=101
+        )
+
+    def claim() -> Claim | None:
+        barrier.wait(timeout=5)
+        return store.claim_next("alluka-worker", "opencode:alluka", now=101)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        revalidation_future = pool.submit(revalidate)
+        claim_future = pool.submit(claim)
+        barrier.wait(timeout=5)
+        revalidation = revalidation_future.result(timeout=10)
+        alluka_claim = claim_future.result(timeout=10)
+
+    assert revalidation["changed"] is True
+    assert store.provider_status("opencode:alluka") == "active"
+    assert store.get_task(live_claim.address) == live_task_before
+    if alluka_claim is None:
+        assert store.total_attempt_count() == total_before
+    else:
+        assert alluka_claim.address != live_claim.address
+        assert store.get_task(alluka_claim.address)["owner"] == "alluka-worker"
+        assert store.total_attempt_count() == total_before + 1
 
 
 def test_resume_clears_stop_without_changing_any_provider_state(tmp_path: Path) -> None:
