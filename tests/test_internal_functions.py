@@ -307,7 +307,9 @@ def test_import_stubs_are_technical_matches_not_decompiled_code() -> None:
         export_metrics["eboot_matched_instructions"]
         + export_metrics["prx_matched_instructions"]
     )
+    assert metrics["code_matched_instructions"] >= 3000
     assert metrics["code_matched_instructions"] == expected_code_instructions
+    assert metrics["import_stub_matched_instructions"] == 184
     assert metrics["import_stub_matched_instructions"] == expected_import_stub_instructions
     assert metrics["technical_matched_instructions"] == (
         expected_code_instructions + expected_import_stub_instructions

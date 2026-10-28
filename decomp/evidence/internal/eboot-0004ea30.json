@@ -1,0 +1,135 @@
+{
+  "address": "0x4ea30",
+  "boundary": {
+    "address": "0x4ea30",
+    "ghidra_log_sha256": "c7597e7a4e2e345f76de97dee0b9cd98a541752f74628beedaa18eaba121b0cd",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 40,
+    "status": "EXACT"
+  },
+  "build_sha256": [
+    "d1b98cdacef1e65fe47ab32b6902f3ef10afe27e9fbacac40876f2876fd9d1f7",
+    "d1b98cdacef1e65fe47ab32b6902f3ef10afe27e9fbacac40876f2876fd9d1f7"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x4ea30",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0004EA30",
+      "match": {
+        "address": 322096,
+        "candidate": {
+          "location": "symbol 'func_0004EA30' at section offset 0x0",
+          "path": "build/seto053/coordinator/4ea30/verify-1/func_0004EA30.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 10,
+        "name": "func_0004EA30",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 5 (0x4ea44): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto053/coordinator/4ea30/verify-1/func_0004EA30.o",
+        "object_sha256": "d1b98cdacef1e65fe47ab32b6902f3ef10afe27e9fbacac40876f2876fd9d1f7",
+        "source": "decomp/src/eboot/func_0004EA30.c",
+        "source_sha256": "28601f370c2530bb2a7d29fed2cfb49fc9bbaf616f453217b22fd19bd507684c"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0004EA30",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x4ea30",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0004EA30",
+      "match": {
+        "address": 322096,
+        "candidate": {
+          "location": "symbol 'func_0004EA30' at section offset 0x0",
+          "path": "build/seto053/coordinator/4ea30/verify-2/func_0004EA30.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 10,
+        "name": "func_0004EA30",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 5 (0x4ea44): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 10
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto053/coordinator/4ea30/verify-2/func_0004EA30.o",
+        "object_sha256": "d1b98cdacef1e65fe47ab32b6902f3ef10afe27e9fbacac40876f2876fd9d1f7",
+        "source": "decomp/src/eboot/func_0004EA30.c",
+        "source_sha256": "28601f370c2530bb2a7d29fed2cfb49fc9bbaf616f453217b22fd19bd507684c"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0004EA30",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 40,
+  "source_path": "decomp/src/eboot/func_0004EA30.c",
+  "source_sha256": "28601f370c2530bb2a7d29fed2cfb49fc9bbaf616f453217b22fd19bd507684c"
+}

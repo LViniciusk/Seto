@@ -1,0 +1,149 @@
+{
+  "address": "0x2adf8",
+  "boundary": {
+    "address": "0x2adf8",
+    "ghidra_log_sha256": "19913499577a0beca95349921be3861032b26130bf72ffa241bf077aa8af5ded",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 248,
+    "status": "EXACT"
+  },
+  "build_sha256": [
+    "82817af73a65670d4d73a8207d0ec90e4cb7d30e0166a7c80cf2b8376300c115",
+    "82817af73a65670d4d73a8207d0ec90e4cb7d30e0166a7c80cf2b8376300c115"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x2adf8",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002ADF8",
+      "match": {
+        "address": 175608,
+        "candidate": {
+          "location": "symbol 'func_0002ADF8' at section offset 0x0",
+          "path": "build/seto053/coordinator/2adf8/verify-1/func_0002ADF8.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 62,
+        "name": "func_0002ADF8",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 13 (0x2ae2c): this module @ 0x2b02c <=> this module @ 0x2b02c",
+          "word 15 (0x2ae34): this module @ 0x2b3f0 <=> this module @ 0x2b3f0",
+          "word 22 (0x2ae50): this module @ 0x2b920 <=> this module @ 0x2b920",
+          "word 27 (0x2ae64): IoFileMgrForUser/0x109F50BC (stub 0x6ae1c, target 0x6ae1c) <=> IoFileMgrForUser/0x109F50BC (stub 0x6ae1c, symbol 'func_0006AE1C' -> 0x6ae1c)",
+          "word 39 (0x2ae94): IoFileMgrForUser/0x27EB27B8 (stub 0x6ae34, target 0x6ae34) <=> IoFileMgrForUser/0x27EB27B8 (stub 0x6ae34, symbol 'func_0006AE34' -> 0x6ae34)",
+          "word 43 (0x2aea4): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)",
+          "word 49 (0x2aebc): IoFileMgrForUser/0x6A638D83 (stub 0x6ad7c, target 0x6ad7c) <=> IoFileMgrForUser/0x6A638D83 (stub 0x6ad7c, symbol 'func_0006AD7C' -> 0x6ad7c)",
+          "word 52 (0x2aec8): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 62
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto053/coordinator/2adf8/verify-1/func_0002ADF8.o",
+        "object_sha256": "82817af73a65670d4d73a8207d0ec90e4cb7d30e0166a7c80cf2b8376300c115",
+        "source": "decomp/src/eboot/func_0002ADF8.c",
+        "source_sha256": "f60b94fa9c628451b0fa84e37fd1830e8f20b022aab21a35f9b2853cdd9c8914"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002ADF8",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x2adf8",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0002ADF8",
+      "match": {
+        "address": 175608,
+        "candidate": {
+          "location": "symbol 'func_0002ADF8' at section offset 0x0",
+          "path": "build/seto053/coordinator/2adf8/verify-2/func_0002ADF8.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 62,
+        "name": "func_0002ADF8",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 13 (0x2ae2c): this module @ 0x2b02c <=> this module @ 0x2b02c",
+          "word 15 (0x2ae34): this module @ 0x2b3f0 <=> this module @ 0x2b3f0",
+          "word 22 (0x2ae50): this module @ 0x2b920 <=> this module @ 0x2b920",
+          "word 27 (0x2ae64): IoFileMgrForUser/0x109F50BC (stub 0x6ae1c, target 0x6ae1c) <=> IoFileMgrForUser/0x109F50BC (stub 0x6ae1c, symbol 'func_0006AE1C' -> 0x6ae1c)",
+          "word 39 (0x2ae94): IoFileMgrForUser/0x27EB27B8 (stub 0x6ae34, target 0x6ae34) <=> IoFileMgrForUser/0x27EB27B8 (stub 0x6ae34, symbol 'func_0006AE34' -> 0x6ae34)",
+          "word 43 (0x2aea4): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)",
+          "word 49 (0x2aebc): IoFileMgrForUser/0x6A638D83 (stub 0x6ad7c, target 0x6ad7c) <=> IoFileMgrForUser/0x6A638D83 (stub 0x6ad7c, symbol 'func_0006AD7C' -> 0x6ad7c)",
+          "word 52 (0x2aec8): IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, target 0x6ad94) <=> IoFileMgrForUser/0x810C4BC3 (stub 0x6ad94, symbol 'func_0006AD94' -> 0x6ad94)"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 62
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto053/coordinator/2adf8/verify-2/func_0002ADF8.o",
+        "object_sha256": "82817af73a65670d4d73a8207d0ec90e4cb7d30e0166a7c80cf2b8376300c115",
+        "source": "decomp/src/eboot/func_0002ADF8.c",
+        "source_sha256": "f60b94fa9c628451b0fa84e37fd1830e8f20b022aab21a35f9b2853cdd9c8914"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0002ADF8",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 248,
+  "source_path": "decomp/src/eboot/func_0002ADF8.c",
+  "source_sha256": "f60b94fa9c628451b0fa84e37fd1830e8f20b022aab21a35f9b2853cdd9c8914"
+}

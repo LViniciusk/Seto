@@ -7905,3 +7905,108 @@ copiado por `Connection.backup()` para
 as alterações locais manteve `integrity_check=ok`, 217 tentativas export + 2
 internas, zero leases ativos e `stop_requested=0`. A cobertura real permanece
 2.316 instruções MATCHED; faltam 184 para 2.500.
+
+## SETO-DECOMP-053 — decompilação real MATCHED até 3.000 instruções
+
+O branch `feat/seto-decomp-053` parte da `main` com o PR #53 integrado. A
+baseline medida no catálogo era **2.554 instruções reais MATCHED**: 368 nos
+exports do EBOOT, 1.274 nas funções internas do EBOOT e 912 nos exports dos PRXs.
+As 184 instruções de 92 import stubs continuam fora da meta — são cobertura
+técnica, não código decompilado. Esta rodada certificou **28 funções internas**
+(`.text` do EBOOT) e **494 instruções** reais, elevando o total para **3.048**,
+distribuídas em 209 funções de código. A meta de 3.000 foi atingida com margem
+de 48 instruções; nenhuma estimativa, stub, assembly inline ou matching parcial
+foi contado.
+
+As funções certificadas, com tamanho e palavras comparadas:
+
+| Endereço | Bytes | Palavras |
+|---|---:|---:|
+| `0x2ADF8` | 248 | 62 |
+| `0x3B49C` | 180 | 45 |
+| `0x3B550` | 60 | 15 |
+| `0x3B58C` | 56 | 14 |
+| `0x3B5C4` | 48 | 12 |
+| `0x3B5F4` | 60 | 15 |
+| `0x3B660` | 108 | 27 |
+| `0x3B6FC` | 60 | 15 |
+| `0x3B764` | 60 | 15 |
+| `0x3B7D0` | 96 | 24 |
+| `0x3BB1C` | 76 | 19 |
+| `0x3BB68` | 84 | 21 |
+| `0x3C424` | 84 | 21 |
+| `0x3C4A8` | 40 | 10 |
+| `0x3C4D0` | 72 | 18 |
+| `0x3C544` | 40 | 10 |
+| `0x3C7B8` | 60 | 15 |
+| `0x3C7F4` | 44 | 11 |
+| `0x3F3A4` | 68 | 17 |
+| `0x48518` | 72 | 18 |
+| `0x49C10` | 68 | 17 |
+| `0x4A424` | 40 | 10 |
+| `0x4EA30` | 40 | 10 |
+| `0x59048` | 48 | 12 |
+| `0x5A204` | 40 | 10 |
+| `0x5A22C` | 40 | 10 |
+| `0x5A298` | 40 | 10 |
+| `0x614EC` | 44 | 11 |
+
+Cada função foi produzida em C, compilada duas vezes de forma independente com
+`mwccpsp 3.0.1 build 219` (`-O4,p -sdatathreshold 0`) e comparada pelo matcher
+completo. O certificado só foi gravado quando os dois objetos tiveram o mesmo
+SHA-256, todas as palavras coincidiram e nenhuma relocation ficou pendente ou
+divergente. Todas as 28 têm boundary `EXACT`; funções sem boundary `EXACT`
+próprio não foram certificadas. `scripts/internal_functions.py validate --full`
+reauditou os relatórios armazenados com `problems=0`.
+
+### Padrões de codegen confirmados
+
+* Bitfields de um byte (`unsigned char flag0:1; mode:2; flag3:1; reserved:3;
+  flag7:1;`) reproduzem as sequências `li mask` / `and` / `or` e os acessos
+  `lbu`/`andi`/`sb` das famílias em `0x3B5xx`–`0x3B9xx`; `low:7` + `high:1`
+  cobre o segundo byte.
+* Em `0x3B49C`, `entry->low + 0xFF` gera o mesmo `addiu ...,0xFF` do alvo porque
+  o campo é mascarado em 7 bits.
+* A ordem dos ramos controla o branch com delay slot: `if (x != 0) A; else B;`
+  produz `beql`/`bnel` com o bloco "zero" no fim, e `if (p == 0) return d; return
+  load;` gera `lb`/`lbu` no delay slot de `bnel`.
+* `if (value >= 0) return f(value); return -1;` gera `bltzl` + `addiu v0,zero,-1`.
+* Ternário e `if/else` com atribuição única são estruturalmente equivalentes
+  para o MWCC; a forma escolhida muda apenas a ordem dos blocos.
+
+### Candidatos preservados
+
+`0x3B3DC` (48) tem corpo correto e falha só em `slti $at` + `bnel $at`;
+`0x4D240` (28) diverge na polaridade do guard (`bgezl`/`b`); `0x9BB0` (58,
+`memchr`) e `0x9D1C` (67, `memcpy`) têm boundary e decompilação `EXACT` prontos.
+`0x3F94`, `0x1B560`, `0x9B70`, `0x5E50`, `0x5B88`, `0x3B8E0` e `0x17298`
+continuam sem C viável pelas limitações já registradas (agendamento, CSE de
+`lui`, `movz`, `mfc1`/`ins`, `ext`, `seh`, ordem do delay slot). Nenhum deles foi
+promovido.
+
+### Validação
+
+Em Windows/Python 3.12: **1100 passed, 44 skipped**; `compileall` sem erros;
+`validate --metadata-only` e `validate --full` com `problems=0`;
+`git diff --check` limpo. O piso de `tests/test_internal_functions.py` subiu de
+2.554 para **3.000** instruções reais, mantendo a soma dinâmica do catálogo e o
+piso independente dos import stubs.
+
+### Correção pós-auditoria do PR #54
+
+Os 28 certificados passaram a carregar o bloco `boundary` com `status: EXACT`,
+módulo, endereço, seção, tamanho e `ghidra_log_sha256`, e as 19 entradas que não
+tinham `ghidra_log_path` foram completadas. Cada log Ghidra foi revalidado contra
+o EBOOT revisado antes de ser aceito: intervalo dentro de `.text`, início/fim
+coerentes, contagem de instruções igual ao intervalo, listagem contígua,
+`SETO_BOUNDARY_STATUS=EXACT`, `SETO_DECOMP_STATUS=OK` e SHA-256 recalculado. Nenhum
+hash ou boundary foi inferido; todos os logs já existentes foram confirmados e
+os caminhos ficaram relativos ao repositório.
+
+`func_0003C7F4.c` e `func_000614EC.c` foram corrigidos para a assinatura real do
+callee: `char *func_0003C65C(void)`. O retorno é tratado como deslocamento de
+ponteiro de 32 bits (`base + (unsigned int)offset + 3`), coerente com o `addu`
+observado no original. As duas funções foram recompiladas em dois builds MWCC
+independentes e continuam `MATCHED` com os mesmos objetos (SHA-256
+`11C0301A…` e `2856EAA7…`), confirmando que a correção semântica não alterou o
+codegen.
