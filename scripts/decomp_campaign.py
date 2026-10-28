@@ -2448,17 +2448,13 @@ class CampaignStore:
             row = db.execute("SELECT value FROM metadata WHERE key='stop_requested'").fetchone()
             return bool(row and row[0] == "1")
 
-    def resume(self, *, reset_providers: bool = True) -> None:
+    def resume(self) -> None:
+        """Clear the campaign stop latch; provider availability is independent state."""
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "UPDATE metadata SET value='0' WHERE key='stop_requested'"
             )
-            if reset_providers:
-                db.execute(
-                    "UPDATE providers SET status='active',resume_at=NULL,reason=NULL,updated_at=?",
-                    (time.time(),),
-                )
             db.commit()
 
     def retry_blocked_addresses(
@@ -10220,7 +10216,7 @@ def main(argv: list[str] | None = None) -> int:
             if not source_worktrees:
                 raise ValueError("no existing known campaign worktrees contain recovery evidence")
             if store.stop_requested():
-                store.resume(reset_providers=False)
+                store.resume()
             limits = config["limits"]
             recovery_runner = CampaignRunner(
                 store,
@@ -10303,7 +10299,7 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     campaign_id=str(config.get("campaign", {}).get("id", "")),
                 )
-                store.resume(reset_providers=False)
+                store.resume()
                 recovered = 0
             elif args.retry_address is not None:
                 retried_addresses = _normalize_candidate_addresses(

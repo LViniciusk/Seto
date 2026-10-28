@@ -1707,6 +1707,46 @@ def test_resume_does_not_release_a_live_claim(tmp_path: Path) -> None:
     assert store.claim_next("worker-2", "deepseek") is None
 
 
+def _seed_operational_provider_states(store: CampaignStore) -> list[tuple[object, ...]]:
+    states = [
+        ("openai", "active", None, "operator-active", 101.0),
+        ("opencode", "suspended_quota", None, "quota_exhausted", 102.0),
+        ("opencode:alluka", "blocked_auth", 200.0, "auth_pending", 103.0),
+        ("opencode:kita-server", "blocked", None, "manual_block", 104.0),
+        ("provider-rate-test", "rate_limited", 300.0, "http_429", 105.0),
+        ("provider-network-test", "network_backoff", 400.0, "connection_reset", 106.0),
+    ]
+    with store._connect() as db:
+        db.executemany(
+            "INSERT INTO providers(provider,status,resume_at,reason,updated_at) VALUES(?,?,?,?,?)",
+            states,
+        )
+    return states
+
+
+def _provider_state_snapshot(store: CampaignStore) -> list[tuple[object, ...]]:
+    with store._connect() as db:
+        return [
+            tuple(row)
+            for row in db.execute(
+                "SELECT provider,status,resume_at,reason,updated_at FROM providers ORDER BY provider"
+            )
+        ]
+
+
+def test_resume_clears_stop_without_changing_any_provider_state(tmp_path: Path) -> None:
+    store = CampaignStore(tmp_path / "campaign.sqlite3")
+    _seed_operational_provider_states(store)
+    before = _provider_state_snapshot(store)
+    store.request_stop()
+    assert store.stop_requested() is True
+
+    store.resume()
+
+    assert store.stop_requested() is False
+    assert _provider_state_snapshot(store) == before
+
+
 @pytest.mark.parametrize(
     ("returncode", "stderr", "expected"),
     [
@@ -7726,6 +7766,77 @@ def test_resume_main_retries_only_the_requested_blocked_address(
         assert task["session_id"] == snapshots[address][2]
         assert json.dumps(task["checkpoint"], sort_keys=True) == snapshots[address][0]
         assert json.dumps(task["best_result"], sort_keys=True) == snapshots[address][1]
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ("recover-expired", "retry-address", "retry-blocked", "reopen-candidate"),
+)
+def test_resume_cli_modes_preserve_all_provider_states(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    database = tmp_path / "campaign.sqlite3"
+    inventory_candidates = [candidate("0x1000")]
+    store = CampaignStore(database)
+    store.seed(inventory_candidates)
+    _seed_operational_provider_states(store)
+    with store._connect() as db:
+        if mode == "recover-expired":
+            now = time.time()
+            db.execute(
+                """UPDATE candidates SET status='running',owner='worker',provider='openai',
+                   attempt_count=1,lease_until=?,session_id='ses_expired' WHERE address='0x1000'""",
+                (now - 5,),
+            )
+            db.execute(
+                """INSERT INTO attempts(address,attempt_number,worker_id,provider,session_id,
+                   started_at,outcome) VALUES('0x1000',1,'worker','openai','ses_expired',?,'running')""",
+                (now - 10,),
+            )
+        elif mode in {"retry-address", "retry-blocked"}:
+            db.execute(
+                "UPDATE candidates SET status='blocked',attempt_count=1 WHERE address='0x1000'"
+            )
+        else:
+            db.execute(
+                """UPDATE candidates SET status='stalled',attempt_count=1,size_bytes=16,
+                   boundary_status='EXACT' WHERE address='0x1000'"""
+            )
+    before = _provider_state_snapshot(store)
+    store.request_stop()
+
+    config = {
+        "limits": {"max_attempts_per_candidate": 4},
+        "campaign": {"id": "SETO-DECOMP-051"},
+    }
+    monkeypatch.setattr(decomp_campaign_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "_config_paths",
+        lambda *_args: (tmp_path / "inventory.json", database),
+    )
+    monkeypatch.setattr(
+        decomp_campaign_module,
+        "load_inventory",
+        lambda _path: (inventory_candidates, {}),
+    )
+    monkeypatch.setattr(decomp_campaign_module, "_print_json", lambda _value: None)
+
+    arguments = {
+        "recover-expired": ["--recover-expired"],
+        "retry-address": ["--retry-address", "0x1000"],
+        "retry-blocked": ["--retry-blocked"],
+        "reopen-candidate": [
+            "--reopen-candidate",
+            "0x1000=verified local source evidence changed the hypothesis",
+        ],
+    }[mode]
+    assert decomp_campaign_module.main(
+        ["--config", str(tmp_path / "local.toml"), "resume", *arguments]
+    ) == 0
+
+    assert _provider_state_snapshot(store) == before
+    assert store.stop_requested() is False
 
 
 def test_resume_retry_modes_never_reenable_certified_baseline_rows(
