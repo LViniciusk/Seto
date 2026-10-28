@@ -1,0 +1,141 @@
+{
+  "address": "0x4d2b0",
+  "boundary": {
+    "address": "0x4d2b0",
+    "ghidra_log_sha256": "50f052d99be73da105b65c4024710c1e3417343c8ba0118d28c06a1bbc24466c",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 56,
+    "status": "EXACT"
+  },
+  "build_sha256": [
+    "0a52207f96cb4898683b4f70a8eea4aa661209c5b188326d73698f3ca48ea54c",
+    "0a52207f96cb4898683b4f70a8eea4aa661209c5b188326d73698f3ca48ea54c"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x4d2b0",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0004D2B0",
+      "match": {
+        "address": 316080,
+        "candidate": {
+          "location": "symbol 'func_0004D2B0' at section offset 0x0",
+          "path": "build/seto052/coordinator/4d2b0/verify-1/func_0004D2B0.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 14,
+        "name": "func_0004D2B0",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 2 (0x4d2b8): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 4 (0x4d2c0): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 6 (0x4d2c8): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 8 (0x4d2d0): this module @ 0x5537c <=> this module @ 0x5537c"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 14
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto052/coordinator/4d2b0/verify-1/func_0004D2B0.o",
+        "object_sha256": "0a52207f96cb4898683b4f70a8eea4aa661209c5b188326d73698f3ca48ea54c",
+        "source": "decomp/src/eboot/func_0004D2B0.c",
+        "source_sha256": "9eb2148a2998e9735e3d3420b7cb50c70c4a0eb17b0346dfea3b452b8b1e5d3c"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0004D2B0",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x4d2b0",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0004D2B0",
+      "match": {
+        "address": 316080,
+        "candidate": {
+          "location": "symbol 'func_0004D2B0' at section offset 0x0",
+          "path": "build/seto052/coordinator/4d2b0/verify-2/func_0004D2B0.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 14,
+        "name": "func_0004D2B0",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 2 (0x4d2b8): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 4 (0x4d2c0): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 6 (0x4d2c8): this module @ 0x5537c <=> this module @ 0x5537c",
+          "word 8 (0x4d2d0): this module @ 0x5537c <=> this module @ 0x5537c"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 14
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto052/coordinator/4d2b0/verify-2/func_0004D2B0.o",
+        "object_sha256": "0a52207f96cb4898683b4f70a8eea4aa661209c5b188326d73698f3ca48ea54c",
+        "source": "decomp/src/eboot/func_0004D2B0.c",
+        "source_sha256": "9eb2148a2998e9735e3d3420b7cb50c70c4a0eb17b0346dfea3b452b8b1e5d3c"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0004D2B0",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 56,
+  "source_path": "decomp/src/eboot/func_0004D2B0.c",
+  "source_sha256": "9eb2148a2998e9735e3d3420b7cb50c70c4a0eb17b0346dfea3b452b8b1e5d3c"
+}

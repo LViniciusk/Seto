@@ -1,0 +1,135 @@
+{
+  "address": "0x3c518",
+  "boundary": {
+    "address": "0x3c518",
+    "ghidra_log_sha256": "c0218a556d4b8a72d4c06dbb37d10b7b19579623f542f15cb9a8192d752d5950",
+    "module": "EBOOT",
+    "section": ".text",
+    "size_bytes": 44,
+    "status": "EXACT"
+  },
+  "build_sha256": [
+    "72b50aced9dc6c1fb35b97c1348124f9c0d47575d5015610053b6984e5505f1a",
+    "72b50aced9dc6c1fb35b97c1348124f9c0d47575d5015610053b6984e5505f1a"
+  ],
+  "deterministic_match": true,
+  "independent_builds": 2,
+  "module": "EBOOT",
+  "reports": [
+    {
+      "address": "0x3c518",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0003C518",
+      "match": {
+        "address": 247064,
+        "candidate": {
+          "location": "symbol 'func_0003C518' at section offset 0x0",
+          "path": "build/seto052/coordinator/3c518/verify-1/func_0003C518.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 11,
+        "name": "func_0003C518",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 2 (0x3c520): this module @ 0x3c424 <=> this module @ 0x3c424"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 11
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto052/coordinator/3c518/verify-1/func_0003C518.o",
+        "object_sha256": "72b50aced9dc6c1fb35b97c1348124f9c0d47575d5015610053b6984e5505f1a",
+        "source": "decomp/src/eboot/func_0003C518.c",
+        "source_sha256": "faadba9432affacec5f6bf3a2d8200fc72ecbbc124b69fa4b4f2787951018e89"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0003C518",
+      "verified_decompilation": true
+    },
+    {
+      "address": "0x3c518",
+      "equivalence": "function equivalence with canonically resolved relocations",
+      "evidence": "compiled-object",
+      "exit_code": 0,
+      "function": "func_0003C518",
+      "match": {
+        "address": 247064,
+        "candidate": {
+          "location": "symbol 'func_0003C518' at section offset 0x0",
+          "path": "build/seto052/coordinator/3c518/verify-2/func_0003C518.o",
+          "section_offset": 0
+        },
+        "difference_count": 0,
+        "differences": [],
+        "equivalence": "function equivalence with canonically resolved relocations",
+        "evidence": "binary-range",
+        "limitations": [],
+        "matching_words": 11,
+        "name": "func_0003C518",
+        "percent": 100.0,
+        "relocation_issues": [],
+        "resolved_calls": [
+          "word 2 (0x3c520): this module @ 0x3c424 <=> this module @ 0x3c424"
+        ],
+        "resolved_data": [],
+        "status": "MATCHED",
+        "total_words": 11
+      },
+      "provenance": {
+        "candidate_section": null,
+        "compiler": "mwccpsp.exe",
+        "data_map": null,
+        "defines": [],
+        "flags": [
+          "-O4,p",
+          "-sdatathreshold",
+          "0"
+        ],
+        "includes": [
+          "decomp/include"
+        ],
+        "loader": [
+          "wibo"
+        ],
+        "object": "build/seto052/coordinator/3c518/verify-2/func_0003C518.o",
+        "object_sha256": "72b50aced9dc6c1fb35b97c1348124f9c0d47575d5015610053b6984e5505f1a",
+        "source": "decomp/src/eboot/func_0003C518.c",
+        "source_sha256": "faadba9432affacec5f6bf3a2d8200fc72ecbbc124b69fa4b4f2787951018e89"
+      },
+      "section": ".text",
+      "status": "MATCHED",
+      "symbol": "func_0003C518",
+      "verified_decompilation": true
+    }
+  ],
+  "schema_version": 1,
+  "section": ".text",
+  "size_bytes": 44,
+  "source_path": "decomp/src/eboot/func_0003C518.c",
+  "source_sha256": "faadba9432affacec5f6bf3a2d8200fc72ecbbc124b69fa4b4f2787951018e89"
+}
