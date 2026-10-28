@@ -463,6 +463,344 @@ def test_internal_prose_checkpoint_without_source_still_fails_before_matcher(
     assert campaign_store.total_attempt_count() == 1
 
 
+def _parallel_internal_runner(tmp_path: Path, worker_count: int):
+    from internal_campaign import InternalCampaignRunner
+
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [
+            InternalFunction(
+                "EBOOT", 0x1000 + index * 0x10, 8, "UNVERIFIED",
+                "build/parallel-manifest.json", priority=100 - index,
+            )
+            for index in range(worker_count)
+        ]
+    )
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'"
+        )
+    worker_barrier = threading.Barrier(worker_count)
+    assignments: list[tuple[str, str]] = []
+    assignment_lock = threading.Lock()
+    active = 0
+    peak_active = 0
+
+    def worker(claim: InternalClaim, begin_attempt, _deadline: float):
+        nonlocal active, peak_active
+        begin_attempt(claim)
+        with assignment_lock:
+            assignments.append((claim.worker_id, claim.address))
+            active += 1
+            peak_active = max(peak_active, active)
+        try:
+            worker_barrier.wait(timeout=8)
+        finally:
+            with assignment_lock:
+                active -= 1
+        return {"status": "SOURCE_READY", "source_sha256": "a" * 64}
+
+    runner = InternalCampaignRunner(
+        internal_store,
+        boundary=lambda claim, _deadline: claim,
+        worker=worker,
+        matcher=lambda _claim, _result, _deadline: {
+            "status": "NONMATCHING",
+            "source_sha256": "a" * 64,
+            "matching_words": 0,
+            "total_words": 2,
+        },
+        certifier=lambda _claim, _result: {"certified": False},
+        lease_seconds=60,
+        max_attempts_per_candidate=2,
+    )
+    workers = [
+        (f"worker-{index}", f"scope-{index}", "opencode")
+        for index in range(worker_count)
+    ]
+    return campaign_store, runner, workers, assignments, assignment_lock, lambda: peak_active
+
+
+def test_internal_ready_workers_claim_distinct_tasks_and_overlap(tmp_path: Path) -> None:
+    campaign_store, runner, workers, assignments, lock, peak_active = (
+        _parallel_internal_runner(tmp_path, 4)
+    )
+    result = runner.run_segment(
+        workers,
+        max_total_attempts=4,
+        max_attempts_this_segment=4,
+        max_boundary_tasks_this_segment=1,
+        deadline=time.monotonic() + 15,
+    )
+    with lock:
+        observed = list(assignments)
+    assert result["attempted"] == 4
+    assert result["peak_inference_workers"] == 4
+    assert peak_active() == 4
+    assert len({worker for worker, _ in observed}) == 4
+    assert len({address for _, address in observed}) == 4
+    assert campaign_store.total_attempt_count() == 4
+
+
+def test_internal_parallel_start_preserves_cumulative_attempt_ceiling(
+    tmp_path: Path,
+) -> None:
+    campaign_store, runner, workers, assignments, lock, peak_active = (
+        _parallel_internal_runner(tmp_path, 4)
+    )
+    result = runner.run_segment(
+        workers,
+        max_total_attempts=2,
+        max_attempts_this_segment=4,
+        max_boundary_tasks_this_segment=1,
+        deadline=time.monotonic() + 15,
+    )
+    with lock:
+        observed = list(assignments)
+    assert result["attempted"] == 2
+    assert peak_active() == 2
+    assert len(observed) == 2
+    assert len({address for _, address in observed}) == 2
+    assert campaign_store.total_attempt_count() == 2
+
+
+def test_internal_concurrent_worker_failure_does_not_cancel_other_claims(
+    tmp_path: Path,
+) -> None:
+    from internal_campaign import InternalCampaignRunner, InternalWorkerUnavailable
+
+    campaign_store = CampaignStore(tmp_path / "campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    internal_store.seed(
+        [
+            InternalFunction(
+                "EBOOT", 0x2000 + index * 0x10, 8, "UNVERIFIED",
+                "build/parallel-failure-manifest.json", priority=10 - index,
+            )
+            for index in range(3)
+        ]
+    )
+    with campaign_store._connect() as db:
+        db.execute(
+            "UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',status='pending'"
+        )
+    peer_barrier = threading.Barrier(2)
+    worker_calls: list[str] = []
+    worker_calls_lock = threading.Lock()
+
+    def worker(claim: InternalClaim, begin_attempt, _deadline: float):
+        with worker_calls_lock:
+            worker_calls.append(claim.worker_id)
+        if claim.worker_id == "unavailable":
+            raise InternalWorkerUnavailable("synthetic provider failure")
+        begin_attempt(claim)
+        peer_barrier.wait(timeout=8)
+        return {"status": "SOURCE_READY", "source_sha256": "b" * 64}
+
+    runner = InternalCampaignRunner(
+        internal_store,
+        boundary=lambda claim, _deadline: claim,
+        worker=worker,
+        matcher=lambda _claim, _result, _deadline: {
+            "status": "NONMATCHING",
+            "source_sha256": "b" * 64,
+            "matching_words": 0,
+            "total_words": 2,
+        },
+        certifier=lambda _claim, _result: {"certified": False},
+        lease_seconds=60,
+        max_attempts_per_candidate=2,
+    )
+    result = runner.run_segment(
+        [
+            ("unavailable", "scope-a", "opencode"),
+            ("worker-b", "scope-b", "opencode"),
+            ("worker-c", "scope-c", "opencode"),
+        ],
+        max_total_attempts=3,
+        max_attempts_this_segment=3,
+        max_boundary_tasks_this_segment=1,
+        deadline=time.monotonic() + 15,
+    )
+    assert result["attempted"] == 2
+    assert result["outcomes"] == {"nonmatching": 2}
+    assert set(worker_calls) == {"unavailable", "worker-b", "worker-c"}
+    assert campaign_store.total_attempt_count() == 2
+
+
+def test_concurrent_internal_certifications_do_not_lose_catalog_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_store = CampaignStore(tmp_path / "build/campaign.sqlite3")
+    internal_store = InternalCampaignStore(campaign_store)
+    addresses = (0x1000, 0x1010)
+    internal_store.seed(
+        [
+            InternalFunction("EBOOT", address, 8, "UNVERIFIED", "build/manifest.json")
+            for address in addresses
+        ]
+    )
+    worktrees: dict[str, Path] = {}
+    workers: dict[str, Worker] = {}
+    for index in range(2):
+        worker_id = f"worker-{index}"
+        worker = Worker(worker_id, "openai", "openai/gpt-6-luna")
+        worktree = tmp_path / worker_id
+        worktree.mkdir()
+        worktrees[worker_id] = worktree
+        workers[worker_id] = worker
+    runner = CampaignRunner(
+        campaign_store,
+        opencode_command=["synthetic-worker"],
+        worktrees=worktrees,
+        timeout_seconds=10,
+    )
+    runner.auto_preflight = False
+    runner.context_worktrees = worktrees
+
+    boundary_checkpoints = {}
+    for address in addresses:
+        log_relative = f"decomp-campaign/worker-0/{address:x}/evidence/ghidra.log"
+        log_payload = b"synthetic exact boundary evidence\n"
+        log_hash = hashlib.sha256(log_payload).hexdigest()
+        for worktree in worktrees.values():
+            log_path = worktree / "build" / log_relative
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_bytes(log_payload)
+        boundary_checkpoints[f"0x{address:x}"] = {
+            "boundary_status": "EXACT",
+            "ghidra_log_path": log_relative,
+            "ghidra_log_sha256": log_hash,
+        }
+    with campaign_store._connect() as db:
+        for address in addresses:
+            normalized = f"0x{address:x}"
+            db.execute(
+                """UPDATE internal_candidates SET size_bytes=8,boundary_status='EXACT',
+                   status='pending',checkpoint_json=? WHERE address=?""",
+                (json.dumps(boundary_checkpoints[normalized]), normalized),
+            )
+
+    runner._provider_gate_open = lambda _worker: True  # type: ignore[method-assign]
+
+    def ensure_session(claim: InternalClaim, *_args: object, **_kwargs: object) -> InternalClaim:
+        return campaign_store.bind_session(claim, f"session-{claim.worker_id}")
+
+    runner._ensure_session = ensure_session  # type: ignore[method-assign]
+    runner._argv = lambda _worker, claim, _prompt: [claim.address]  # type: ignore[method-assign]
+
+    def simulated_worker(argv: list[str], *, cwd: Path, **_kwargs: object):
+        address = int(argv[0], 0)
+        source = cwd / f"decomp/src/eboot/func_{address:08X}.c"
+        source.write_text(
+            f"int func_{address:08X}(void) {{ return {address}; }}\n",
+            encoding="utf-8",
+        )
+        return decomp_campaign_module.WorkResult(
+            0,
+            json.dumps({"checkpoint": {"next_experiment": "synthetic local verification"}}),
+            "",
+        )
+
+    monkeypatch.setattr(decomp_campaign_module, "_run_process", simulated_worker)
+
+    def verify_twice(worktree: Path, claim: InternalClaim, _deadline: float):
+        source_relative = f"decomp/src/eboot/func_{claim.numeric_address:08X}.c"
+        source_hash = hashlib.sha256((worktree / source_relative).read_bytes()).hexdigest()
+        object_hash = "c" * 64
+        reports = []
+        for number in (1, 2):
+            report = {
+                "address": claim.address,
+                "evidence": "compiled-object",
+                "section": ".text",
+                "status": "MATCHED",
+                "symbol": f"func_{claim.numeric_address:08X}",
+                "verified_decompilation": True,
+                "provenance": {
+                    "compiler": "/tools/mwccpsp.exe",
+                    "flags": ["-O4,p", "-sdatathreshold", "0"],
+                    "source": source_relative,
+                    "source_sha256": source_hash,
+                    "object": f"build/objects/{claim.numeric_address:x}-{number}.o",
+                    "object_sha256": object_hash,
+                },
+                "match": {
+                    "status": "MATCHED",
+                    "address": claim.numeric_address,
+                    "matching_words": 2,
+                    "total_words": 2,
+                    "difference_count": 0,
+                    "differences": [],
+                    "limitations": [],
+                    "relocation_issues": [],
+                    "resolved_calls": [],
+                    "resolved_data": [],
+                },
+                "report_path": f"build/reports/{claim.numeric_address:x}-{number}.json",
+            }
+            report_path = worktree / report["report_path"]
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            reports.append(report)
+        return {
+            "status": "MATCHED",
+            "source_sha256": source_hash,
+            "matching_words": 2,
+            "total_words": 2,
+            "build_sha256": [object_hash, object_hash],
+            "reports": reports,
+        }
+
+    runner._verify_internal_with_matcher_twice = verify_twice  # type: ignore[method-assign]
+    catalog_path = tmp_path / "config/decomp_internal_inventory.json"
+    catalog_path.parent.mkdir(parents=True)
+    catalog_path.write_text(
+        json.dumps({"schema_version": 2, "functions": []}), encoding="utf-8"
+    )
+    internal_runner = make_production_internal_runner(
+        runner,
+        campaign_store,
+        workers,
+        repo_root=tmp_path,
+        catalog_path=catalog_path,
+        lease_seconds=60,
+        max_attempts_per_candidate=2,
+    )
+    certifier_barrier = threading.Barrier(2)
+    original_certifier = internal_runner.certifier
+
+    def synchronized_certifier(claim: InternalClaim, match: dict[str, object]):
+        certifier_barrier.wait(timeout=10)
+        return original_certifier(claim, match)
+
+    internal_runner.certifier = synchronized_certifier
+    outcome = internal_runner.run_segment(
+        [
+            (worker.worker_id, worker.execution_scope, worker.provider)
+            for worker in workers.values()
+        ],
+        max_total_attempts=2,
+        max_attempts_this_segment=2,
+        max_boundary_tasks_this_segment=1,
+        deadline=time.monotonic() + 20,
+    )
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    assert outcome["attempted"] == 2
+    assert outcome["stages"]["certifications"] == 2
+    assert {entry["address"] for entry in catalog["functions"]} == {
+        "0x1000",
+        "0x1010",
+    }
+    assert validate_internal_catalog_evidence(
+        catalog_path,
+        repo_root=tmp_path,
+        require_tracked_sources=False,
+        check_export_overlaps=False,
+    ) == ()
+
+
 def test_internal_boundary_failures_are_bounded_and_never_start_worker(tmp_path: Path) -> None:
     import time
 

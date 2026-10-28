@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import concurrent.futures
 import hashlib
+import json
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import replace
@@ -695,7 +697,7 @@ class InternalCampaignStore:
 
 
 class InternalCampaignRunner:
-    """Sequential adapter that requires exact boundary, worker, matcher and certifier stages."""
+    """Run exact internal tasks sequentially or across isolated ready workers."""
 
     def __init__(
         self,
@@ -719,6 +721,22 @@ class InternalCampaignRunner:
         self.recover_promotion = recover_promotion
         self.lease_seconds = lease_seconds
         self.max_attempts_per_candidate = max_attempts_per_candidate
+        self._inference_state_lock = threading.Lock()
+        self._active_inferences = 0
+        self._peak_inferences = 0
+
+    def _inference_started(self) -> None:
+        with self._inference_state_lock:
+            self._active_inferences += 1
+            self._peak_inferences = max(self._peak_inferences, self._active_inferences)
+
+    def _inference_finished(self) -> None:
+        with self._inference_state_lock:
+            self._active_inferences = max(0, self._active_inferences - 1)
+
+    def _peak_inference_count(self) -> int:
+        with self._inference_state_lock:
+            return self._peak_inferences
 
     def run_segment(
         self,
@@ -729,6 +747,7 @@ class InternalCampaignRunner:
         max_attempts_this_segment: int | None = None,
         max_boundary_tasks_this_segment: int | None = None,
         boundary_only: bool = False,
+        _skip_boundary_work: bool = False,
     ) -> dict[str, Any]:
         if max_attempts_this_segment is not None and max_attempts_this_segment <= 0:
             raise ValueError("internal segment attempt limit must be positive")
@@ -741,6 +760,78 @@ class InternalCampaignRunner:
                 "outcomes": {},
                 "boundary_outcomes": {},
                 "stages": {},
+                "external_work_remains": bool(self.store.pending_count()),
+            }
+        attempts_remaining = max(
+            0,
+            max_total_attempts - self.store.campaign_store.total_attempt_count(),
+        )
+        segment_limit = (
+            len(worker_rows)
+            if max_attempts_this_segment is None
+            else max_attempts_this_segment
+        )
+        concurrent_slots = min(
+            len(worker_rows),
+            segment_limit,
+            attempts_remaining,
+            self.store.exact_pending_count(),
+        )
+        if len(worker_rows) > 1 and concurrent_slots > 1 and not boundary_only:
+            worker_results: list[dict[str, Any]] = []
+            selected_workers = worker_rows[:concurrent_slots]
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=concurrent_slots,
+                thread_name_prefix="seto-internal-worker",
+            ) as pool:
+                pending = {
+                    pool.submit(
+                        self.run_segment,
+                        (worker,),
+                        max_total_attempts=max_total_attempts,
+                        deadline=deadline,
+                        max_attempts_this_segment=1,
+                        max_boundary_tasks_this_segment=1,
+                        _skip_boundary_work=True,
+                    ): worker[0]
+                    for worker in selected_workers
+                }
+                for future in concurrent.futures.as_completed(pending):
+                    worker_id = pending[future]
+                    try:
+                        result = dict(future.result())
+                        result["worker_id"] = worker_id
+                    except Exception as exc:
+                        result = {
+                            "worker_id": worker_id,
+                            "attempted": 0,
+                            "outcomes": {"worker_error": 1},
+                            "boundary_outcomes": {},
+                            "stages": {},
+                            "error": type(exc).__name__,
+                        }
+                    worker_results.append(result)
+
+            outcomes: dict[str, int] = {}
+            boundary_outcomes: dict[str, int] = {}
+            stages: dict[str, int] = {}
+            attempted = 0
+            for result in worker_results:
+                attempted += int(result.get("attempted", 0))
+                for name, count in result.get("outcomes", {}).items():
+                    outcomes[name] = outcomes.get(name, 0) + int(count)
+                for name, count in result.get("boundary_outcomes", {}).items():
+                    boundary_outcomes[name] = boundary_outcomes.get(name, 0) + int(count)
+                for name, count in result.get("stages", {}).items():
+                    stages[name] = stages.get(name, 0) + int(count)
+            return {
+                "attempted": attempted,
+                "outcomes": outcomes,
+                "boundary_outcomes": boundary_outcomes,
+                "stages": stages,
+                "worker_segments": worker_results,
+                "workers_dispatched": len(worker_results),
+                "peak_inference_workers": self._peak_inference_count(),
                 "external_work_remains": bool(self.store.pending_count()),
             }
         attempted = 0
@@ -780,7 +871,7 @@ class InternalCampaignRunner:
             worker_id, provider, model_provider = available_workers[index % len(available_workers)]
             index += 1
             boundary_claim = None
-            if not budget_full and (
+            if not _skip_boundary_work and not budget_full and (
                 max_boundary_tasks_this_segment is None
                 or boundary_tasks < max_boundary_tasks_this_segment
             ):
@@ -875,9 +966,14 @@ class InternalCampaignRunner:
                         raise RuntimeError("shared attempt budget exhausted before inference")
                     started.append(updated)
                     stages["worker_attempts_started"] += 1
+                    self._inference_started()
                     return updated
 
-                worker_result = self.worker(claim, begin_attempt, deadline)
+                try:
+                    worker_result = self.worker(claim, begin_attempt, deadline)
+                finally:
+                    if started:
+                        self._inference_finished()
                 worker_completed = True
                 if not started and worker_result.get("status") == "INTERRUPTED":
                     self.store.release_preparation(
@@ -1104,6 +1200,8 @@ class InternalCampaignRunner:
                 kind: boundary_outcomes.count(kind) for kind in sorted(set(boundary_outcomes))
             },
             "stages": stages,
+            "workers_dispatched": 1,
+            "peak_inference_workers": self._peak_inference_count(),
             "external_work_remains": bool(self.store.pending_count()),
         }
 
@@ -1208,7 +1306,9 @@ def make_production_internal_runner(
         )
         return all(old_result.get(key) == new_result.get(key) for key in result_fields)
 
-    def persist_catalog_entry(entry: dict[str, Any]) -> None:
+    catalog_write_lock = threading.RLock()
+
+    def persist_catalog_entry_unlocked(entry: dict[str, Any]) -> None:
         current_bytes = catalog_path.read_bytes()
         document = json.loads(current_bytes)
         if not isinstance(document, dict) or not isinstance(document.get("functions"), list):
@@ -1268,6 +1368,12 @@ def make_production_internal_runner(
             os.replace(temporary, catalog_path)
         finally:
             temporary.unlink(missing_ok=True)
+
+    def persist_catalog_entry(entry: dict[str, Any]) -> None:
+        # Concurrent certified workers may append different addresses. Keep the
+        # read/validate/atomic-replace transaction indivisible to avoid lost updates.
+        with catalog_write_lock:
+            persist_catalog_entry_unlocked(entry)
 
     def recover_promotion_journal(
         claim: InternalClaim,
