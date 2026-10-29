@@ -799,3 +799,83 @@ def test_catalog_evidence_validation_requires_certificate_coverage(tmp_path: Pat
     )
     assert len(problems) == 1
     assert "has no certificate" in problems[0]
+
+
+def test_catalog_boundary_attestation_is_required_only_for_marked_evidence(
+    tmp_path: Path,
+) -> None:
+    from internal_functions import (
+        build_internal_certificate,
+        serialize_internal_certificate,
+        validate_internal_catalog_evidence,
+    )
+
+    source, first, second, fixture = _certificate_fixture(tmp_path)
+    document, _ = build_internal_certificate(
+        module="EBOOT",
+        address=0x1000,
+        size_bytes=8,
+        source_path=source,
+        report_paths=[first, second],
+        repo_root=tmp_path,
+    )
+    certificate_relative = Path("build/certificates/eboot-00001000.json")
+    certificate = tmp_path / certificate_relative
+    certificate.parent.mkdir(parents=True)
+    entry = _entry("EBOOT", "0x1000", 8)
+    entry.update(
+        {
+            "evidence_path": "build/certificates/eboot-00001000.json#matcher-and-boundary",
+            "source_path": "decomp/src/eboot/func_00001000.c",
+            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "result": {
+                "status": "MATCHED",
+                "matching_words": 2,
+                "total_words": 2,
+                "object_sha256s": [fixture["object_sha256"]] * 2,
+                "certificate_path": certificate_relative.as_posix(),
+            },
+        }
+    )
+    catalog = tmp_path / "config" / "decomp_internal_inventory.json"
+    catalog.parent.mkdir()
+
+    boundary = {
+        "status": "EXACT",
+        "module": "EBOOT",
+        "address": "0x1000",
+        "size_bytes": 8,
+        "section": ".text",
+        "ghidra_log_sha256": "a" * 64,
+    }
+    cases = (
+        ("marked-valid", "#matcher-and-boundary", boundary, None),
+        ("marked-missing", "#matcher-and-boundary", None, "missing Ghidra boundary attestation"),
+        (
+            "marked-inconsistent",
+            "#matcher-and-boundary",
+            {**boundary, "size_bytes": 12},
+            "Ghidra boundary attestation is incomplete",
+        ),
+        ("historical", "#matcher", None, None),
+    )
+    for _name, suffix, attestation, expected_problem in cases:
+        current = json.loads(serialize_internal_certificate(document))
+        if attestation is not None:
+            current["boundary"] = attestation
+        certificate_bytes = serialize_internal_certificate(current).encode("utf-8")
+        certificate.write_bytes(certificate_bytes)
+        entry["evidence_path"] = f"build/certificates/eboot-00001000.json{suffix}"
+        entry["result"]["certificate_sha256"] = hashlib.sha256(certificate_bytes).hexdigest()
+        _write_catalog(catalog, [entry])
+
+        problems = validate_internal_catalog_evidence(
+            catalog,
+            repo_root=tmp_path,
+            require_tracked_sources=False,
+            check_export_overlaps=False,
+        )
+        if expected_problem is None:
+            assert problems == ()
+        else:
+            assert any(expected_problem in problem for problem in problems)

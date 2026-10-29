@@ -279,6 +279,7 @@ def handle_request(request: Mapping[str, Any]) -> dict[str, Any]:
             result = subprocess.run(
                 argv,
                 cwd=cwd,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=float(timeout),
                 check=False,
@@ -364,6 +365,7 @@ def handle_request(request: Mapping[str, Any]) -> dict[str, Any]:
             result = subprocess.run(
                 argv,
                 cwd=root,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=float(timeout),
                 check=False,
@@ -490,6 +492,7 @@ class SSHExecutor:
         helper_expression = f"exec(__import__('base64').b64decode('{encoded_helper}'))"
         argv = [
             self.ssh_command,
+            "-T",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -501,6 +504,8 @@ class SSHExecutor:
             target.host,
             f"{shlex.quote(target.python)} -c {shlex.quote(helper_expression)}",
         ]
+        # The SSH process needs stdin for this JSON request. The remote helper
+        # closes stdin only for its child commands (including `opencode run`).
         process_arguments: dict[str, Any] = {
             "cwd": cwd,
             "input": encoded,

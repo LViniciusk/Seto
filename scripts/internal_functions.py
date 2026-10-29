@@ -952,7 +952,12 @@ def validate_internal_catalog_evidence(
         if certified.get("size_bytes") != size_bytes or certified.get("section") != function.section:
             problems.append(f"{identity}: certificate range/section disagrees with the catalog")
         boundary = certified.get("boundary")
-        if boundary is not None and (
+        requires_boundary = str(entry.get("evidence_path", "")).endswith(
+            "#matcher-and-boundary"
+        )
+        if requires_boundary and boundary is None:
+            problems.append(f"{identity}: missing Ghidra boundary attestation")
+        elif boundary is not None and (
             not isinstance(boundary, dict)
             or boundary.get("status") != "EXACT"
             or boundary.get("module") != function.module
